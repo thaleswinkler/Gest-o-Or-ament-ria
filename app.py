@@ -40,55 +40,52 @@ if st.session_state.usuario_logado is None:
     aba_login, aba_cadastro = st.tabs(["🔐 Fazer Login", "📝 Criar Nova Conta"])
     
     with aba_login:
-        with st.form("form_login"):
-            usuario_login = st.text_input("Usuário:").strip().lower()
-            senha_login = st.text_input("Senha:", type="password")
-            btn_login = st.form_submit_button("Entrar no Sistema")
-            
-            if btn_login:
-                if usuario_login and senha_login:
-                    try:
-                        doc = db.collection("usuarios").document(usuario_login).get()
-                        if doc.exists:
-                            if doc.to_dict().get("senha") == senha_login:
-                                st.session_state.usuario_logado = usuario_login
-                                st.rerun()
-                            else:
-                                st.error("Senha incorreta!")
+        st.subheader("Acesso ao Sistema")
+        usuario_login = st.text_input("Usuário:", key="input_user_login").strip().lower()
+        senha_login = st.text_input("Senha:", type="password", key="input_pass_login")
+        
+        if st.button("Entrar no Sistema", type="primary", key="btn_login_direto"):
+            if usuario_login and senha_login:
+                try:
+                    doc = db.collection("usuarios").document(usuario_login).get()
+                    if doc.exists:
+                        if doc.to_dict().get("senha") == senha_login:
+                            st.session_state.usuario_logado = usuario_login
+                            st.success("Login realizado com sucesso! Carregando...")
+                            st.rerun()
                         else:
-                            st.error("Usuário não encontrado!")
-                    except Exception as e:
-                        st.error(f"Erro ao conectar com o Firebase: {e}")
-                else:
-                    st.warning("Preencha usuário e senha.")
+                            st.error("Senha incorreta!")
+                    else:
+                        st.error("Usuário não encontrado!")
+                except Exception as e:
+                    st.error(f"Erro ao conectar com o Firebase: {e}")
+            else:
+                st.warning("Preencha usuário e senha.")
                 
     with aba_cadastro:
         st.markdown("Crie seu ambiente de trabalho isolado.")
-        with st.form("form_cadastro"):
-            novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
-            nova_senha = st.text_input("Crie uma Senha:", type="password")
-            novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):")
-            nova_om = st.text_input("Sua Organização Militar (Ex: 23º BI):")
-            
-            btn_cadastrar = st.form_submit_button("Criar Conta")
-            
-            if btn_cadastrar:
-                if novo_user and nova_senha and novo_nome:
-                    try:
-                        if db.collection("usuarios").document(novo_user).get().exists:
-                            st.error("Este nome de usuário já está em uso. Escolha outro.")
-                        else:
-                            db.collection("usuarios").document(novo_user).set({
-                                "senha": nova_senha,
-                                "nome": novo_nome,
-                                "om": nova_om
-                            })
-                            db.collection("dados").document(novo_user).set({"ncs": {}})
-                            st.success("✅ Conta criada com sucesso! Vá para a aba 'Fazer Login' para entrar.")
-                    except Exception as e:
-                        st.error(f"🚨 Erro de Conexão com o Firebase: {e}")
-                else:
-                    st.warning("Preencha os campos obrigatórios (Usuário, Senha e Nome).")
+        novo_user = st.text_input("Escolha um nome de Usuário:", key="input_cad_user").strip().lower()
+        nova_senha = st.text_input("Crie uma Senha:", type="password", key="input_cad_pass")
+        novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):", key="input_cad_nome")
+        nova_om = st.text_input("Sua Organização Militar (Ex: 23º BI):", key="input_cad_om")
+        
+        if st.button("Criar Conta", type="secondary", key="btn_cad_direto"):
+            if novo_user and nova_senha and novo_nome:
+                try:
+                    if db.collection("usuarios").document(novo_user).get().exists:
+                        st.error("Este nome de usuário já está em uso. Escolha outro.")
+                    else:
+                        db.collection("usuarios").document(novo_user).set({
+                            "senha": nova_senha,
+                            "nome": novo_nome,
+                            "om": nova_om
+                        })
+                        db.collection("dados").document(novo_user).set({"ncs": {}})
+                        st.success("✅ Conta criada com sucesso! Vá para a aba 'Fazer Login' para entrar.")
+                except Exception as e:
+                    st.error(f"🚨 Erro de Conexão com o Firebase: {e}")
+            else:
+                st.warning("Preencha os campos obrigatórios (Usuário, Senha e Nome).")
     
     st.markdown("---")
     st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
