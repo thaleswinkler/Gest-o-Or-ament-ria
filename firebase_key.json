@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "gestao-orcamentaria-65c4e",
+  "private_key_id": "6338630bc66b8f1cff7f80e75b6291268c8e7ce4",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQCtYBPd1QRDN0zz\nTe5IEFOKsFWSDehs3GZlvcGjS/uS0Amf0ymwrqPFY61NFIWySIyJKdd0SGpO81Tg\nvlvmeRpbvHh4PQvmi68gYnAjZPWzjpVJHaOtsWr/1q2LTsvRX5Dae/OJEKfOm15Y\nVUcUfRt/BPky8Wsb2R3jYZVXEbn04Tgm0b2/DcJ2W6WnlrF8usivdmOfxUp5xdx/\nn4+KfNRDdo2FjVoNL+l5KuVsiGkxsjiubKKH0MHi16OJDDAZUzEKdCMebSgBXjKX\nivIh9KurHySKdUxp/EPx+8DX2sjWg33qJOmhXhaV1YhinCm4Ji050T3J7yDc+NBe\nTdTAZ74DAgMBAAECggEABWgAXP1H4fJKTspYhDX0hPFoTOLS8C7g1CQnDGweiItx\nx8jfFru7YgWKFLDV7zzeTpo+NhZz/WMOrugz5J667BVkCrIzBsz53wal/IfCnNP0\n/I/iCyG3KaPy5J8syxCYOCSy78xtjyTx7v5pwwFlTbN4AD13wfYmCnGAJXQcc/Hs\nxOin0PD/J6jQQekkLHu0HR6zxcWi9uZlmJnq5NCnTAutOBqreksbKvH72w3fJWyC\n36tj/wj/GzbRZLcgpYZUgSzARpmXvfAsdV+UfeIxqrnrYo20Rddx7AlV570A/UFQ\nIzdBnRVlOyrbUnOyDJfakfOef/P9/mjSoZzbdaD7wQKBgQDhkgSMNNkxdgDShRDb\nKOWKmsAVD7lEPvJafiCH7gQ0MUoSg3HKjkqqMVbHKp6//w1H+A0eDMNjL67lpCLh\n7sOnYvIC/SBBhhHDYGlApr4K1FhamId0Rib6E3zaB3oxJbDJsnXOim1pjpzmrm8J\ngtSdtezs9CJ9v7um9QHG+80GswKBgQDEw4YZo47mAIJR6q2P33+VdzjGj6uGY1fU\ngiIkrp3kLg/cZRWMxPkbcnnsnv8un17nEa+ud7iR7v9G2MUoTan9qluC35Nb5Hwv\n/HNiuqn7d/l73kAq+YcMzYCDKmg3zWWLnTpZ7qCdUvkVfS5Q057ucYdcEBAjijiS\nYeUmDzWTcQKBgQCXP/mcqbMY3y8d+eubiIihr7IsbSalBDAtTXUyr/5RoNsyHsEm\nONMH2518Xq+jvbmCEGl7RMOetlJn2O8q35aBnm74YhJG3Ub74qGwoB291TSJSs1I\nweFQvdBxwaHFYqhwFiG4JEnJBb9fTodVsUwvk9UR7YFTIEULZi2S5zRK0QKBgQC6\n+qrGVn0G6FjvCznfzJ1rJZ5YYlK3JFRkZz2W6jC0k2kTISP3X37xrDlcuEL6xQvk\nPRRbkP1eAGWpp3jDsfnmSisoFNntqxSwbRAhNA0wIHR+V1dW/0Rs0CRdgMEEtjTX\nFZRLvc33cs+ssgZ/XHpdUJk2zTTo8QKNaGXfYvigoQKBgQC1ccntMYG79RfN1YHu\nS+kOFpa7zecgbgZ/6bNz3vMRsbHspVgUAuBSPxuiVUAFDXSCPNB2v+j0jTLVdyMt\nZwoVkdkXBW0mUO6/Z86+rwJ6qVAFT59qMfCCvOM5mEEIU60HX3ePveqHfLSzdy61\nwA9lY3KCwKfObDqc/FHP0l5HDg==\n-----END PRIVATE KEY-----\n",
+  "client_email": "firebase-adminsdk-fbsvc@gestao-orcamentaria-65c4e.iam.gserviceaccount.com",
+  "client_id": "101859672465276633649",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40gestao-orcamentaria-65c4e.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
