@@ -11,13 +11,13 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. CONEXÃO COM O FIREBASE (Garante que só conecte uma vez)
+# 2. CONEXÃO COM O FIREBASE
 if not firebase_admin._apps:
     try:
         cred = credentials.Certificate("firebase_key.json")
         firebase_admin.initialize_app(cred)
     except FileNotFoundError:
-        st.error("⚠️ Arquivo 'firebase_key.json' não encontrado. Verifique se ele está na mesma pasta do sistema.")
+        st.error("⚠️ Arquivo 'firebase_key.json' não encontrado na raiz do repositório.")
         st.stop()
 
 db = firestore.client()
@@ -27,12 +27,13 @@ def extrair_ano(nc_nome):
         return nc_nome[:4]
     return "Outros/Sem Ano"
 
-# =====================================================================
-# TELA DE LOGIN E CADASTRO
-# =====================================================================
+# Inicializa o estado da sessão do usuário
 if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
 
+# =====================================================================
+# TELA DE LOGIN E CADASTRO (EXIBIDA APENAS SE NÃO ESTIVER LOGADO)
+# =====================================================================
 if st.session_state.usuario_logado is None:
     st.title("🖥 Sistema Profissional de Controle de Recursos")
     st.markdown("Bem-vindo! Faça login ou crie sua conta para acessar o sistema na nuvem.")
@@ -41,7 +42,7 @@ if st.session_state.usuario_logado is None:
     
     with aba_login:
         st.subheader("Acesso ao Sistema")
-        with st.form("form_login_corrigido"):
+        with st.form("form_login_final"):
             usuario_login = st.text_input("Usuário:").strip().lower()
             senha_login = st.text_input("Senha:", type="password")
             btn_login = st.form_submit_button("Entrar no Sistema", type="primary")
@@ -66,7 +67,7 @@ if st.session_state.usuario_logado is None:
                 
     with aba_cadastro:
         st.markdown("Crie seu ambiente de trabalho isolado.")
-        with st.form("form_cadastro_corrigido"):
+        with st.form("form_cadastro_final"):
             novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
             nova_senha = st.text_input("Crie uma Senha:", type="password")
             novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):")
@@ -94,39 +95,41 @@ if st.session_state.usuario_logado is None:
     
     st.markdown("---")
     st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
-    st.stop() # Bloqueia o carregamento do resto se não estiver logado
+    st.stop()  # Para a execução aqui para não tentar carregar o painel sem estar logado
 
 # =====================================================================
-# INICIALIZAÇÃO DO BANCO DE DADOS (Puxando da Nuvem)
+# SISTEMA PRINCIPAL (EXECUTADO APENAS APÓS O LOGIN)
 # =====================================================================
 usuario_atual = st.session_state.usuario_logado
 
-# Carrega configurações do usuário
-user_doc = db.collection("usuarios").document(usuario_atual).get().to_dict()
-
-# Carrega os dados (NCs) do usuário
-dados_doc_ref = db.collection("dados").document(usuario_atual)
-dados_banco = dados_doc_ref.get()
-
-if dados_banco.exists:
-    banco_dados = dados_banco.to_dict().get("ncs", {})
-else:
+# Carrega configurações e dados do usuário logado de forma segura
+try:
+    user_doc_ref = db.collection("usuarios").document(usuario_atual).get()
+    user_doc = user_doc_ref.to_dict() if user_doc_ref.exists else {}
+    
+    dados_doc_ref = db.collection("dados").document(usuario_atual)
+    dados_banco_val = dados_doc_ref.get()
+    banco_dados = dados_banco_val.to_dict().get("ncs", {}) if dados_banco_val.exists else {}
+except Exception as e:
+    st.error(f"Erro ao carregar dados do usuário na nuvem: {e}")
     banco_dados = {}
+    user_doc = {}
 
-# Função para salvar na nuvem
 def salvar_na_nuvem(novos_dados):
-    db.collection("dados").document(usuario_atual).update({"ncs": novos_dados})
+    try:
+        db.collection("dados").document(usuario_atual).update({"ncs": novos_dados})
+    except Exception as e:
+        st.error(f"Erro ao salvar na nuvem: {e}")
 
 # 3. ASSINATURA E FILTROS LATERAIS (SIDEBAR)
 st.sidebar.title("💰 Gestão Orçamentária")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🛠 Estação de Trabalho")
 
-# Campos para o usuário atualizar os próprios dados na nuvem
 nome_atual = st.sidebar.text_input("Nome do Gestor:", value=user_doc.get("nome", ""))
 om_atual = st.sidebar.text_input("Organização Militar (OM):", value=user_doc.get("om", ""))
 
-if nome_atual != user_doc.get("nome") or om_atual != user_doc.get("om"):
+if nome_atual != user_doc.get("nome", "") or om_atual != user_doc.get("om", ""):
     db.collection("usuarios").document(usuario_atual).update({"nome": nome_atual, "om": om_atual})
     st.toast("Dados do perfil atualizados na nuvem!")
 
@@ -142,7 +145,6 @@ lista_anos = sorted(list(anos_disponiveis), reverse=True) if anos_disponiveis el
 ano_selecionado = st.sidebar.selectbox("Selecione o Ano de Referência:", lista_anos)
 ncs_do_ano = [nc for nc in banco_dados.keys() if extrair_ano(nc) == ano_selecionado]
 
-# RODAPÉ DE AUTORIA
 st.sidebar.markdown("---")
 st.sidebar.markdown("<div style='text-align: center; color: gray; font-size: 12px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
 
@@ -263,7 +265,7 @@ with menu_cadastro:
                 st.success("Item adicionado com sucesso!")
                 st.rerun()
             else:
-                st.error("Preencha o Nome do Material.")
+                st.error("Preencha o Nome du Material.")
     else:
         st.info("Cadastre uma Nota de Crédito (NC) para este ano primeiro.")
 
