@@ -32,77 +32,75 @@ if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
 
 # =====================================================================
-# TELA DE LOGIN E CADASTRO (EXIBIDA APENAS SE NÃO ESTIVER LOGADO)
+# TELA DE LOGIN E CADASTRO (SEM TABS / SEM FORMS PARA EVITAR TRAVAMENTO)
 # =====================================================================
 if st.session_state.usuario_logado is None:
     st.title("🖥 Sistema Profissional de Controle de Recursos")
     st.markdown("Bem-vindo! Faça login ou crie sua conta para acessar o sistema na nuvem.")
+    st.markdown("---")
     
-    aba_login, aba_cadastro = st.tabs(["🔐 Fazer Login", "📝 Criar Nova Conta"])
+    # Alternativa segura às abas: rádio horizontal limpo
+    modo_acesso = st.radio("Selecione a operação:", ["🔑 Fazer Login", "📝 Criar Nova Conta"], horizontal=True, label_visibility="collapsed")
     
-    with aba_login:
+    if modo_acesso == "🔑 Fazer Login":
         st.subheader("Acesso ao Sistema")
-        with st.form("form_login_final"):
-            usuario_login = st.text_input("Usuário:").strip().lower()
-            senha_login = st.text_input("Senha:", type="password")
-            btn_login = st.form_submit_button("Entrar no Sistema", type="primary")
-            
-            if btn_login:
-                if not usuario_login or not senha_login:
-                    st.warning("Preencha usuário e senha.")
-                else:
-                    try:
-                        doc = db.collection("usuarios").document(usuario_login).get()
-                        if doc.exists:
-                            if doc.to_dict().get("senha") == senha_login:
-                                st.session_state.usuario_logado = usuario_login
-                                st.success("Login realizado com sucesso!")
-                                st.rerun()
-                            else:
-                                st.error("Senha incorreta!")
+        usuario_login = st.text_input("Usuário:", key="input_user_login").strip().lower()
+        senha_login = st.text_input("Senha:", type="password", key="input_pass_login")
+        
+        st.write("")
+        if st.button("Entrar no Sistema", type="primary", key="btn_fazer_login"):
+            if not usuario_login or not senha_login:
+                st.warning("Preencha usuário e senha.")
+            else:
+                try:
+                    doc = db.collection("usuarios").document(usuario_login).get()
+                    if doc.exists:
+                        if doc.to_dict().get("senha") == senha_login:
+                            st.session_state.usuario_logado = usuario_login
+                            st.success("Login realizado com sucesso!")
+                            st.rerun()
                         else:
-                            st.error("Usuário não encontrado!")
-                    except Exception as e:
-                        st.error(f"Erro ao conectar com o Firebase: {e}")
+                            st.error("Senha incorreta!")
+                    else:
+                        st.error("Usuário não encontrado!")
+                except Exception as e:
+                    st.error(f"Erro ao conectar com o Firebase: {e}")
                 
-    with aba_cadastro:
-        st.markdown("Crie seu ambiente de trabalho isolado.")
-        with st.form("form_cadastro_final"):
-            novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
-            nova_senha = st.text_input("Crie uma Senha:", type="password")
-            novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):")
-            nova_om = st.text_input("Sua Organização Militar (Ex: 23º BI):")
-            
-            btn_cadastrar = st.form_submit_button("Criar Conta", type="secondary")
-            
-            if btn_cadastrar:
-                if not novo_user or not nova_senha or not novo_nome:
-                    st.warning("Preencha os campos obrigatórios (Usuário, Senha e Nome).")
-                else:
-                    try:
-                        if db.collection("usuarios").document(novo_user).get().exists:
-                            st.error("Este nome de usuário já está em uso. Escolha outro.")
-                        else:
-                            db.collection("usuarios").document(novo_user).set({
-                                "senha": nova_senha,
-                                "nome": novo_nome,
-                                "om": nova_om
-                            })
-                            db.collection("dados").document(novo_user).set({"ncs": {}})
-                            st.success("✅ Conta criada com sucesso! Vá para a aba 'Fazer Login' para entrar.")
-                    except Exception as e:
-                        st.error(f"🚨 Erro de Conexão com o Firebase: {e}")
+    else:
+        st.subheader("Cadastro de Novo Operador")
+        novo_user = st.text_input("Escolha um nome de Usuário:", key="input_cad_user").strip().lower()
+        nova_senha = st.text_input("Crie uma Senha:", type="password", key="input_cad_pass")
+        novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):", key="input_cad_nome")
+        nova_om = st.text_input("Sua Organização Militar (Ex: 23º BI):", key="input_cad_om")
+        
+        st.write("")
+        if st.button("Criar Conta", type="secondary", key="btn_fazer_cadastro"):
+            if not novo_user or not nova_senha or not novo_nome:
+                st.warning("Preencha os campos obrigatórios (Usuário, Senha e Nome).")
+            else:
+                try:
+                    if db.collection("usuarios").document(novo_user).get().exists:
+                        st.error("Este nome de usuário já está em uso. Escolha outro.")
+                    else:
+                        db.collection("usuarios").document(novo_user).set({
+                            "senha": nova_senha,
+                            "nome": novo_nome,
+                            "om": nova_om
+                        })
+                        db.collection("dados").document(novo_user).set({"ncs": {}})
+                        st.success("✅ Conta criada com sucesso! Selecione 'Fazer Login' acima para entrar.")
+                except Exception as e:
+                    st.error(f"🚨 Erro de Conexão com o Firebase: {e}")
     
     st.markdown("---")
     st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
-    st.stop()  # Para a execução aqui para não tentar carregar o painel sem estar logado
+    st.stop()  # Para a execução aqui se não estiver logado
 
 # =====================================================================
-# SISTEMA PRINCIPAL (EXECUTADO APENAS APÓS O LOGIN)
+# SISTEMA PRINCIPAL (PÓS-LOGIN)
 # =====================================================================
 usuario_atual = st.session_state.usuario_logado
 
-# Carrega configurações e dados do usuário logado de forma segura
 try:
     user_doc_ref = db.collection("usuarios").document(usuario_atual).get()
     user_doc = user_doc_ref.to_dict() if user_doc_ref.exists else {}
@@ -121,7 +119,7 @@ def salvar_na_nuvem(novos_dados):
     except Exception as e:
         st.error(f"Erro ao salvar na nuvem: {e}")
 
-# 3. ASSINATURA E FILTROS LATERAIS (SIDEBAR)
+# Sidebar
 st.sidebar.title("💰 Gestão Orçamentária")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🛠 Estação de Trabalho")
@@ -148,7 +146,7 @@ ncs_do_ano = [nc for nc in banco_dados.keys() if extrair_ano(nc) == ano_selecion
 st.sidebar.markdown("---")
 st.sidebar.markdown("<div style='text-align: center; color: gray; font-size: 12px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
 
-# 4. TÍTULO PRINCIPAL
+# Título Principal
 st.title("🖥 Sistema Profissional de Controle de Recursos e Aquisições")
 st.markdown("Substitua o Excel por uma interface robusta para gerenciar Notas de Crédito (NC), planejar compras e monitorar o fluxo de entregas.")
 st.markdown("---")
@@ -265,7 +263,7 @@ with menu_cadastro:
                 st.success("Item adicionado com sucesso!")
                 st.rerun()
             else:
-                st.error("Preencha o Nome du Material.")
+                st.error("Preencha o Nome do Material.")
     else:
         st.info("Cadastre uma Nota de Crédito (NC) para este ano primeiro.")
 
