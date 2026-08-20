@@ -1,61 +1,49 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-import firebase_admin
-from firebase_admin import credentials, firestore
+from supabase import create_client, Client
 
+# =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA
+# =====================================================================
 st.set_page_config(
-    page_title="Gerenciador de Recursos",
+    page_title="Gerenciador de Recursos - 23º BI",
     page_icon="💰",
     layout="wide"
 )
 
 # =====================================================================
-# 2. CONEXÃO COM O FIREBASE (A ÚNICA FORMA 100% SEGURA)
+# 2. CONEXÃO COM O BANCO DE DADOS (SUPABASE)
 # =====================================================================
 @st.cache_resource
-def conectar_firebase():
-    try:
-        # Tenta pegar o app já inicializado (evita o erro "already exists")
-        firebase_admin.get_app()
-    except ValueError:
-        # Se não existir, inicializa com a chave
-        try:
-            cred = credentials.Certificate("firebase_key.json")
-            firebase_admin.initialize_app(cred)
-        except Exception as e:
-            st.error(f"⚠️ Erro ao carregar a chave do Firebase: {e}")
-            st.stop()
-    
-    # Retorna o cliente UMA ÚNICA VEZ e guarda no cache (impede travamento da tela)
-    return firestore.client()
+def conectar_banco():
+    URL = "https://oxneqoegehufjksvupji.supabase.co"
+    KEY = "sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX" # Cole a chave sb_publishable... aqui mantendo as aspas
+    return create_client(URL, KEY)
 
-# Inicia a conexão
-db = conectar_firebase()
+supabase = conectar_banco()
 
 def extrair_ano(nc_nome):
     if len(nc_nome) >= 4 and nc_nome[:4].isdigit():
         return nc_nome[:4]
     return "Outros/Sem Ano"
 
-# Inicializa o estado da sessão do usuário
+# =====================================================================
+# 3. TELA DE LOGIN E CADASTRO
+# =====================================================================
 if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
 
-# =====================================================================
-# TELA DE LOGIN E CADASTRO (LADO A LADO)
-# =====================================================================
 if st.session_state.usuario_logado is None:
     st.title("🖥 Sistema Profissional de Controle de Recursos")
-    st.markdown("Bem-vindo! Faça login ou crie sua conta para acessar o sistema na nuvem.")
+    st.markdown("Bem-vindo! Faça login ou crie sua conta para acessar o sistema.")
     st.markdown("---")
     
     col_login, col_divisor, col_cadastro = st.columns([4, 1, 4])
     
     with col_login:
         st.subheader("🔑 Fazer Login")
-        with st.form("form_login_oficial"):
+        with st.form("form_login"):
             usuario_login = st.text_input("Usuário:").strip().lower()
             senha_login = st.text_input("Senha:", type="password")
             btn_login = st.form_submit_button("Entrar no Sistema", type="primary", use_container_width=True)
@@ -64,26 +52,23 @@ if st.session_state.usuario_logado is None:
                 if not usuario_login or not senha_login:
                     st.warning("Preencha usuário e senha.")
                 else:
-                    try:
-                        doc = db.collection("usuarios").document(usuario_login).get()
-                        if doc.exists:
-                            if doc.to_dict().get("senha") == senha_login:
-                                st.session_state.usuario_logado = usuario_login
-                                st.success("Login realizado com sucesso! Entrando...")
-                                st.rerun()
-                            else:
-                                st.error("Senha incorreta!")
+                    resposta = supabase.table("usuarios").select("*").eq("id", usuario_login).execute()
+                    if len(resposta.data) > 0:
+                        usuario_db = resposta.data[0]
+                        if usuario_db["senha"] == senha_login:
+                            st.session_state.usuario_logado = usuario_login
+                            st.rerun()
                         else:
-                            st.error("Usuário não encontrado!")
-                    except Exception as e:
-                        st.error(f"Erro ao conectar com o banco: {e}")
+                            st.error("Senha incorreta!")
+                    else:
+                        st.error("Usuário não encontrado!")
                 
     with col_divisor:
         st.write("")
 
     with col_cadastro:
         st.subheader("📝 Criar Nova Conta")
-        with st.form("form_cadastro_oficial"):
+        with st.form("form_cadastro"):
             novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
             nova_senha = st.text_input("Crie uma Senha:", type="password")
             novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):")
@@ -93,77 +78,70 @@ if st.session_state.usuario_logado is None:
             
             if btn_cadastrar:
                 if not novo_user or not nova_senha or not novo_nome:
-                    st.warning("Preencha os campos obrigatórios (Usuário, Senha e Nome).")
+                    st.warning("Preencha os campos obrigatórios.")
                 else:
-                    try:
-                        if db.collection("usuarios").document(novo_user).get().exists:
-                            st.error("Este nome de usuário já está em uso. Escolha outro.")
-                        else:
-                            db.collection("usuarios").document(novo_user).set({
-                                "senha": nova_senha,
-                                "nome": novo_nome,
-                                "om": nova_om
-                            })
-                            db.collection("dados").document(novo_user).set({"ncs": {}})
-                            st.success("✅ Conta criada com sucesso! Você já pode fazer o login ao lado.")
-                    except Exception as e:
-                        st.error(f"🚨 Erro de Conexão com o Firebase: {e}")
+                    verifica = supabase.table("usuarios").select("id").eq("id", novo_user).execute()
+                    if len(verifica.data) > 0:
+                        st.error("Este nome de usuário já está em uso.")
+                    else:
+                        # Salva o novo usuário e cria o banco vazio dele
+                        supabase.table("usuarios").insert({"id": novo_user, "senha": nova_senha, "nome": novo_nome, "om": nova_om}).execute()
+                        supabase.table("dados").insert({"id": novo_user, "ncs": {}}).execute()
+                        st.success("✅ Conta criada! Faça o login ao lado.")
     
     st.markdown("---")
     st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
-    st.stop()  # Impede o carregamento do resto se não estiver logado
+    st.stop() 
 
 # =====================================================================
-# SISTEMA PRINCIPAL (PÓS-LOGIN)
+# 4. CARREGAMENTO DOS DADOS (PÓS-LOGIN)
 # =====================================================================
 usuario_atual = st.session_state.usuario_logado
 
-try:
-    user_doc_ref = db.collection("usuarios").document(usuario_atual).get()
-    user_doc = user_doc_ref.to_dict() if user_doc_ref.exists else {}
-    
-    dados_doc_ref = db.collection("dados").document(usuario_atual)
-    dados_banco_val = dados_doc_ref.get()
-    banco_dados = dados_banco_val.to_dict().get("ncs", {}) if dados_banco_val.exists else {}
-except Exception as e:
-    st.error(f"Erro ao carregar dados do usuário na nuvem: {e}")
-    banco_dados = {}
-    user_doc = {}
+# Puxa o perfil
+resp_perfil = supabase.table("usuarios").select("*").eq("id", usuario_atual).execute()
+perfil = resp_perfil.data[0] if len(resp_perfil.data) > 0 else {"nome": "Gestor", "om": "Não informada"}
 
-def salvar_na_nuvem(novos_dados):
-    try:
-        db.collection("dados").document(usuario_atual).update({"ncs": novos_dados})
-    except Exception as e:
-        st.error(f"Erro ao salvar na nuvem: {e}")
+# Puxa as planilhas
+if "banco" not in st.session_state:
+    resp_dados = supabase.table("dados").select("ncs").eq("id", usuario_atual).execute()
+    if len(resp_dados.data) > 0:
+        st.session_state.banco = resp_dados.data[0].get("ncs", {})
+    else:
+        st.session_state.banco = {}
 
-# Sidebar
+banco_dados = st.session_state.banco
+
+def salvar_dados(dados):
+    supabase.table("dados").update({"ncs": dados}).eq("id", usuario_atual).execute()
+
+# =====================================================================
+# 5. ASSINATURA E FILTROS LATERAIS (SIDEBAR)
+# =====================================================================
 st.sidebar.title("💰 Gestão Orçamentária")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🛠 Estação de Trabalho")
+st.sidebar.info(f"**Gestor:** {perfil.get('nome')}\n\n**OM:** {perfil.get('om')}")
 
-nome_atual = st.sidebar.text_input("Nome do Gestor:", value=user_doc.get("nome", ""))
-om_atual = st.sidebar.text_input("Organização Militar (OM):", value=user_doc.get("om", ""))
-
-if nome_atual != user_doc.get("nome", "") or om_atual != user_doc.get("om", ""):
-    db.collection("usuarios").document(usuario_atual).update({"nome": nome_atual, "om": om_atual})
-    st.toast("Dados do perfil atualizados na nuvem!")
-
-st.sidebar.write("")
-if st.sidebar.button("Sair (Logout)"):
+st.sidebar.markdown("---")
+if st.sidebar.button("Sair da Conta (Logout)", use_container_width=True):
     st.session_state.usuario_logado = None
+    if "banco" in st.session_state:
+        del st.session_state.banco
     st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📅 Filtro de Exercício")
+
 anos_disponiveis = set(extrair_ano(nc) for nc in banco_dados.keys())
 lista_anos = sorted(list(anos_disponiveis), reverse=True) if anos_disponiveis else ["2026"]
+
 ano_selecionado = st.sidebar.selectbox("Selecione o Ano de Referência:", lista_anos)
 ncs_do_ano = [nc for nc in banco_dados.keys() if extrair_ano(nc) == ano_selecionado]
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("<div style='text-align: center; color: gray; font-size: 12px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
-
-# Título Principal
+# =====================================================================
+# 6. TÍTULO PRINCIPAL E ABAS (O SEU SISTEMA ORIGINAL)
+# =====================================================================
 st.title("🖥 Sistema Profissional de Controle de Recursos e Aquisições")
 st.markdown("Substitua o Excel por uma interface robusta para gerenciar Notas de Crédito (NC), planejar compras e monitorar o fluxo de entregas.")
 st.markdown("---")
@@ -192,7 +170,8 @@ with menu_cadastro:
         if nova_nc:
             if nova_nc not in banco_dados:
                 banco_dados[nova_nc] = {"valor_recebido": valor_nc, "nd": nova_nd, "itens": []}
-                salvar_na_nuvem(banco_dados)
+                salvar_dados(banco_dados)
+                st.session_state.banco = banco_dados
                 st.success(f"NC {nova_nc} salva com sucesso!")
                 st.rerun()
             else:
@@ -227,7 +206,8 @@ with menu_cadastro:
                     dados_preservados["valor_recebido"] = valor_editado
                     dados_preservados["nd"] = nd_editada
                     banco_dados[nome_editado] = dados_preservados
-                    salvar_na_nuvem(banco_dados)
+                    salvar_dados(banco_dados)
+                    st.session_state.banco = banco_dados
                     st.success(f"Dados da NC '{nome_editado}' atualizados com sucesso!")
                     st.rerun()
             else:
@@ -238,7 +218,8 @@ with menu_cadastro:
         nc_para_deletar_toda = st.selectbox(f"Selecione a NC ({ano_selecionado}) para APAGAR:", ncs_do_ano, key="nc_del_toda")
         if st.button("💥 DELETAR NC E TODOS OS ITENS", type="primary", key="btn_del_nc"):
             banco_dados.pop(nc_para_deletar_toda)
-            salvar_na_nuvem(banco_dados)
+            salvar_dados(banco_dados)
+            st.session_state.banco = banco_dados
             st.success(f"NC {nc_para_deletar_toda} excluída com sucesso!")
             st.rerun()
 
@@ -270,13 +251,21 @@ with menu_cadastro:
         if st.button("➕ Adicionar Item ao Planejamento", type="primary", key="btn_add_item"):
             if nome_resumido:
                 novo_item = {
-                    "Item": int(nr_item), "Nome": nome_resumido, "Valor Unitário": float(valor_unitario),
-                    "Qtd": int(quantidade), "Total": float(valor_unitario * quantidade), "UASG": nr_uasg,
-                    "Pregão": nr_pregao, "Ata": nr_ata, "Fornecedor": fornecedor.strip().upper() if fornecedor else "NÃO INFORMADO",
-                    "CNPJ": cnpj, "Situação": situacao
+                    "Item": int(nr_item),
+                    "Nome": nome_resumido,
+                    "Valor Unitário": float(valor_unitario),
+                    "Qtd": int(quantidade),
+                    "Total": float(valor_unitario * quantidade),
+                    "UASG": nr_uasg,
+                    "Pregão": nr_pregao,
+                    "Ata": nr_ata,
+                    "Fornecedor": fornecedor.strip().upper() if fornecedor else "NÃO INFORMADO",
+                    "CNPJ": cnpj,
+                    "Situação": situacao
                 }
                 banco_dados[nc_selecionada_cad]["itens"].append(novo_item)
-                salvar_na_nuvem(banco_dados)
+                salvar_dados(banco_dados)
+                st.session_state.banco = banco_dados
                 st.success("Item adicionado com sucesso!")
                 st.rerun()
             else:
@@ -315,9 +304,12 @@ with menu_visualizacao:
             
             st.write("")
             card1, card2, card3 = st.columns(3)
-            card1.metric("Total Recebido na NC", f"R$ {total_recebido:,.2f}")
-            card2.metric("Total Planejado / Gasto", f"R$ {total_gasto_geral:,.2f}", delta=f"R$ {total_gasto_geral:,.2f}", delta_color="inverse")
-            card3.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
+            with card1:
+                st.metric("Total Recebido na NC", f"R$ {total_recebido:,.2f}")
+            with card2:
+                st.metric("Total Planejado / Gasto", f"R$ {total_gasto_geral:,.2f}", delta=f"R$ {total_gasto_geral:,.2f}", delta_color="inverse")
+            with card3:
+                st.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
             
             if not df_base_mestre.empty:
                 st.markdown("---")
@@ -328,7 +320,9 @@ with menu_visualizacao:
                     st.markdown("**Valores Comprometidos por Fornecedor (R$)**")
                     gasto_fornecedor = df_base_mestre.groupby("Fornecedor")["Total"].sum().reset_index()
                     grafico_forn = alt.Chart(gasto_fornecedor).mark_bar(color='#1E88E5').encode(
-                        x=alt.X('Fornecedor', sort='-y'), y='Total', tooltip=['Fornecedor', 'Total']
+                        x=alt.X('Fornecedor', sort='-y'),
+                        y='Total',
+                        tooltip=['Fornecedor', 'Total']
                     ).properties(height=300)
                     st.altair_chart(grafico_forn, use_container_width=True)
                 
@@ -336,10 +330,17 @@ with menu_visualizacao:
                     st.markdown("**Status Atual das Entregas (Qtd. Itens)**")
                     status_contagem = df_base_mestre["Situação"].value_counts().reset_index()
                     status_contagem.columns = ["Situação", "Quantidade"]
-                    escala_cores = alt.Scale(domain=["Recebido", "Aguardando NC para chegar", "Aguardando entrega"], range=["#28a745", "#007bff", "#dc3545"])
+                    
+                    escala_cores = alt.Scale(
+                        domain=["Recebido", "Aguardando NC para chegar", "Aguardando entrega"],
+                        range=["#28a745", "#007bff", "#dc3545"]
+                    )
+                    
                     grafico_status = alt.Chart(status_contagem).mark_bar().encode(
-                        x=alt.X("Situação", sort="-y"), y="Quantidade",
-                        color=alt.Color("Situação", scale=escala_cores, legend=None), tooltip=["Situação", "Quantidade"]
+                        x=alt.X("Situação", sort="-y"),
+                        y="Quantidade",
+                        color=alt.Color("Situação", scale=escala_cores, legend=None),
+                        tooltip=["Situação", "Quantidade"]
                     ).properties(height=300)
                     st.altair_chart(grafico_status, use_container_width=True)
             
@@ -352,6 +353,7 @@ with menu_visualizacao:
                 df_atualizado_acumulado = []
                 
                 for i, forn in enumerate(lista_fornecedores):
+                    
                     col_titulo, col_btn_baixa = st.columns([3, 1])
                     with col_titulo:
                         st.markdown(f"### 🏢 Fornecedor: **{forn}**")
@@ -361,7 +363,8 @@ with menu_visualizacao:
                             for it_bd in banco_dados[nc_selecionada_vis]["itens"]:
                                 if it_bd.get("Fornecedor") == forn:
                                     it_bd["Situação"] = "Recebido"
-                            salvar_na_nuvem(banco_dados)
+                            salvar_dados(banco_dados)
+                            st.session_state.banco = banco_dados
                             st.toast(f"Itens de {forn} marcados como Recebidos!")
                             st.rerun()
                     
@@ -408,9 +411,10 @@ with menu_visualizacao:
                     df_final_para_salvar["Total"] = df_final_para_salvar["Valor Unitário"].astype(float) * df_final_para_salvar["Qtd"].astype(int)
                     
                     banco_dados[nc_selecionada_vis]["itens"] = df_final_para_salvar.to_dict(orient="records")
-                    salvar_na_nuvem(banco_dados)
+                    salvar_dados(banco_dados)
+                    st.session_state.banco = banco_dados
                     
-                    st.toast("✅ Alteração salva na nuvem com sucesso!")
+                    st.toast("✅ Alteração salva automaticamente!")
                     st.rerun()
     else:
          st.info("Nenhuma NC cadastrada para este ano.")
@@ -435,19 +439,31 @@ with menu_visao_global:
                 valor_total_item = float(item.get("Valor Unitário", 0.0)) * int(item.get("Qtd", 0))
                 situacao = item.get("Situação", "Situação Indefinida")
                 
-                dados_anuais.append({"ND": nd_atual, "Situação": situacao, "Valor Total": valor_total_item})
+                dados_anuais.append({
+                    "ND": nd_atual,
+                    "Situação": situacao,
+                    "Valor Total": valor_total_item
+                })
         
         if dados_anuais:
             df_anual = pd.DataFrame(dados_anuais)
+            
             df_agrupado = df_anual.groupby(["ND", "Situação"])["Valor Total"].sum().reset_index()
             
-            escala_cores = alt.Scale(domain=["Recebido", "Aguardando NC para chegar", "Aguardando entrega"], range=["#28a745", "#007bff", "#dc3545"])
+            escala_cores = alt.Scale(
+                domain=["Recebido", "Aguardando NC para chegar", "Aguardando entrega"],
+                range=["#28a745", "#007bff", "#dc3545"]
+            )
             
             grafico_anual = alt.Chart(df_agrupado).mark_bar().encode(
                 x=alt.X("ND:N", title="Natureza de Despesa (ND)"),
                 y=alt.Y("Valor Total:Q", title="Total (R$)"),
                 color=alt.Color("Situação:N", scale=escala_cores, title="Status do Recurso"),
-                tooltip=[alt.Tooltip("ND:N", title="ND"), alt.Tooltip("Situação:N", title="Status"), alt.Tooltip("Valor Total:Q", title="Valor Calculado (R$)", format=",.2f")]
+                tooltip=[
+                    alt.Tooltip("ND:N", title="ND"),
+                    alt.Tooltip("Situação:N", title="Status"),
+                    alt.Tooltip("Valor Total:Q", title="Valor Calculado (R$)", format=",.2f")
+                ]
             ).properties(height=450)
             
             st.altair_chart(grafico_anual, use_container_width=True)
@@ -465,6 +481,7 @@ with menu_visao_global:
                 df_pivot[col] = df_pivot[col].apply(lambda x: f"R$ {x:,.2f}")
                 
             st.dataframe(df_pivot, use_container_width=True)
+            
         else:
             st.info("Não há itens registrados nas Notas de Crédito deste ano.")
     else:
