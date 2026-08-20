@@ -18,7 +18,7 @@ st.set_page_config(
 @st.cache_resource
 def conectar_banco():
     URL = "https://oxneqoegehufjksvupji.supabase.co"
-    KEY = "sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX" # Cole a chave sb_publishable... aqui mantendo as aspas
+    KEY = "sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX"
     return create_client(URL, KEY)
 
 supabase = conectar_banco()
