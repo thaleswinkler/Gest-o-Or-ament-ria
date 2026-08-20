@@ -1,5 +1,6 @@
 import os
-os.environ["GRPC_DNS_RESOLVER"] = "native"  # ESTA É A VACINA QUE IMPEDE O FIREBASE DE TRAVAR NA NUVEM!
+# Vacina contra travamento de rede no Linux
+os.environ["GRPC_DNS_RESOLVER"] = "native"
 
 import streamlit as st
 import pandas as pd
@@ -15,10 +16,11 @@ st.set_page_config(
 )
 
 # =====================================================================
-# 2. CONEXÃO COM O FIREBASE (BLINDADA CONTRA TRAVAMENTOS DE REDE)
+# 2. CONEXÃO COM O FIREBASE (SOLUÇÃO DO TRAVAMENTO LINUX/NUVEM)
 # =====================================================================
+# CACHEAMOS *APENAS* A INICIALIZAÇÃO DO APP (A chave)
 @st.cache_resource
-def inicializar_banco():
+def inicializar_firebase():
     if not firebase_admin._apps:
         try:
             cred = credentials.Certificate("firebase_key.json")
@@ -26,9 +28,13 @@ def inicializar_banco():
         except Exception as e:
             st.error(f"⚠️ Erro no arquivo da chave: {e}")
             st.stop()
-    return firestore.client()
+    return True
 
-db = inicializar_banco()
+inicializar_firebase()
+
+# CRIAMOS O BANCO *FORA* DO CACHE!
+# Isso garante que o Linux crie uma rota nova para cada clique e nunca congele.
+db = firestore.client()
 
 def extrair_ano(nc_nome):
     if len(nc_nome) >= 4 and nc_nome[:4].isdigit():
@@ -40,7 +46,7 @@ if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
 
 # =====================================================================
-# TELA DE LOGIN E CADASTRO (LADO A LADO - COM FORMULÁRIOS SEGUROS)
+# TELA DE LOGIN E CADASTRO (LADO A LADO)
 # =====================================================================
 if st.session_state.usuario_logado is None:
     st.title("🖥 Sistema Profissional de Controle de Recursos")
@@ -107,7 +113,7 @@ if st.session_state.usuario_logado is None:
     
     st.markdown("---")
     st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
-    st.stop()  # Impede o carregamento do resto se não estiver logado
+    st.stop()
 
 # =====================================================================
 # SISTEMA PRINCIPAL (PÓS-LOGIN)
