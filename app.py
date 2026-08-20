@@ -32,7 +32,7 @@ if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
 
 # =====================================================================
-# TELA DE LOGIN E CADASTRO (COM FORMULÁRIOS SEGUROS)
+# TELA DE LOGIN E CADASTRO (COM MEMÓRIA BLINDADA)
 # =====================================================================
 if st.session_state.usuario_logado is None:
     st.title("🖥 Sistema Profissional de Controle de Recursos")
@@ -43,20 +43,25 @@ if st.session_state.usuario_logado is None:
     
     if modo_acesso == "🔑 Fazer Login":
         st.subheader("Acesso ao Sistema")
-        with st.form("form_login_seguro"):
-            usuario_login = st.text_input("Usuário:").strip().lower()
-            senha_login = st.text_input("Senha:", type="password")
+        with st.form("form_login_blindado"):
+            # A ancoragem de estado com 'key' impede o Streamlit de esvaziar o campo
+            st.text_input("Usuário:", key="mem_login_user")
+            st.text_input("Senha:", type="password", key="mem_login_pass")
             btn_login = st.form_submit_button("Entrar no Sistema", type="primary")
             
             if btn_login:
-                if not usuario_login or not senha_login:
+                # Puxa os dados diretamente da memória bruta do Streamlit
+                user_digitado = st.session_state.mem_login_user.strip().lower()
+                senha_digitada = st.session_state.mem_login_pass
+                
+                if not user_digitado or not senha_digitada:
                     st.warning("Preencha usuário e senha.")
                 else:
                     try:
-                        doc = db.collection("usuarios").document(usuario_login).get()
+                        doc = db.collection("usuarios").document(user_digitado).get()
                         if doc.exists:
-                            if doc.to_dict().get("senha") == senha_login:
-                                st.session_state.usuario_logado = usuario_login
+                            if doc.to_dict().get("senha") == senha_digitada:
+                                st.session_state.usuario_logado = user_digitado
                                 st.success("Login realizado com sucesso!")
                                 st.rerun()
                             else:
@@ -68,15 +73,21 @@ if st.session_state.usuario_logado is None:
                 
     else:
         st.subheader("Cadastro de Novo Operador")
-        with st.form("form_cadastro_seguro"):
-            novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
-            nova_senha = st.text_input("Crie uma Senha:", type="password")
-            novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):")
-            nova_om = st.text_input("Sua Organização Militar (Ex: 23º BI):")
+        with st.form("form_cadastro_blindado"):
+            st.text_input("Escolha um nome de Usuário:", key="mem_cad_user")
+            st.text_input("Crie uma Senha:", type="password", key="mem_cad_pass")
+            st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):", key="mem_cad_nome")
+            st.text_input("Sua Organização Militar (Ex: 23º BI):", key="mem_cad_om")
             
             btn_cadastrar = st.form_submit_button("Criar Conta", type="secondary")
             
             if btn_cadastrar:
+                # Puxa os dados diretamente da memória bruta do Streamlit
+                novo_user = st.session_state.mem_cad_user.strip().lower()
+                nova_senha = st.session_state.mem_cad_pass
+                novo_nome = st.session_state.mem_cad_nome.strip()
+                nova_om = st.session_state.mem_cad_om.strip()
+                
                 if not novo_user or not nova_senha or not novo_nome:
                     st.warning("Preencha os campos obrigatórios (Usuário, Senha e Nome).")
                 else:
@@ -96,7 +107,7 @@ if st.session_state.usuario_logado is None:
     
     st.markdown("---")
     st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
-    st.stop()  # Para a execução aqui se não estiver logado
+    st.stop()
 
 # =====================================================================
 # SISTEMA PRINCIPAL (PÓS-LOGIN)
