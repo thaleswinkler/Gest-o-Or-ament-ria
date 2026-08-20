@@ -1,3 +1,6 @@
+import os
+os.environ["GRPC_DNS_RESOLVER"] = "native"  # ESTA É A VACINA QUE IMPEDE O FIREBASE DE TRAVAR NA NUVEM!
+
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -16,7 +19,6 @@ st.set_page_config(
 # =====================================================================
 @st.cache_resource
 def inicializar_banco():
-    # Isso garante que a conexão abra apenas UMA VEZ e nunca trave a rede
     if not firebase_admin._apps:
         try:
             cred = credentials.Certificate("firebase_key.json")
@@ -26,7 +28,6 @@ def inicializar_banco():
             st.stop()
     return firestore.client()
 
-# Chama a conexão segura guardada no cache
 db = inicializar_banco()
 
 def extrair_ano(nc_nome):
@@ -46,7 +47,6 @@ if st.session_state.usuario_logado is None:
     st.markdown("Bem-vindo! Faça login ou crie sua conta para acessar o sistema na nuvem.")
     st.markdown("---")
     
-    # Telas lado a lado com formulários simples e blindados
     col_login, col_divisor, col_cadastro = st.columns([4, 1, 4])
     
     with col_login:
