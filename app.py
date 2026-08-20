@@ -11,124 +11,101 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. CONEXÃO COM O FIREBASE (CACHEADA)
-@st.cache_resource
-def conectar_firebase():
-    if not firebase_admin._apps:
-        try:
-            cred = credentials.Certificate("firebase_key.json")
-            firebase_admin.initialize_app(cred)
-        except FileNotFoundError:
-            return None
-    return firestore.client()
+# =====================================================================
+# 2. CONEXÃO COM O FIREBASE (A SOLUÇÃO DO DEADLOCK/TELA CINZA)
+# =====================================================================
+# Verificamos se o app existe para não dar erro "already exists"
+if not firebase_admin._apps:
+    try:
+        cred = credentials.Certificate("firebase_key.json")
+        firebase_admin.initialize_app(cred)
+    except FileNotFoundError:
+        st.error("⚠️ Arquivo 'firebase_key.json' não encontrado na raiz.")
+        st.stop()
 
-db = conectar_firebase()
-if db is None:
-    st.error("⚠️ Arquivo 'firebase_key.json' não encontrado na raiz do repositório.")
-    st.stop()
+# ATENÇÃO: Criamos o cliente FORA DO CACHE!
+# Isso força o servidor a sempre ter um canal de rede ativo e impede a tela de congelar.
+db = firestore.client()
 
 def extrair_ano(nc_nome):
     if len(nc_nome) >= 4 and nc_nome[:4].isdigit():
         return nc_nome[:4]
     return "Outros/Sem Ano"
 
-# 3. INICIALIZAÇÃO DE ESTADOS DA SESSÃO
+# Inicializa o estado da sessão do usuário
 if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
-if "msg_erro" not in st.session_state:
-    st.session_state.msg_erro = None
-if "msg_sucesso" not in st.session_state:
-    st.session_state.msg_sucesso = None
 
 # =====================================================================
-# FUNÇÕES DE CALLBACK (Garantem que o botão funcione 100% das vezes)
-# =====================================================================
-def fazer_login():
-    st.session_state.msg_erro = None
-    st.session_state.msg_sucesso = None
-    usr = st.session_state.login_user.strip().lower()
-    pwd = st.session_state.login_pass
-
-    if not usr or not pwd:
-        st.session_state.msg_erro = "Preencha usuário e senha."
-        return
-
-    try:
-        doc = db.collection("usuarios").document(usr).get()
-        if doc.exists:
-            if doc.to_dict().get("senha") == pwd:
-                st.session_state.usuario_logado = usr
-            else:
-                st.session_state.msg_erro = "Senha incorreta!"
-        else:
-            st.session_state.msg_erro = "Usuário não encontrado!"
-    except Exception as e:
-        st.session_state.msg_erro = f"Erro ao conectar com o Firebase: {e}"
-
-def fazer_cadastro():
-    st.session_state.msg_erro = None
-    st.session_state.msg_sucesso = None
-    usr = st.session_state.cad_user.strip().lower()
-    pwd = st.session_state.cad_pass
-    nome = st.session_state.cad_nome.strip()
-    om = st.session_state.cad_om.strip()
-
-    if not usr or not pwd or not nome:
-        st.session_state.msg_erro = "Preencha os campos obrigatórios (Usuário, Senha e Nome)."
-        return
-
-    try:
-        if db.collection("usuarios").document(usr).get().exists:
-            st.session_state.msg_erro = "Este nome de usuário já está em uso. Escolha outro."
-        else:
-            db.collection("usuarios").document(usr).set({
-                "senha": pwd,
-                "nome": nome,
-                "om": om
-            })
-            db.collection("dados").document(usr).set({"ncs": {}})
-            st.session_state.msg_sucesso = "✅ Conta criada com sucesso! Você já pode fazer o login ao lado."
-    except Exception as e:
-        st.session_state.msg_erro = f"🚨 Erro de Conexão com o Firebase: {e}"
-
-# =====================================================================
-# TELA DE LOGIN E CADASTRO (LADO A LADO - À PROVA DE BUGS)
+# TELA DE LOGIN E CADASTRO (LADO A LADO - COM FORMULÁRIOS SEGUROS)
 # =====================================================================
 if st.session_state.usuario_logado is None:
     st.title("🖥 Sistema Profissional de Controle de Recursos")
     st.markdown("Bem-vindo! Faça login ou crie sua conta para acessar o sistema na nuvem.")
     st.markdown("---")
-
-    # Sistema centralizado de mensagens
-    if st.session_state.msg_erro:
-        st.error(st.session_state.msg_erro)
-    if st.session_state.msg_sucesso:
-        st.success(st.session_state.msg_sucesso)
-
-    # Layout lado a lado para evitar bugs de formulários ocultos
+    
+    # Telas lado a lado com formulários simples e blindados
     col_login, col_divisor, col_cadastro = st.columns([4, 1, 4])
-
+    
     with col_login:
         st.subheader("🔑 Fazer Login")
-        st.text_input("Usuário:", key="login_user")
-        st.text_input("Senha:", type="password", key="login_pass")
-        st.button("Entrar no Sistema", type="primary", on_click=fazer_login, use_container_width=True)
-
+        with st.form("form_login_final"):
+            usuario_login = st.text_input("Usuário:").strip().lower()
+            senha_login = st.text_input("Senha:", type="password")
+            btn_login = st.form_submit_button("Entrar no Sistema", type="primary", use_container_width=True)
+            
+            if btn_login:
+                if not usuario_login or not senha_login:
+                    st.warning("Preencha usuário e senha.")
+                else:
+                    try:
+                        doc = db.collection("usuarios").document(usuario_login).get()
+                        if doc.exists:
+                            if doc.to_dict().get("senha") == senha_login:
+                                st.session_state.usuario_logado = usuario_login
+                                st.success("Login realizado com sucesso!")
+                                st.rerun()
+                            else:
+                                st.error("Senha incorreta!")
+                        else:
+                            st.error("Usuário não encontrado!")
+                    except Exception as e:
+                        st.error(f"Erro ao conectar com o banco: {e}")
+                
     with col_divisor:
-        # Coluna vazia apenas para dar um espaço visual entre as telas
         st.write("")
 
     with col_cadastro:
         st.subheader("📝 Criar Nova Conta")
-        st.text_input("Escolha um nome de Usuário:", key="cad_user")
-        st.text_input("Crie uma Senha:", type="password", key="cad_pass")
-        st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):", key="cad_nome")
-        st.text_input("Sua Organização Militar (Ex: 23º BI):", key="cad_om")
-        st.button("Criar Conta", type="secondary", on_click=fazer_cadastro, use_container_width=True)
-
+        with st.form("form_cadastro_final"):
+            novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
+            nova_senha = st.text_input("Crie uma Senha:", type="password")
+            novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):")
+            nova_om = st.text_input("Sua Organização Militar (Ex: 23º BI):")
+            
+            btn_cadastrar = st.form_submit_button("Criar Conta", type="secondary", use_container_width=True)
+            
+            if btn_cadastrar:
+                if not novo_user or not nova_senha or not novo_nome:
+                    st.warning("Preencha os campos obrigatórios (Usuário, Senha e Nome).")
+                else:
+                    try:
+                        if db.collection("usuarios").document(novo_user).get().exists:
+                            st.error("Este nome de usuário já está em uso. Escolha outro.")
+                        else:
+                            db.collection("usuarios").document(novo_user).set({
+                                "senha": nova_senha,
+                                "nome": novo_nome,
+                                "om": nova_om
+                            })
+                            db.collection("dados").document(novo_user).set({"ncs": {}})
+                            st.success("✅ Conta criada com sucesso! Você já pode fazer o login ao lado.")
+                    except Exception as e:
+                        st.error(f"🚨 Erro de Conexão com o Firebase: {e}")
+    
     st.markdown("---")
     st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
-    st.stop()
+    st.stop()  # Impede o carregamento do resto se não estiver logado
 
 # =====================================================================
 # SISTEMA PRINCIPAL (PÓS-LOGIN)
