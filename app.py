@@ -1,7 +1,3 @@
-import os
-# Vacina contra travamento de rede no Linux
-os.environ["GRPC_DNS_RESOLVER"] = "native"
-
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -16,25 +12,27 @@ st.set_page_config(
 )
 
 # =====================================================================
-# 2. CONEXÃO COM O FIREBASE (SOLUÇÃO DO TRAVAMENTO LINUX/NUVEM)
+# 2. CONEXÃO COM O FIREBASE (A ÚNICA FORMA 100% SEGURA)
 # =====================================================================
-# CACHEAMOS *APENAS* A INICIALIZAÇÃO DO APP (A chave)
 @st.cache_resource
-def inicializar_firebase():
-    if not firebase_admin._apps:
+def conectar_firebase():
+    try:
+        # Tenta pegar o app já inicializado (evita o erro "already exists")
+        firebase_admin.get_app()
+    except ValueError:
+        # Se não existir, inicializa com a chave
         try:
             cred = credentials.Certificate("firebase_key.json")
             firebase_admin.initialize_app(cred)
         except Exception as e:
-            st.error(f"⚠️ Erro no arquivo da chave: {e}")
+            st.error(f"⚠️ Erro ao carregar a chave do Firebase: {e}")
             st.stop()
-    return True
+    
+    # Retorna o cliente UMA ÚNICA VEZ e guarda no cache (impede travamento da tela)
+    return firestore.client()
 
-inicializar_firebase()
-
-# CRIAMOS O BANCO *FORA* DO CACHE!
-# Isso garante que o Linux crie uma rota nova para cada clique e nunca congele.
-db = firestore.client()
+# Inicia a conexão
+db = conectar_firebase()
 
 def extrair_ano(nc_nome):
     if len(nc_nome) >= 4 and nc_nome[:4].isdigit():
@@ -113,7 +111,7 @@ if st.session_state.usuario_logado is None:
     
     st.markdown("---")
     st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
-    st.stop()
+    st.stop()  # Impede o carregamento do resto se não estiver logado
 
 # =====================================================================
 # SISTEMA PRINCIPAL (PÓS-LOGIN)
