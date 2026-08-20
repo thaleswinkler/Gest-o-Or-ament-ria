@@ -12,20 +12,22 @@ st.set_page_config(
 )
 
 # =====================================================================
-# 2. CONEXÃO COM O FIREBASE (A SOLUÇÃO DO DEADLOCK/TELA CINZA)
+# 2. CONEXÃO COM O FIREBASE (BLINDADA CONTRA TRAVAMENTOS DE REDE)
 # =====================================================================
-# Verificamos se o app existe para não dar erro "already exists"
-if not firebase_admin._apps:
-    try:
-        cred = credentials.Certificate("firebase_key.json")
-        firebase_admin.initialize_app(cred)
-    except FileNotFoundError:
-        st.error("⚠️ Arquivo 'firebase_key.json' não encontrado na raiz.")
-        st.stop()
+@st.cache_resource
+def inicializar_banco():
+    # Isso garante que a conexão abra apenas UMA VEZ e nunca trave a rede
+    if not firebase_admin._apps:
+        try:
+            cred = credentials.Certificate("firebase_key.json")
+            firebase_admin.initialize_app(cred)
+        except Exception as e:
+            st.error(f"⚠️ Erro no arquivo da chave: {e}")
+            st.stop()
+    return firestore.client()
 
-# ATENÇÃO: Criamos o cliente FORA DO CACHE!
-# Isso força o servidor a sempre ter um canal de rede ativo e impede a tela de congelar.
-db = firestore.client()
+# Chama a conexão segura guardada no cache
+db = inicializar_banco()
 
 def extrair_ano(nc_nome):
     if len(nc_nome) >= 4 and nc_nome[:4].isdigit():
@@ -49,7 +51,7 @@ if st.session_state.usuario_logado is None:
     
     with col_login:
         st.subheader("🔑 Fazer Login")
-        with st.form("form_login_final"):
+        with st.form("form_login_oficial"):
             usuario_login = st.text_input("Usuário:").strip().lower()
             senha_login = st.text_input("Senha:", type="password")
             btn_login = st.form_submit_button("Entrar no Sistema", type="primary", use_container_width=True)
@@ -63,7 +65,7 @@ if st.session_state.usuario_logado is None:
                         if doc.exists:
                             if doc.to_dict().get("senha") == senha_login:
                                 st.session_state.usuario_logado = usuario_login
-                                st.success("Login realizado com sucesso!")
+                                st.success("Login realizado com sucesso! Entrando...")
                                 st.rerun()
                             else:
                                 st.error("Senha incorreta!")
@@ -77,7 +79,7 @@ if st.session_state.usuario_logado is None:
 
     with col_cadastro:
         st.subheader("📝 Criar Nova Conta")
-        with st.form("form_cadastro_final"):
+        with st.form("form_cadastro_oficial"):
             novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
             nova_senha = st.text_input("Crie uma Senha:", type="password")
             novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):")
