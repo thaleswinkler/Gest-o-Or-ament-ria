@@ -13,15 +13,11 @@ st.set_page_config(
 )
 
 # =====================================================================
-# 2. CONEXÃO COM O BANCO DE DADOS (SUPABASE)
+# 2. CONEXÃO COM O BANCO DE DADOS (SUPABASE - SEM CACHE PARA NÃO TRAVAR)
 # =====================================================================
-@st.cache_resource
-def conectar_banco():
-    URL = "https://oxneqoegehufjksvupji.supabase.co"
-    KEY = "sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX"
-    return create_client(URL, KEY)
-
-supabase = conectar_banco()
+URL = "https://oxneqoegehufjksvupji.supabase.co"
+KEY = "sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX"
+supabase: Client = create_client(URL, KEY)
 
 def extrair_ano(nc_nome):
     if len(nc_nome) >= 4 and nc_nome[:4].isdigit():
@@ -139,8 +135,12 @@ lista_anos = sorted(list(anos_disponiveis), reverse=True) if anos_disponiveis el
 ano_selecionado = st.sidebar.selectbox("Selecione o Ano de Referência:", lista_anos)
 ncs_do_ano = [nc for nc in banco_dados.keys() if extrair_ano(nc) == ano_selecionado]
 
+# Assinatura reposicionada para a barra lateral
+st.sidebar.markdown("---")
+st.sidebar.markdown("<div style='text-align: center; color: gray; font-size: 12px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
+
 # =====================================================================
-# 6. TÍTULO PRINCIPAL E ABAS (O SEU SISTEMA ORIGINAL)
+# 6. TÍTULO PRINCIPAL E ABAS 
 # =====================================================================
 st.title("🖥 Sistema Profissional de Controle de Recursos e Aquisições")
 st.markdown("Substitua o Excel por uma interface robusta para gerenciar Notas de Crédito (NC), planejar compras e monitorar o fluxo de entregas.")
@@ -243,7 +243,7 @@ with menu_cadastro:
             fornecedor = st.text_input("Nome do Fornecedor / Empresa:", "", key="item_forn").strip()
             cnpj = st.text_input("CNPJ do Fornecedor:", "", key="item_cnpj").strip()
             situacao = st.selectbox("Situação Atual do Recurso:", [
-                "Aguardando NC para chegar",
+                "Planejamento",
                 "Aguardando entrega",
                 "Recebido"
             ], key="item_sit")
@@ -332,7 +332,7 @@ with menu_visualizacao:
                     status_contagem.columns = ["Situação", "Quantidade"]
                     
                     escala_cores = alt.Scale(
-                        domain=["Recebido", "Aguardando NC para chegar", "Aguardando entrega"],
+                        domain=["Recebido", "Planejamento", "Aguardando entrega"],
                         range=["#28a745", "#007bff", "#dc3545"]
                     )
                     
@@ -370,8 +370,13 @@ with menu_visualizacao:
                     
                     df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
                     
+                    # APLICANDO A ORDEM DAS COLUNAS SOLICITADA
                     df_editado_forn = st.data_editor(
                         df_forn_atual,
+                        column_order=[
+                            "Item", "Nome", "Qtd", "Valor Unitário", "Total", 
+                            "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"
+                        ],
                         column_config={
                             "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
                             "Nome": st.column_config.TextColumn("Nome", required=True),
@@ -383,7 +388,7 @@ with menu_visualizacao:
                             "Ata": st.column_config.TextColumn("Ata"),
                             "Fornecedor": st.column_config.TextColumn("Fornecedor"),
                             "CNPJ": st.column_config.TextColumn("CNPJ"),
-                            "Situação": st.column_config.SelectboxColumn("Situação", options=["Aguardando NC para chegar", "Aguardando entrega", "Recebido"], required=True)
+                            "Situação": st.column_config.SelectboxColumn("Situação", options=["Planejamento", "Aguardando entrega", "Recebido"], required=True)
                         },
                         disabled=["Total"], 
                         num_rows="dynamic",
@@ -420,7 +425,7 @@ with menu_visualizacao:
          st.info("Nenhuma NC cadastrada para este ano.")
 
 # =====================================================================
-# ABA 3: VISÃO GLOBAL ANUAL
+# ABA 3: VISÃO GLOBAL ANUAL 
 # =====================================================================
 with menu_visao_global:
     st.subheader(f"Resumo Geral de Empenhos e Aquisições - Ano {ano_selecionado}")
@@ -451,7 +456,7 @@ with menu_visao_global:
             df_agrupado = df_anual.groupby(["ND", "Situação"])["Valor Total"].sum().reset_index()
             
             escala_cores = alt.Scale(
-                domain=["Recebido", "Aguardando NC para chegar", "Aguardando entrega"],
+                domain=["Recebido", "Planejamento", "Aguardando entrega"],
                 range=["#28a745", "#007bff", "#dc3545"]
             )
             
