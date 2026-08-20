@@ -80,13 +80,12 @@ if st.session_state.usuario_logado is None:
                     if len(verifica.data) > 0:
                         st.error("Este nome de usuário já está em uso.")
                     else:
-                        # Salva o novo usuário e cria o banco vazio dele
                         supabase.table("usuarios").insert({"id": novo_user, "senha": nova_senha, "nome": novo_nome, "om": nova_om}).execute()
                         supabase.table("dados").insert({"id": novo_user, "ncs": {}}).execute()
                         st.success("✅ Conta criada! Faça o login ao lado.")
     
     st.markdown("---")
-    st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b></div>", unsafe_allow_html=True)
     st.stop() 
 
 # =====================================================================
@@ -135,9 +134,8 @@ lista_anos = sorted(list(anos_disponiveis), reverse=True) if anos_disponiveis el
 ano_selecionado = st.sidebar.selectbox("Selecione o Ano de Referência:", lista_anos)
 ncs_do_ano = [nc for nc in banco_dados.keys() if extrair_ano(nc) == ano_selecionado]
 
-# Assinatura reposicionada para a barra lateral
 st.sidebar.markdown("---")
-st.sidebar.markdown("<div style='text-align: center; color: gray; font-size: 12px;'>Criado e Desenvolvido por:<br><b>2º Sgt Winkler</b></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='text-align: center; color: gray; font-size: 12px;'>Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b></div>", unsafe_allow_html=True)
 
 # =====================================================================
 # 6. TÍTULO PRINCIPAL E ABAS 
@@ -370,7 +368,6 @@ with menu_visualizacao:
                     
                     df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
                     
-                    # APLICANDO A ORDEM DAS COLUNAS SOLICITADA
                     df_editado_forn = st.data_editor(
                         df_forn_atual,
                         column_order=[
