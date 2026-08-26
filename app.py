@@ -85,7 +85,13 @@ if st.session_state.usuario_logado is None:
                         st.success("✅ Conta criada! Faça o login ao lado.")
     
     st.markdown("---")
-    st.markdown("<div style='text-align: center; color: gray; font-size: 14px;'>Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b></div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='text-align: center; color: gray; font-size: 14px;'>"
+        "Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b><br><br>"
+        "<i>Este sistema está em constante evolução. Para suporte, dúvidas ou envio de sugestões de melhorias, entre em contato: <a href='mailto:thaleswinkler81@gmail.com'>thaleswinkler81@gmail.com</a></i>"
+        "</div>", 
+        unsafe_allow_html=True
+    )
     st.stop() 
 
 # =====================================================================
@@ -135,7 +141,14 @@ ano_selecionado = st.sidebar.selectbox("Selecione o Ano de Referência:", lista_
 ncs_do_ano = [nc for nc in banco_dados.keys() if extrair_ano(nc) == ano_selecionado]
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<div style='text-align: center; color: gray; font-size: 12px;'>Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b></div>", unsafe_allow_html=True)
+st.sidebar.markdown(
+    "<div style='text-align: center; color: gray; font-size: 12px;'>"
+    "Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b><br><br>"
+    "<i>Sistema em constante evolução. Sugestões e suporte:<br>"
+    "<a href='mailto:thaleswinkler81@gmail.com'>thaleswinkler81@gmail.com</a></i>"
+    "</div>", 
+    unsafe_allow_html=True
+)
 
 # =====================================================================
 # 6. TÍTULO PRINCIPAL E ABAS 
