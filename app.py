@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # =====================================================================
-# 2. CONEXÃO COM O BANCO DE DADOS (SUPABASE - SEM CACHE PARA NÃO TRAVAR)
+# 2. CONEXÃO COM O BANCO DE DADOS 
 # =====================================================================
 URL = "https://oxneqoegehufjksvupji.supabase.co"
 KEY = "sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX"
@@ -32,7 +32,7 @@ if "usuario_logado" not in st.session_state:
 
 if st.session_state.usuario_logado is None:
     st.title("🖥 Sistema Profissional de Controle de Recursos")
-    st.markdown("Bem-vindo! Faça login ou crie sua conta para acessar o sistema.")
+    st.markdown("Bem-vindo! Faça login ou crie sua conta para acessar o sistema da sua OM.")
     st.markdown("---")
     
     col_login, col_divisor, col_cadastro = st.columns([4, 1, 4])
@@ -68,53 +68,56 @@ if st.session_state.usuario_logado is None:
             novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
             nova_senha = st.text_input("Crie uma Senha:", type="password")
             novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):")
-            nova_om = st.text_input("Sua Organização Militar (Ex: 23º BI):")
+            nova_om = st.text_input("Sua OM (Ex: 23º BI):").strip().upper()
+            
+            col_cad1, col_cad2 = st.columns(2)
+            with col_cad1:
+                nova_secao = st.text_input("Sua Seção (Ex: SALC, Almox, CFGS):").strip().upper()
+            with col_cad2:
+                novo_perfil = st.selectbox("Nível de Acesso:", ["Operador", "Fiscal"])
             
             btn_cadastrar = st.form_submit_button("Criar Conta", type="secondary", use_container_width=True)
             
             if btn_cadastrar:
-                if not novo_user or not nova_senha or not novo_nome:
-                    st.warning("Preencha os campos obrigatórios.")
+                if not novo_user or not nova_senha or not novo_nome or not nova_om or not nova_secao:
+                    st.warning("Preencha todos os campos obrigatórios.")
                 else:
                     verifica = supabase.table("usuarios").select("id").eq("id", novo_user).execute()
                     if len(verifica.data) > 0:
                         st.error("Este nome de usuário já está em uso.")
                     else:
-                        supabase.table("usuarios").insert({"id": novo_user, "senha": nova_senha, "nome": novo_nome, "om": nova_om}).execute()
-                        supabase.table("dados").insert({"id": novo_user, "ncs": {}}).execute()
+                        supabase.table("usuarios").insert({
+                            "id": novo_user, "senha": nova_senha, "nome": novo_nome, 
+                            "om": nova_om, "secao": nova_secao, "perfil": novo_perfil
+                        }).execute()
+                        
+                        id_secao = f"{nova_om}_{nova_secao}"
+                        verifica_banco = supabase.table("dados").select("id").eq("id", id_secao).execute()
+                        if len(verifica_banco.data) == 0:
+                            supabase.table("dados").insert({"id": id_secao, "ncs": {}}).execute()
+                            
                         st.success("✅ Conta criada! Faça o login ao lado.")
     
     st.markdown("---")
     st.markdown(
         "<div style='text-align: center; color: gray; font-size: 14px;'>"
         "Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b><br><br>"
-        "<i>Este sistema está em constante evolução. Para suporte, dúvidas ou envio de sugestões de melhorias, entre em contato: <a href='mailto:thaleswinkler81@gmail.com'>thaleswinkler81@gmail.com</a></i>"
+        "<i>Este sistema está em constante evolução. Para suporte ou envio de sugestões, entre em contato: <a href='mailto:thaleswinkler81@gmail.com'>thaleswinkler81@gmail.com</a></i>"
         "</div>", 
         unsafe_allow_html=True
     )
     st.stop() 
 
 # =====================================================================
-# 4. CARREGAMENTO DOS DADOS (PÓS-LOGIN)
+# 4. CARREGAMENTO DOS DADOS CORPORATIVOS
 # =====================================================================
 usuario_atual = st.session_state.usuario_logado
 
-# Puxa o perfil
 resp_perfil = supabase.table("usuarios").select("*").eq("id", usuario_atual).execute()
-perfil = resp_perfil.data[0] if len(resp_perfil.data) > 0 else {"nome": "Gestor", "om": "Não informada"}
-
-# Puxa as planilhas
-if "banco" not in st.session_state:
-    resp_dados = supabase.table("dados").select("ncs").eq("id", usuario_atual).execute()
-    if len(resp_dados.data) > 0:
-        st.session_state.banco = resp_dados.data[0].get("ncs", {})
-    else:
-        st.session_state.banco = {}
-
-banco_dados = st.session_state.banco
-
-def salvar_dados(dados):
-    supabase.table("dados").update({"ncs": dados}).eq("id", usuario_atual).execute()
+perfil = resp_perfil.data[0]
+om_user = perfil.get("om", "Não informada")
+secao_user = perfil.get("secao", "Geral")
+tipo_perfil = perfil.get("perfil", "Operador")
 
 # =====================================================================
 # 5. ASSINATURA E FILTROS LATERAIS (SIDEBAR)
@@ -122,13 +125,38 @@ def salvar_dados(dados):
 st.sidebar.title("💰 Gestão Orçamentária")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🛠 Estação de Trabalho")
-st.sidebar.info(f"**Gestor:** {perfil.get('nome')}\n\n**OM:** {perfil.get('om')}")
+st.sidebar.info(f"**Militar:** {perfil.get('nome')}\n\n**OM:** {om_user}")
+
+if tipo_perfil == "Fiscal":
+    st.sidebar.warning("🛡️ **Perfil: FISCAL (Acesso Total)**")
+    resp_secoes = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
+    secoes_da_om = sorted(list(set([r["secao"] for r in resp_secoes.data])))
+    if not secoes_da_om: secoes_da_om = [secao_user]
+    
+    secao_ativa = st.sidebar.selectbox("🔎 Operar dados da Seção:", secoes_da_om, index=secoes_da_om.index(secao_user) if secao_user in secoes_da_om else 0)
+else:
+    st.sidebar.success(f"👤 **Perfil: Operador**\n\n**Seção:** {secao_user}")
+    secao_ativa = secao_user
+
+id_banco = f"{om_user}_{secao_ativa}"
+
+if "banco" not in st.session_state or st.session_state.get("secao_carregada") != id_banco:
+    resp_dados = supabase.table("dados").select("ncs").eq("id", id_banco).execute()
+    if len(resp_dados.data) > 0:
+        st.session_state.banco = resp_dados.data[0].get("ncs", {})
+    else:
+        st.session_state.banco = {}
+    st.session_state.secao_carregada = id_banco
+
+banco_dados = st.session_state.banco
+
+def salvar_dados(dados):
+    supabase.table("dados").update({"ncs": dados}).eq("id", id_banco).execute()
 
 st.sidebar.markdown("---")
 if st.sidebar.button("Sair da Conta (Logout)", use_container_width=True):
     st.session_state.usuario_logado = None
-    if "banco" in st.session_state:
-        del st.session_state.banco
+    if "banco" in st.session_state: del st.session_state.banco
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -136,7 +164,6 @@ st.sidebar.markdown("### 📅 Filtro de Exercício")
 
 anos_disponiveis = set(extrair_ano(nc) for nc in banco_dados.keys())
 lista_anos = sorted(list(anos_disponiveis), reverse=True) if anos_disponiveis else ["2026"]
-
 ano_selecionado = st.sidebar.selectbox("Selecione o Ano de Referência:", lista_anos)
 ncs_do_ano = [nc for nc in banco_dados.keys() if extrair_ano(nc) == ano_selecionado]
 
@@ -153,8 +180,8 @@ st.sidebar.markdown(
 # =====================================================================
 # 6. TÍTULO PRINCIPAL E ABAS 
 # =====================================================================
-st.title("🖥 Sistema Profissional de Controle de Recursos e Aquisições")
-st.markdown("Substitua o Excel por uma interface robusta para gerenciar Notas de Crédito (NC), planejar compras e monitorar o fluxo de entregas.")
+st.title(f"🖥 Sistema de Controle de Recursos - {om_user}")
+st.markdown(f"**Área de Trabalho Ativa:** {secao_ativa}")
 st.markdown("---")
 
 menu_cadastro, menu_visualizacao, menu_visao_global = st.tabs([
@@ -183,7 +210,7 @@ with menu_cadastro:
                 banco_dados[nova_nc] = {"valor_recebido": valor_nc, "nd": nova_nd, "itens": []}
                 salvar_dados(banco_dados)
                 st.session_state.banco = banco_dados
-                st.success(f"NC {nova_nc} salva com sucesso!")
+                st.success(f"NC {nova_nc} salva com sucesso na seção {secao_ativa}!")
                 st.rerun()
             else:
                 st.warning("Esta NC já existe. Use a seção abaixo para alterá-la.")
@@ -253,26 +280,15 @@ with menu_cadastro:
         with col_it3:
             fornecedor = st.text_input("Nome do Fornecedor / Empresa:", "", key="item_forn").strip()
             cnpj = st.text_input("CNPJ do Fornecedor:", "", key="item_cnpj").strip()
-            situacao = st.selectbox("Situação Atual do Recurso:", [
-                "Planejamento",
-                "Aguardando entrega",
-                "Recebido"
-            ], key="item_sit")
+            situacao = st.selectbox("Situação Atual do Recurso:", ["Planejamento", "Aguardando entrega", "Recebido"], key="item_sit")
         
         if st.button("➕ Adicionar Item ao Planejamento", type="primary", key="btn_add_item"):
             if nome_resumido:
                 novo_item = {
-                    "Item": int(nr_item),
-                    "Nome": nome_resumido,
-                    "Valor Unitário": float(valor_unitario),
-                    "Qtd": int(quantidade),
-                    "Total": float(valor_unitario * quantidade),
-                    "UASG": nr_uasg,
-                    "Pregão": nr_pregao,
-                    "Ata": nr_ata,
-                    "Fornecedor": fornecedor.strip().upper() if fornecedor else "NÃO INFORMADO",
-                    "CNPJ": cnpj,
-                    "Situação": situacao
+                    "Item": int(nr_item), "Nome": nome_resumido, "Valor Unitário": float(valor_unitario),
+                    "Qtd": int(quantidade), "Total": float(valor_unitario * quantidade), "UASG": nr_uasg,
+                    "Pregão": nr_pregao, "Ata": nr_ata, "Fornecedor": fornecedor.strip().upper() if fornecedor else "NÃO INFORMADO",
+                    "CNPJ": cnpj, "Situação": situacao
                 }
                 banco_dados[nc_selecionada_cad]["itens"].append(novo_item)
                 salvar_dados(banco_dados)
@@ -428,76 +444,91 @@ with menu_visualizacao:
                     banco_dados[nc_selecionada_vis]["itens"] = df_final_para_salvar.to_dict(orient="records")
                     salvar_dados(banco_dados)
                     st.session_state.banco = banco_dados
-                    
                     st.toast("✅ Alteração salva automaticamente!")
                     st.rerun()
     else:
-         st.info("Nenhuma NC cadastrada para este ano.")
+         st.info("Nenhuma NC cadastrada para este ano nesta seção.")
 
 # =====================================================================
-# ABA 3: VISÃO GLOBAL ANUAL 
+# ABA 3: VISÃO GLOBAL ANUAL (Diferente para Operador e Fiscal)
 # =====================================================================
 with menu_visao_global:
-    st.subheader(f"Resumo Geral de Empenhos e Aquisições - Ano {ano_selecionado}")
-    st.markdown("Este gráfico consolida os valores agrupados por **Natureza de Despesa (ND)** e empilhados pela sua respectiva **Situação Atual** (Planejamento, Entrega ou Recebido).")
     
     dados_anuais = []
     
-    if ncs_do_ano:
-        for nc in ncs_do_ano:
-            nd_atual = banco_dados[nc].get("nd", "Não informada")
-            if not nd_atual.strip():
-                nd_atual = "Não informada"
-                
-            itens_da_nc = banco_dados[nc].get("itens", [])
-            for item in itens_da_nc:
-                valor_total_item = float(item.get("Valor Unitário", 0.0)) * int(item.get("Qtd", 0))
-                situacao = item.get("Situação", "Situação Indefinida")
-                
-                dados_anuais.append({
-                    "ND": nd_atual,
-                    "Situação": situacao,
-                    "Valor Total": valor_total_item
-                })
+    if tipo_perfil == "Fiscal":
+        st.subheader(f"🌐 Visão Corporativa da OM ({om_user}) - Todas as Seções")
+        st.markdown("Este gráfico consolida e cruza as planilhas de **todas as seções** do Batalhão de forma automatizada.")
         
-        if dados_anuais:
-            df_anual = pd.DataFrame(dados_anuais)
-            
-            df_agrupado = df_anual.groupby(["ND", "Situação"])["Valor Total"].sum().reset_index()
-            
-            escala_cores = alt.Scale(
-                domain=["Recebido", "Planejamento", "Aguardando entrega"],
-                range=["#28a745", "#007bff", "#dc3545"]
-            )
-            
-            grafico_anual = alt.Chart(df_agrupado).mark_bar().encode(
-                x=alt.X("ND:N", title="Natureza de Despesa (ND)"),
-                y=alt.Y("Valor Total:Q", title="Total (R$)"),
-                color=alt.Color("Situação:N", scale=escala_cores, title="Status do Recurso"),
-                tooltip=[
-                    alt.Tooltip("ND:N", title="ND"),
-                    alt.Tooltip("Situação:N", title="Status"),
-                    alt.Tooltip("Valor Total:Q", title="Valor Calculado (R$)", format=",.2f")
-                ]
-            ).properties(height=450)
-            
-            st.altair_chart(grafico_anual, use_container_width=True)
-            
-            total_geral_ano = df_agrupado["Valor Total"].sum()
-            st.markdown(f"<h3 style='text-align: right;'>Total Geral Cadastrado em {ano_selecionado}: <span style='color: #1E88E5;'>R$ {total_geral_ano:,.2f}</span></h3>", unsafe_allow_html=True)
-            
-            st.markdown("---")
-            st.markdown("#### Detalhamento de Valores por ND e Status")
-            
-            df_pivot = df_agrupado.pivot(index="ND", columns="Situação", values="Valor Total").fillna(0)
-            df_pivot["Total Geral por ND"] = df_pivot.sum(axis=1)
-            
-            for col in df_pivot.columns:
-                df_pivot[col] = df_pivot[col].apply(lambda x: f"R$ {x:,.2f}")
-                
-            st.dataframe(df_pivot, use_container_width=True)
-            
-        else:
-            st.info("Não há itens registrados nas Notas de Crédito deste ano.")
+        resp_todas_secoes = supabase.table("dados").select("*").like("id", f"{om_user}_%").execute()
+        
+        for linha in resp_todas_secoes.data:
+            banco_secao_laco = linha.get("ncs", {})
+            for nc in banco_secao_laco.keys():
+                if extrair_ano(nc) == ano_selecionado:
+                    nd_atual = banco_secao_laco[nc].get("nd", "Não informada")
+                    for item in banco_secao_laco[nc].get("itens", []):
+                        valor_total_item = float(item.get("Valor Unitário", 0.0)) * int(item.get("Qtd", 0))
+                        dados_anuais.append({
+                            "ND": nd_atual,
+                            "Situação": item.get("Situação", "Situação Indefinida"),
+                            "Valor Total": valor_total_item
+                        })
     else:
-        st.info("Nenhuma NC registrada para este ano.")
+        st.subheader(f"📊 Resumo Geral de Empenhos e Aquisições - Seção: {secao_ativa}")
+        st.markdown("Este gráfico consolida os valores agrupados por **Natureza de Despesa (ND)** e empilhados pela sua respectiva **Situação Atual**.")
+        
+        if ncs_do_ano:
+            for nc in ncs_do_ano:
+                nd_atual = banco_dados[nc].get("nd", "Não informada")
+                if not nd_atual.strip(): nd_atual = "Não informada"
+                    
+                itens_da_nc = banco_dados[nc].get("itens", [])
+                for item in itens_da_nc:
+                    valor_total_item = float(item.get("Valor Unitário", 0.0)) * int(item.get("Qtd", 0))
+                    situacao = item.get("Situação", "Situação Indefinida")
+                    
+                    dados_anuais.append({
+                        "ND": nd_atual,
+                        "Situação": situacao,
+                        "Valor Total": valor_total_item
+                    })
+                    
+    if dados_anuais:
+        df_anual = pd.DataFrame(dados_anuais)
+        df_agrupado = df_anual.groupby(["ND", "Situação"])["Valor Total"].sum().reset_index()
+        
+        escala_cores = alt.Scale(
+            domain=["Recebido", "Planejamento", "Aguardando entrega"],
+            range=["#28a745", "#007bff", "#dc3545"]
+        )
+        
+        grafico_anual = alt.Chart(df_agrupado).mark_bar().encode(
+            x=alt.X("ND:N", title="Natureza de Despesa (ND)"),
+            y=alt.Y("Valor Total:Q", title="Total (R$)"),
+            color=alt.Color("Situação:N", scale=escala_cores, title="Status do Recurso"),
+            tooltip=[
+                alt.Tooltip("ND:N", title="ND"),
+                alt.Tooltip("Situação:N", title="Status"),
+                alt.Tooltip("Valor Total:Q", title="Valor Calculado (R$)", format=",.2f")
+            ]
+        ).properties(height=450)
+        
+        st.altair_chart(grafico_anual, use_container_width=True)
+        
+        total_geral_ano = df_agrupado["Valor Total"].sum()
+        st.markdown(f"<h3 style='text-align: right;'>Total Geral Cadastrado em {ano_selecionado}: <span style='color: #1E88E5;'>R$ {total_geral_ano:,.2f}</span></h3>", unsafe_allow_html=True)
+        
+        st.markdown("---")
+        st.markdown("#### Detalhamento de Valores por ND e Status")
+        
+        df_pivot = df_agrupado.pivot(index="ND", columns="Situação", values="Valor Total").fillna(0)
+        df_pivot["Total Geral por ND"] = df_pivot.sum(axis=1)
+        
+        for col in df_pivot.columns:
+            df_pivot[col] = df_pivot[col].apply(lambda x: f"R$ {x:,.2f}")
+            
+        st.dataframe(df_pivot, use_container_width=True)
+        
+    else:
+        st.info("Não há itens registrados para exibição no painel global.")
