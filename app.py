@@ -25,14 +25,14 @@ def extrair_ano(nc_nome):
     return "Outros/Sem Ano"
 
 # =====================================================================
-# 3. TELA DE LOGIN E CADASTRO
+# 3. TELA DE LOGIN E CADASTRO INICIAL
 # =====================================================================
 if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
 
 if st.session_state.usuario_logado is None:
     st.title("🖥 Sistema Profissional de Controle de Recursos")
-    st.markdown("Bem-vindo! Faça login ou crie sua conta para acessar o sistema da sua OM.")
+    st.markdown("Bem-vindo! Faça login ou crie a conta de Chefia para iniciar a gestão da sua Seção.")
     st.markdown("---")
     
     col_login, col_divisor, col_cadastro = st.columns([4, 1, 4])
@@ -63,7 +63,8 @@ if st.session_state.usuario_logado is None:
         st.write("")
 
     with col_cadastro:
-        st.subheader("📝 Criar Nova Conta")
+        st.subheader("📝 Criar Conta de Chefia / Fiscal")
+        st.info("⚠️ **Atenção:** Operadores convencionais não podem criar conta aqui. Solicite ao seu Chefe.")
         with st.form("form_cadastro"):
             novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
             nova_senha = st.text_input("Crie uma Senha:", type="password")
@@ -72,31 +73,34 @@ if st.session_state.usuario_logado is None:
             
             col_cad1, col_cad2 = st.columns(2)
             with col_cad1:
-                nova_secao = st.text_input("Sua Seção (Ex: SALC, Almox, CFGS):").strip().upper()
+                nova_secao = st.text_input("Sua Seção (Ex: SALC, CFGS):").strip().upper()
             with col_cad2:
-                novo_perfil = st.selectbox("Nível de Acesso:", ["Operador", "Fiscal"])
+                novo_perfil = st.selectbox("Nível de Acesso Inicial:", ["Chefe", "Fiscal"])
             
-            btn_cadastrar = st.form_submit_button("Criar Conta", type="secondary", use_container_width=True)
+            btn_cadastrar = st.form_submit_button("Criar Conta Matriz", type="secondary", use_container_width=True)
             
             if btn_cadastrar:
                 if not novo_user or not nova_senha or not novo_nome or not nova_om or not nova_secao:
                     st.warning("Preencha todos os campos obrigatórios.")
                 else:
-                    verifica = supabase.table("usuarios").select("id").eq("id", novo_user).execute()
-                    if len(verifica.data) > 0:
+                    verifica_user = supabase.table("usuarios").select("id").eq("id", novo_user).execute()
+                    if len(verifica_user.data) > 0:
                         st.error("Este nome de usuário já está em uso.")
                     else:
-                        supabase.table("usuarios").insert({
-                            "id": novo_user, "senha": nova_senha, "nome": novo_nome, 
-                            "om": nova_om, "secao": nova_secao, "perfil": novo_perfil
-                        }).execute()
-                        
                         id_secao = f"{nova_om}_{nova_secao}"
                         verifica_banco = supabase.table("dados").select("id").eq("id", id_secao).execute()
-                        if len(verifica_banco.data) == 0:
-                            supabase.table("dados").insert({"id": id_secao, "ncs": {}}).execute()
+                        
+                        # BLOQUEIO DE INVASÃO: Se a seção já existe, não deixa cadastrar por fora
+                        if len(verifica_banco.data) > 0:
+                            st.error("⛔ Esta OM e Seção já possuem cadastros. Solicite ao Chefe da Seção que crie seu usuário por dentro do sistema.")
+                        else:
+                            supabase.table("usuarios").insert({
+                                "id": novo_user, "senha": nova_senha, "nome": novo_nome, 
+                                "om": nova_om, "secao": nova_secao, "perfil": novo_perfil
+                            }).execute()
                             
-                        st.success("✅ Conta criada! Faça o login ao lado.")
+                            supabase.table("dados").insert({"id": id_secao, "ncs": {}}).execute()
+                            st.success("✅ Conta Matriz criada! Faça o login ao lado.")
     
     st.markdown("---")
     st.markdown(
@@ -128,14 +132,17 @@ st.sidebar.markdown("### 🛠 Estação de Trabalho")
 st.sidebar.info(f"**Militar:** {perfil.get('nome')}\n\n**OM:** {om_user}")
 
 if tipo_perfil == "Fiscal":
-    st.sidebar.warning("🛡️ **Perfil: FISCAL (Acesso Total)**")
+    st.sidebar.warning("🛡️ **Perfil: FISCAL (Somente Leitura)**")
     resp_secoes = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
     secoes_da_om = sorted(list(set([r["secao"] for r in resp_secoes.data])))
     if not secoes_da_om: secoes_da_om = [secao_user]
     
     secao_ativa = st.sidebar.selectbox("🔎 Operar dados da Seção:", secoes_da_om, index=secoes_da_om.index(secao_user) if secao_user in secoes_da_om else 0)
+elif tipo_perfil == "Chefe":
+    st.sidebar.success(f"👑 **Perfil: CHEFE**\n\n**Seção:** {secao_user}")
+    secao_ativa = secao_user
 else:
-    st.sidebar.success(f"👤 **Perfil: Operador**\n\n**Seção:** {secao_user}")
+    st.sidebar.info(f"👤 **Perfil: OPERADOR**\n\n**Seção:** {secao_user}")
     secao_ativa = secao_user
 
 id_banco = f"{om_user}_{secao_ativa}"
@@ -184,121 +191,125 @@ st.title(f"🖥 Sistema de Controle de Recursos - {om_user}")
 st.markdown(f"**Área de Trabalho Ativa:** {secao_ativa}")
 st.markdown("---")
 
-menu_cadastro, menu_visualizacao, menu_visao_global = st.tabs([
+menu_cadastro, menu_visualizacao, menu_visao_global, menu_acessos = st.tabs([
     "📝 Cadastrar e Lançar Compras",
     "📊 Controle Individual por NC",
-    "📈 Visão Global do Ano"
+    "📈 Visão Global do Ano",
+    "👥 Gerenciar Acessos"
 ])
 
 # =====================================================================
 # ABA 1: CADASTRO
 # =====================================================================
 with menu_cadastro:
-    st.subheader("1. Cadastrar Nova Nota de Crédito (NC)")
-    
-    col_nc1, col_nc2, col_nc3 = st.columns(3)
-    with col_nc1:
-        nova_nc = st.text_input("Número da NC (Comece com o ano, ex: 2026NC000511):", "", key="cad_numero_nc").strip()
-    with col_nc2:
-        nova_nd = st.text_input("Natureza de Despesa (ND):", "", key="cad_nd_nc").strip()
-    with col_nc3:
-        valor_nc = st.number_input("Valor Total Recebido na NC (R$):", min_value=0.0, step=100.0, key="cad_valor_nc")
-    
-    if st.button("💾 Registrar Nova Nota de Crédito", type="primary", key="btn_cad_nc"):
-        if nova_nc:
-            if nova_nc not in banco_dados:
-                banco_dados[nova_nc] = {"valor_recebido": valor_nc, "nd": nova_nd, "itens": []}
-                salvar_dados(banco_dados)
-                st.session_state.banco = banco_dados
-                st.success(f"NC {nova_nc} salva com sucesso na seção {secao_ativa}!")
-                st.rerun()
-            else:
-                st.warning("Esta NC já existe. Use a seção abaixo para alterá-la.")
-        else:
-            st.warning("Por favor, digite o número da NC.")
-    
-    if ncs_do_ano:
-        st.markdown("---")
-        st.subheader("✏ Alterar Dados de uma NC Existente")
+    if tipo_perfil == "Fiscal":
+        st.error("🛡️ **Acesso Negado:** O perfil de Fiscal possui acesso de Auditoria e Visualização. Você não pode cadastrar, alterar ou deletar Notas de Crédito. Retorne para as Abas de Análise e Visão Global.")
+    else:
+        st.subheader("1. Cadastrar Nova Nota de Crédito (NC)")
         
-        nc_para_editar = st.selectbox(f"Selecione a NC ({ano_selecionado}) para alterar:", ncs_do_ano, key="editar_select_nc")
+        col_nc1, col_nc2, col_nc3 = st.columns(3)
+        with col_nc1:
+            nova_nc = st.text_input("Número da NC (Comece com o ano, ex: 2026NC000511):", "", key="cad_numero_nc").strip()
+        with col_nc2:
+            nova_nd = st.text_input("Natureza de Despesa (ND):", "", key="cad_nd_nc").strip()
+        with col_nc3:
+            valor_nc = st.number_input("Valor Total Recebido na NC (R$):", min_value=0.0, step=100.0, key="cad_valor_nc")
         
-        dados_atuais = banco_dados[nc_para_editar]
-        valor_atual = dados_atuais.get("valor_recebido", 0.0)
-        nd_atual = dados_atuais.get("nd", "")
-        
-        col_ed1, col_ed2, col_ed3 = st.columns(3)
-        with col_ed1:
-            nome_editado = st.text_input("Número da NC:", value=nc_para_editar, key=f"edit_numero_nc_{nc_para_editar}").strip()
-        with col_ed2:
-            nd_editada = st.text_input("Natureza de Despesa (ND):", value=nd_atual, key=f"edit_nd_nc_{nc_para_editar}").strip()
-        with col_ed3:
-            valor_editado = st.number_input("Valor Total (R$):", value=float(valor_atual), min_value=0.0, step=100.0, key=f"edit_valor_nc_{nc_para_editar}")
-        
-        if st.button("🔄 Confirmar Alterações da NC", type="secondary", key="btn_edit_nc"):
-            if nome_editado:
-                if nome_editado != nc_para_editar and nome_editado in banco_dados:
-                    st.error("Erro: Já existe outra NC cadastrada com esse novo número.")
-                else:
-                    dados_preservados = banco_dados.pop(nc_para_editar)
-                    dados_preservados["valor_recebido"] = valor_editado
-                    dados_preservados["nd"] = nd_editada
-                    banco_dados[nome_editado] = dados_preservados
+        if st.button("💾 Registrar Nova Nota de Crédito", type="primary", key="btn_cad_nc"):
+            if nova_nc:
+                if nova_nc not in banco_dados:
+                    banco_dados[nova_nc] = {"valor_recebido": valor_nc, "nd": nova_nd, "itens": []}
                     salvar_dados(banco_dados)
                     st.session_state.banco = banco_dados
-                    st.success(f"Dados da NC '{nome_editado}' atualizados com sucesso!")
+                    st.success(f"NC {nova_nc} salva com sucesso na seção {secao_ativa}!")
                     st.rerun()
+                else:
+                    st.warning("Esta NC já existe. Use a seção abaixo para alterá-la.")
             else:
-                st.warning("O número da NC não pode ficar em branco.")
-
-        st.markdown("---")
-        st.subheader("🚨 Deletar Nota de Crédito Inteira")
-        nc_para_deletar_toda = st.selectbox(f"Selecione a NC ({ano_selecionado}) para APAGAR:", ncs_do_ano, key="nc_del_toda")
-        if st.button("💥 DELETAR NC E TODOS OS ITENS", type="primary", key="btn_del_nc"):
-            banco_dados.pop(nc_para_deletar_toda)
-            salvar_dados(banco_dados)
-            st.session_state.banco = banco_dados
-            st.success(f"NC {nc_para_deletar_toda} excluída com sucesso!")
-            st.rerun()
-
-    st.markdown("---")
-    st.subheader("2. Lançar Itens e Planejar Aquisição")
-    
-    if ncs_do_ano:
-        nc_selecionada_cad = st.selectbox("Selecione a NC para vincular este item:", ncs_do_ano, key="cad_item_select_nc")
+                st.warning("Por favor, digite o número da NC.")
         
-        col_it1, col_it2, col_it3 = st.columns(3)
-        with col_it1:
-            nr_item = st.number_input("Nº do Item:", min_value=1, step=1, key="item_nr")
-            nome_resumido = st.text_input("Nome do Material:", "", key="item_nome").strip()
-            valor_unitario = st.number_input("Valor Unitário (R$):", min_value=0.0, step=0.01, key="item_valor")
-            quantidade = st.number_input("Quantidade:", min_value=0, step=1, key="item_qtd")
-        with col_it2:
-            nr_uasg = st.text_input("Nº da UASG:", "160440", key="item_uasg").strip()
-            nr_pregao = st.text_input("Nº do Pregão / Processo:", "", key="item_pregao").strip()
-            nr_ata = st.text_input("Nº da Ata:", "", key="item_ata").strip()
-        with col_it3:
-            fornecedor = st.text_input("Nome do Fornecedor / Empresa:", "", key="item_forn").strip()
-            cnpj = st.text_input("CNPJ do Fornecedor:", "", key="item_cnpj").strip()
-            situacao = st.selectbox("Situação Atual do Recurso:", ["Planejamento", "Aguardando entrega", "Recebido"], key="item_sit")
-        
-        if st.button("➕ Adicionar Item ao Planejamento", type="primary", key="btn_add_item"):
-            if nome_resumido:
-                novo_item = {
-                    "Item": int(nr_item), "Nome": nome_resumido, "Valor Unitário": float(valor_unitario),
-                    "Qtd": int(quantidade), "Total": float(valor_unitario * quantidade), "UASG": nr_uasg,
-                    "Pregão": nr_pregao, "Ata": nr_ata, "Fornecedor": fornecedor.strip().upper() if fornecedor else "NÃO INFORMADO",
-                    "CNPJ": cnpj, "Situação": situacao
-                }
-                banco_dados[nc_selecionada_cad]["itens"].append(novo_item)
+        if ncs_do_ano:
+            st.markdown("---")
+            st.subheader("✏ Alterar Dados de uma NC Existente")
+            
+            nc_para_editar = st.selectbox(f"Selecione a NC ({ano_selecionado}) para alterar:", ncs_do_ano, key="editar_select_nc")
+            
+            dados_atuais = banco_dados[nc_para_editar]
+            valor_atual = dados_atuais.get("valor_recebido", 0.0)
+            nd_atual = dados_atuais.get("nd", "")
+            
+            col_ed1, col_ed2, col_ed3 = st.columns(3)
+            with col_ed1:
+                nome_editado = st.text_input("Número da NC:", value=nc_para_editar, key=f"edit_numero_nc_{nc_para_editar}").strip()
+            with col_ed2:
+                nd_editada = st.text_input("Natureza de Despesa (ND):", value=nd_atual, key=f"edit_nd_nc_{nc_para_editar}").strip()
+            with col_ed3:
+                valor_editado = st.number_input("Valor Total (R$):", value=float(valor_atual), min_value=0.0, step=100.0, key=f"edit_valor_nc_{nc_para_editar}")
+            
+            if st.button("🔄 Confirmar Alterações da NC", type="secondary", key="btn_edit_nc"):
+                if nome_editado:
+                    if nome_editado != nc_para_editar and nome_editado in banco_dados:
+                        st.error("Erro: Já existe outra NC cadastrada com esse novo número.")
+                    else:
+                        dados_preservados = banco_dados.pop(nc_para_editar)
+                        dados_preservados["valor_recebido"] = valor_editado
+                        dados_preservados["nd"] = nd_editada
+                        banco_dados[nome_editado] = dados_preservados
+                        salvar_dados(banco_dados)
+                        st.session_state.banco = banco_dados
+                        st.success(f"Dados da NC '{nome_editado}' atualizados com sucesso!")
+                        st.rerun()
+                else:
+                    st.warning("O número da NC não pode ficar em branco.")
+
+            st.markdown("---")
+            st.subheader("🚨 Deletar Nota de Crédito Inteira")
+            nc_para_deletar_toda = st.selectbox(f"Selecione a NC ({ano_selecionado}) para APAGAR:", ncs_do_ano, key="nc_del_toda")
+            if st.button("💥 DELETAR NC E TODOS OS ITENS", type="primary", key="btn_del_nc"):
+                banco_dados.pop(nc_para_deletar_toda)
                 salvar_dados(banco_dados)
                 st.session_state.banco = banco_dados
-                st.success("Item adicionado com sucesso!")
+                st.success(f"NC {nc_para_deletar_toda} excluída com sucesso!")
                 st.rerun()
-            else:
-                st.error("Preencha o Nome do Material.")
-    else:
-        st.info("Cadastre uma Nota de Crédito (NC) para este ano primeiro.")
+
+        st.markdown("---")
+        st.subheader("2. Lançar Itens e Planejar Aquisição")
+        
+        if ncs_do_ano:
+            nc_selecionada_cad = st.selectbox("Selecione a NC para vincular este item:", ncs_do_ano, key="cad_item_select_nc")
+            
+            col_it1, col_it2, col_it3 = st.columns(3)
+            with col_it1:
+                nr_item = st.number_input("Nº do Item:", min_value=1, step=1, key="item_nr")
+                nome_resumido = st.text_input("Nome do Material:", "", key="item_nome").strip()
+                valor_unitario = st.number_input("Valor Unitário (R$):", min_value=0.0, step=0.01, key="item_valor")
+                quantidade = st.number_input("Quantidade:", min_value=0, step=1, key="item_qtd")
+            with col_it2:
+                nr_uasg = st.text_input("Nº da UASG:", "160440", key="item_uasg").strip()
+                nr_pregao = st.text_input("Nº do Pregão / Processo:", "", key="item_pregao").strip()
+                nr_ata = st.text_input("Nº da Ata:", "", key="item_ata").strip()
+            with col_it3:
+                fornecedor = st.text_input("Nome do Fornecedor / Empresa:", "", key="item_forn").strip()
+                cnpj = st.text_input("CNPJ do Fornecedor:", "", key="item_cnpj").strip()
+                situacao = st.selectbox("Situação Atual do Recurso:", ["Planejamento", "Aguardando entrega", "Recebido"], key="item_sit")
+            
+            if st.button("➕ Adicionar Item ao Planejamento", type="primary", key="btn_add_item"):
+                if nome_resumido:
+                    novo_item = {
+                        "Item": int(nr_item), "Nome": nome_resumido, "Valor Unitário": float(valor_unitario),
+                        "Qtd": int(quantidade), "Total": float(valor_unitario * quantidade), "UASG": nr_uasg,
+                        "Pregão": nr_pregao, "Ata": nr_ata, "Fornecedor": fornecedor.strip().upper() if fornecedor else "NÃO INFORMADO",
+                        "CNPJ": cnpj, "Situação": situacao
+                    }
+                    banco_dados[nc_selecionada_cad]["itens"].append(novo_item)
+                    salvar_dados(banco_dados)
+                    st.session_state.banco = banco_dados
+                    st.success("Item adicionado com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("Preencha o Nome do Material.")
+        else:
+            st.info("Cadastre uma Nota de Crédito (NC) para este ano primeiro.")
 
 # =====================================================================
 # ABA 2: VISUALIZAÇÃO E EDIÇÃO POR NC
@@ -384,60 +395,68 @@ with menu_visualizacao:
                     col_titulo, col_btn_baixa = st.columns([3, 1])
                     with col_titulo:
                         st.markdown(f"### 🏢 Fornecedor: **{forn}**")
-                    with col_btn_baixa:
-                        st.write("") 
-                        if st.button(f"✅ Receber todos os itens", key=f"btn_lote_{nc_selecionada_vis}_{i}", use_container_width=True):
-                            for it_bd in banco_dados[nc_selecionada_vis]["itens"]:
-                                if it_bd.get("Fornecedor") == forn:
-                                    it_bd["Situação"] = "Recebido"
-                            salvar_dados(banco_dados)
-                            st.session_state.banco = banco_dados
-                            st.toast(f"Itens de {forn} marcados como Recebidos!")
-                            st.rerun()
+                    
+                    # Oculta o botão de receber tudo se for Fiscal
+                    if tipo_perfil != "Fiscal":
+                        with col_btn_baixa:
+                            st.write("") 
+                            if st.button(f"✅ Receber todos os itens", key=f"btn_lote_{nc_selecionada_vis}_{i}", use_container_width=True):
+                                for it_bd in banco_dados[nc_selecionada_vis]["itens"]:
+                                    if it_bd.get("Fornecedor") == forn:
+                                        it_bd["Situação"] = "Recebido"
+                                salvar_dados(banco_dados)
+                                st.session_state.banco = banco_dados
+                                st.toast(f"Itens de {forn} marcados como Recebidos!")
+                                st.rerun()
                     
                     df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
                     
-                    df_editado_forn = st.data_editor(
-                        df_forn_atual,
-                        column_order=[
-                            "Item", "Nome", "Qtd", "Valor Unitário", "Total", 
-                            "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"
-                        ],
-                        column_config={
-                            "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
-                            "Nome": st.column_config.TextColumn("Nome", required=True),
-                            "Qtd": st.column_config.NumberColumn("Qtd", min_value=0, step=1, required=True),
-                            "Valor Unitário": st.column_config.NumberColumn("Valor Unitário", min_value=0.0, step=0.01, format="R$ %.2f", required=True),
-                            "Total": st.column_config.NumberColumn("Total", format="R$ %.2f"),
-                            "UASG": st.column_config.TextColumn("UASG"),
-                            "Pregão": st.column_config.TextColumn("Pregão"),
-                            "Ata": st.column_config.TextColumn("Ata"),
-                            "Fornecedor": st.column_config.TextColumn("Fornecedor"),
-                            "CNPJ": st.column_config.TextColumn("CNPJ"),
-                            "Situação": st.column_config.SelectboxColumn("Situação", options=["Planejamento", "Aguardando entrega", "Recebido"], required=True)
-                        },
-                        disabled=["Total"], 
-                        num_rows="dynamic",
-                        use_container_width=True,
-                        hide_index=True,
-                        key=f"editor_forn_{nc_selecionada_vis}_{forn.replace(' ', '_')}_{i}"
-                    )
+                    # Configuração das colunas
+                    cfg_colunas = {
+                        "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
+                        "Nome": st.column_config.TextColumn("Nome", required=True),
+                        "Qtd": st.column_config.NumberColumn("Qtd", min_value=0, step=1, required=True),
+                        "Valor Unitário": st.column_config.NumberColumn("Valor Unitário", min_value=0.0, step=0.01, format="R$ %.2f", required=True),
+                        "Total": st.column_config.NumberColumn("Total", format="R$ %.2f"),
+                        "UASG": st.column_config.TextColumn("UASG"),
+                        "Pregão": st.column_config.TextColumn("Pregão"),
+                        "Ata": st.column_config.TextColumn("Ata"),
+                        "Fornecedor": st.column_config.TextColumn("Fornecedor"),
+                        "CNPJ": st.column_config.TextColumn("CNPJ"),
+                        "Situação": st.column_config.SelectboxColumn("Situação", options=["Planejamento", "Aguardando entrega", "Recebido"], required=True)
+                    }
+                    ordem_col = ["Item", "Nome", "Qtd", "Valor Unitário", "Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
                     
-                    dict_antigo = df_forn_atual.drop(columns=["Total"]).to_dict("records")
-                    dict_novo = df_editado_forn.drop(columns=["Total"]).to_dict("records")
+                    # Se for Fiscal, exibe apenas a Tabela Estática (Somente Leitura)
+                    if tipo_perfil == "Fiscal":
+                        st.dataframe(df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, hide_index=True, use_container_width=True)
+                        total_desse_forn = df_forn_atual["Total"].sum()
+                        st.markdown(f"<h4 style='text-align: right; color: #1E88E5;'>Total {forn}: R$ {total_desse_forn:,.2f}</h4>", unsafe_allow_html=True)
                     
-                    if dict_antigo != dict_novo:
-                        houve_alteracao = True
-                    
-                    df_editado_forn["Total"] = df_editado_forn["Valor Unitário"].astype(float) * df_editado_forn["Qtd"].astype(int)
-                    total_desse_forn = df_editado_forn["Total"].sum()
-                    
-                    st.markdown(f"<h4 style='text-align: right; color: #1E88E5;'>Total {forn}: R$ {total_desse_forn:,.2f}</h4>", unsafe_allow_html=True)
-                    st.write("") 
-                    
-                    df_atualizado_acumulado.append(df_editado_forn)
+                    # Se for Chefe/Operador, exibe o Editor Interativo
+                    else:
+                        df_editado_forn = st.data_editor(
+                            df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, disabled=["Total"], 
+                            num_rows="dynamic", use_container_width=True, hide_index=True,
+                            key=f"editor_forn_{nc_selecionada_vis}_{forn.replace(' ', '_')}_{i}"
+                        )
+                        
+                        dict_antigo = df_forn_atual.drop(columns=["Total"]).to_dict("records")
+                        dict_novo = df_editado_forn.drop(columns=["Total"]).to_dict("records")
+                        
+                        if dict_antigo != dict_novo:
+                            houve_alteracao = True
+                        
+                        df_editado_forn["Total"] = df_editado_forn["Valor Unitário"].astype(float) * df_editado_forn["Qtd"].astype(int)
+                        total_desse_forn = df_editado_forn["Total"].sum()
+                        
+                        st.markdown(f"<h4 style='text-align: right; color: #1E88E5;'>Total {forn}: R$ {total_desse_forn:,.2f}</h4>", unsafe_allow_html=True)
+                        st.write("") 
+                        
+                        df_atualizado_acumulado.append(df_editado_forn)
                 
-                if houve_alteracao:
+                # Só salva alterações se não for fiscal e houve edição
+                if tipo_perfil != "Fiscal" and houve_alteracao:
                     df_final_para_salvar = pd.concat(df_atualizado_acumulado, ignore_index=True)
                     df_final_para_salvar["Total"] = df_final_para_salvar["Valor Unitário"].astype(float) * df_final_para_salvar["Qtd"].astype(int)
                     
@@ -532,3 +551,63 @@ with menu_visao_global:
         
     else:
         st.info("Não há itens registrados para exibição no painel global.")
+
+# =====================================================================
+# ABA 4: GERENCIAR ACESSOS E EQUIPE (Apenas Chefe e Fiscal)
+# =====================================================================
+with menu_acessos:
+    if tipo_perfil == "Operador":
+        st.warning("⚠️ **Acesso Restrito:** O seu perfil de Operador não tem permissão para cadastrar novos usuários. Solicite ao Chefe da sua Seção.")
+    else:
+        st.subheader("👥 Painel de Controle de Usuários")
+        if tipo_perfil == "Chefe":
+            st.info(f"Como **Chefe**, você pode criar contas de novos **Operadores** para a seção {secao_user}.")
+            opcoes_perfil_novo = ["Operador"]
+            secoes_permitidas = [secao_user]
+        else:
+            st.info(f"Como **Fiscal**, você pode cadastrar **Chefes** ou outros **Fiscais** para qualquer seção do {om_user}.")
+            opcoes_perfil_novo = ["Chefe", "Fiscal", "Operador"]
+            
+            resp_secoes_gerais = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
+            secoes_permitidas = sorted(list(set([r["secao"] for r in resp_secoes_gerais.data])))
+            secoes_permitidas.append("NOVA SEÇÃO...")
+            
+        with st.form("form_novo_usuario_interno"):
+            col_add1, col_add2 = st.columns(2)
+            with col_add1:
+                novo_int_user = st.text_input("Usuário de Login:").strip().lower()
+                novo_int_nome = st.text_input("Nome/Posto (Ex: Cb Silva):")
+            with col_add2:
+                novo_int_senha = st.text_input("Definir Senha Temporária:", type="password")
+                novo_int_perfil = st.selectbox("Nível de Acesso:", opcoes_perfil_novo)
+                
+            if tipo_perfil == "Fiscal":
+                secao_selecionada = st.selectbox("Vincular à Seção:", secoes_permitidas)
+                if secao_selecionada == "NOVA SEÇÃO...":
+                    secao_final = st.text_input("Digite o nome da Nova Seção:").strip().upper()
+                else:
+                    secao_final = secao_selecionada
+            else:
+                secao_final = secao_user
+                
+            if st.form_submit_button("Cadastrar Novo Militar", type="primary", use_container_width=True):
+                if not novo_int_user or not novo_int_senha or not novo_int_nome or not secao_final:
+                    st.warning("Preencha todos os campos para cadastrar o militar.")
+                else:
+                    verifica_existencia = supabase.table("usuarios").select("id").eq("id", novo_int_user).execute()
+                    if len(verifica_existencia.data) > 0:
+                        st.error("Este usuário já existe no sistema.")
+                    else:
+                        # Grava o usuário
+                        supabase.table("usuarios").insert({
+                            "id": novo_int_user, "senha": novo_int_senha, "nome": novo_int_nome,
+                            "om": om_user, "secao": secao_final, "perfil": novo_int_perfil
+                        }).execute()
+                        
+                        # Verifica se a gaveta da seção existe, se não, cria
+                        id_cofre = f"{om_user}_{secao_final}"
+                        verifica_cofre = supabase.table("dados").select("id").eq("id", id_cofre).execute()
+                        if len(verifica_cofre.data) == 0:
+                            supabase.table("dados").insert({"id": id_cofre, "ncs": {}}).execute()
+                        
+                        st.success(f"✅ Conta criada com sucesso para {novo_int_nome} na Seção {secao_final}!")
