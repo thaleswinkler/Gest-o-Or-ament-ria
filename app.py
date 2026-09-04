@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from supabase import create_client, Client
+from docxtpl import DocxTemplate
+import io
 
 # =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA
@@ -90,7 +92,6 @@ if st.session_state.usuario_logado is None:
                         id_secao = f"{nova_om}_{nova_secao}"
                         verifica_banco = supabase.table("dados").select("id").eq("id", id_secao).execute()
                         
-                        # BLOQUEIO DE INVASÃO: Se a seção já existe, não deixa cadastrar por fora
                         if len(verifica_banco.data) > 0:
                             st.error("⛔ Esta OM e Seção já possuem cadastros. Solicite ao Chefe da Seção que crie seu usuário por dentro do sistema.")
                         else:
@@ -385,6 +386,11 @@ with menu_visualizacao:
             st.markdown("---")
             st.subheader("📋 Planilhas de Acompanhamento Separadas por Fornecedor")
             
+            # Automação de Documentos (DIEx)
+            st.info("💡 **Automação de DIEx:** Faça o upload do seu modelo de requisição (.docx) padronizado para gerar os documentos físicos automaticamente preenchidos.")
+            modelo_up = st.file_uploader("Selecione o arquivo modelo (.docx)", type=["docx"], key="upload_modelo_diex")
+            st.write("")
+            
             if not df_base_mestre.empty:
                 lista_fornecedores = sorted(df_base_mestre["Fornecedor"].unique())
                 houve_alteracao = False
@@ -392,11 +398,59 @@ with menu_visualizacao:
                 
                 for i, forn in enumerate(lista_fornecedores):
                     
-                    col_titulo, col_btn_baixa = st.columns([3, 1])
+                    col_titulo, col_btn_baixa, col_btn_doc = st.columns([2, 1, 1])
                     with col_titulo:
                         st.markdown(f"### 🏢 Fornecedor: **{forn}**")
                     
-                    # Oculta o botão de receber tudo se for Fiscal
+                    df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
+                    
+                    with col_btn_doc:
+                        st.write("")
+                        if modelo_up is not None:
+                            itens_formatados = []
+                            soma_total_forn = 0.0
+                            
+                            for _, row in df_forn_atual.iterrows():
+                                v_unit = float(row['Valor Unitário'])
+                                qtd = int(row['Qtd'])
+                                v_total = v_unit * qtd
+                                soma_total_forn += v_total
+                                
+                                itens_formatados.append({
+                                    "item": row["Item"],
+                                    "nome": row["Nome"],
+                                    "qtd": qtd,
+                                    "v_unit": f"R$ {v_unit:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                                    "v_total": f"R$ {v_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                                })
+                                
+                            contexto_diex = {
+                                "nc": nc_selecionada_vis,
+                                "nd": nd_vinculada,
+                                "pregao": df_forn_atual["Pregão"].iloc[0] if not df_forn_atual.empty else "",
+                                "uasg": df_forn_atual["UASG"].iloc[0] if not df_forn_atual.empty else "",
+                                "cnpj": df_forn_atual["CNPJ"].iloc[0] if not df_forn_atual.empty else "",
+                                "empresa": forn,
+                                "itens": itens_formatados,
+                                "total_geral": f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                            }
+                            
+                            doc = DocxTemplate(modelo_up)
+                            doc.render(contexto_diex)
+                            bio = io.BytesIO()
+                            doc.save(bio)
+                            
+                            st.download_button(
+                                label="📄 Baixar DIEx Preenchido",
+                                data=bio.getvalue(),
+                                file_name=f"DIEx_{forn.replace(' ', '_')}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                key=f"btn_doc_{i}",
+                                type="primary",
+                                use_container_width=True
+                            )
+                            modelo_up.seek(0)
+                    
                     if tipo_perfil != "Fiscal":
                         with col_btn_baixa:
                             st.write("") 
@@ -409,9 +463,6 @@ with menu_visualizacao:
                                 st.toast(f"Itens de {forn} marcados como Recebidos!")
                                 st.rerun()
                     
-                    df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
-                    
-                    # Configuração das colunas
                     cfg_colunas = {
                         "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
                         "Nome": st.column_config.TextColumn("Nome", required=True),
@@ -427,13 +478,11 @@ with menu_visualizacao:
                     }
                     ordem_col = ["Item", "Nome", "Qtd", "Valor Unitário", "Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
                     
-                    # Se for Fiscal, exibe apenas a Tabela Estática (Somente Leitura)
                     if tipo_perfil == "Fiscal":
                         st.dataframe(df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, hide_index=True, use_container_width=True)
                         total_desse_forn = df_forn_atual["Total"].sum()
                         st.markdown(f"<h4 style='text-align: right; color: #1E88E5;'>Total {forn}: R$ {total_desse_forn:,.2f}</h4>", unsafe_allow_html=True)
                     
-                    # Se for Chefe/Operador, exibe o Editor Interativo
                     else:
                         df_editado_forn = st.data_editor(
                             df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, disabled=["Total"], 
@@ -455,7 +504,6 @@ with menu_visualizacao:
                         
                         df_atualizado_acumulado.append(df_editado_forn)
                 
-                # Só salva alterações se não for fiscal e houve edição
                 if tipo_perfil != "Fiscal" and houve_alteracao:
                     df_final_para_salvar = pd.concat(df_atualizado_acumulado, ignore_index=True)
                     df_final_para_salvar["Total"] = df_final_para_salvar["Valor Unitário"].astype(float) * df_final_para_salvar["Qtd"].astype(int)
@@ -598,13 +646,11 @@ with menu_acessos:
                     if len(verifica_existencia.data) > 0:
                         st.error("Este usuário já existe no sistema.")
                     else:
-                        # Grava o usuário
                         supabase.table("usuarios").insert({
                             "id": novo_int_user, "senha": novo_int_senha, "nome": novo_int_nome,
                             "om": om_user, "secao": secao_final, "perfil": novo_int_perfil
                         }).execute()
                         
-                        # Verifica se a gaveta da seção existe, se não, cria
                         id_cofre = f"{om_user}_{secao_final}"
                         verifica_cofre = supabase.table("dados").select("id").eq("id", id_cofre).execute()
                         if len(verifica_cofre.data) == 0:
