@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from supabase import create_client, Client
-from docxtpl import DocxTemplate
-import io
 
 # =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA
@@ -386,11 +384,6 @@ with menu_visualizacao:
             st.markdown("---")
             st.subheader("📋 Planilhas de Acompanhamento Separadas por Fornecedor")
             
-            # Automação de Documentos (DIEx)
-            st.info("💡 **Automação de DIEx:** Faça o upload do seu modelo de requisição (.docx) padronizado para gerar os documentos físicos automaticamente preenchidos.")
-            modelo_up = st.file_uploader("Selecione o arquivo modelo (.docx)", type=["docx"], key="upload_modelo_diex")
-            st.write("")
-            
             if not df_base_mestre.empty:
                 lista_fornecedores = sorted(df_base_mestre["Fornecedor"].unique())
                 houve_alteracao = False
@@ -398,58 +391,9 @@ with menu_visualizacao:
                 
                 for i, forn in enumerate(lista_fornecedores):
                     
-                    col_titulo, col_btn_baixa, col_btn_doc = st.columns([2, 1, 1])
+                    col_titulo, col_btn_baixa = st.columns([3, 1])
                     with col_titulo:
                         st.markdown(f"### 🏢 Fornecedor: **{forn}**")
-                    
-                    df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
-                    
-                    with col_btn_doc:
-                        st.write("")
-                        if modelo_up is not None:
-                            itens_formatados = []
-                            soma_total_forn = 0.0
-                            
-                            for _, row in df_forn_atual.iterrows():
-                                v_unit = float(row['Valor Unitário'])
-                                qtd = int(row['Qtd'])
-                                v_total = v_unit * qtd
-                                soma_total_forn += v_total
-                                
-                                itens_formatados.append({
-                                    "item": row["Item"],
-                                    "nome": row["Nome"],
-                                    "qtd": qtd,
-                                    "v_unit": f"R$ {v_unit:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                                    "v_total": f"R$ {v_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                                })
-                                
-                            contexto_diex = {
-                                "nc": nc_selecionada_vis,
-                                "nd": nd_vinculada,
-                                "pregao": df_forn_atual["Pregão"].iloc[0] if not df_forn_atual.empty else "",
-                                "uasg": df_forn_atual["UASG"].iloc[0] if not df_forn_atual.empty else "",
-                                "cnpj": df_forn_atual["CNPJ"].iloc[0] if not df_forn_atual.empty else "",
-                                "empresa": forn,
-                                "itens": itens_formatados,
-                                "total_geral": f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                            }
-                            
-                            doc = DocxTemplate(modelo_up)
-                            doc.render(contexto_diex)
-                            bio = io.BytesIO()
-                            doc.save(bio)
-                            
-                            st.download_button(
-                                label="📄 Baixar DIEx Preenchido",
-                                data=bio.getvalue(),
-                                file_name=f"DIEx_{forn.replace(' ', '_')}.docx",
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                key=f"btn_doc_{i}",
-                                type="primary",
-                                use_container_width=True
-                            )
-                            modelo_up.seek(0)
                     
                     if tipo_perfil != "Fiscal":
                         with col_btn_baixa:
@@ -462,6 +406,8 @@ with menu_visualizacao:
                                 st.session_state.banco = banco_dados
                                 st.toast(f"Itens de {forn} marcados como Recebidos!")
                                 st.rerun()
+                    
+                    df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
                     
                     cfg_colunas = {
                         "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
