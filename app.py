@@ -164,6 +164,26 @@ def salvar_dados(dados):
     supabase.table("dados").update({"ncs": dados}).eq("id", id_banco).execute()
 
 st.sidebar.markdown("---")
+
+# =====================================================================
+# NOVO MÓDULO: ALTERAÇÃO DE SENHA
+# =====================================================================
+with st.sidebar.expander("⚙️ Alterar Minha Senha"):
+    with st.form("form_alterar_senha"):
+        nova_senha_input = st.text_input("Nova Senha:", type="password")
+        confirma_senha_input = st.text_input("Confirmar Nova Senha:", type="password")
+        btn_salvar_senha = st.form_submit_button("Atualizar Senha", type="primary", use_container_width=True)
+        
+        if btn_salvar_senha:
+            if not nova_senha_input or not confirma_senha_input:
+                st.error("Preencha ambos os campos.")
+            elif nova_senha_input != confirma_senha_input:
+                st.error("As senhas não coincidem.")
+            else:
+                supabase.table("usuarios").update({"senha": nova_senha_input}).eq("id", usuario_atual).execute()
+                st.success("✅ Senha atualizada com sucesso!")
+
+st.sidebar.markdown("---")
 if st.sidebar.button("Sair da Conta (Logout)", use_container_width=True):
     st.session_state.usuario_logado = None
     if "banco" in st.session_state: del st.session_state.banco
