@@ -455,7 +455,7 @@ with menu_visualizacao:
                                     use_container_width=True
                                 )
                             except Exception as e:
-                                st.error("Erro ao gerar documento. O modelo interno pode estar corrompido.")
+                                st.error(f"Erro interno detalhado: {e}")
                         else:
                             st.info("Modelo de Requisição não configurado no servidor.")
                     
