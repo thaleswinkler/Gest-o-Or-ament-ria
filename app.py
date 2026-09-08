@@ -417,7 +417,7 @@ with menu_visualizacao:
                     # AUTOMAÇÃO DE REQUISIÇÃO (HTML INTERATIVO / PDF)
                     # -------------------------------------------------------------
                     with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Clique para abrir e preencher)", expanded=False):
-                        st.info("💡 **Dica:** Clique nos campos em branco (como DIEx, Data e Assunto) diretamente no documento abaixo para preenchê-los. Depois, clique no botão verde para Salvar como PDF.")
+                        st.info("💡 **Dica:** Clique nos campos em branco (como DIEx, Data e Assunto) diretamente no documento abaixo para preenchê-los. Depois, clique no botão verde para Imprimir / Salvar como PDF.")
                         
                         linhas_tabela_html = ""
                         soma_total_forn = 0.0
@@ -451,42 +451,57 @@ with menu_visualizacao:
                         <head>
                         <style>
                             @media print {{
-                                body {{ background-color: white; }}
+                                @page {{ margin: 0; }} /* REMOVE OS CABEÇALHOS E RODAPÉS DO NAVEGADOR (Data, URL, etc) */
+                                body {{ padding: 2cm; background-color: white; }} /* Recria a margem física na folha */
                                 .no-print {{ display: none !important; }}
-                                .editable-doc {{ box-shadow: none !important; border: none !important; padding: 0 !important; }}
+                                .editable-doc {{ box-shadow: none !important; border: none !important; padding: 0 !important; max-width: 100%; margin: 0 !important; }}
                             }}
-                            body {{ font-family: 'Times New Roman', Times, serif; color: black; background-color: #f8f9fa; }}
+                            body {{ font-family: 'Times New Roman', Times, serif; color: black; background-color: #f8f9fa; margin: 0; }}
                             .editable-doc {{
                                 padding: 40px; 
                                 background-color: white; 
                                 max-width: 800px; 
-                                margin: auto; 
+                                margin: 20px auto; 
                                 border: 1px solid #ccc; 
                                 box-shadow: 2px 2px 10px #aaa;
                             }}
-                            table, th, td {{
+                            table.borda, .borda th, .borda td {{
                                 border: 1px solid black;
                                 border-collapse: collapse;
                             }}
-                            th, td {{ padding: 5px; text-align: center; }}
+                            .borda th, .borda td {{ padding: 5px; text-align: center; }}
                         </style>
                         </head>
                         <body>
-                        <div class="no-print" style="text-align: center; margin-bottom: 20px;">
+                        <div class="no-print" style="text-align: center; margin-bottom: 20px; padding-top: 20px;">
                             <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #28a745; color: white; border: none; border-radius: 5px; font-weight: bold; box-shadow: 1px 1px 5px #888;">
                                 🖨️ Imprimir / Salvar como PDF
                             </button>
                         </div>
                     
                         <div class="editable-doc" contenteditable="true">
+                            
+                            <!-- TABELA INVISÍVEL PARA ALINHAR O BRASÃO E O VISTO -->
+                            <table style="width: 100%; border: none; margin-bottom: 0;">
+                                <tr style="border: none;">
+                                    <td style="width: 30%; border: none;"></td>
+                                    <td style="width: 40%; border: none; text-align: center; vertical-align: top;">
+                                        <img src="https://upload.wikimedia.org/wikipedia/commons/b/bf/Coat_of_arms_of_Brazil.svg" width="80">
+                                    </td>
+                                    <td style="width: 30%; border: none; text-align: center; vertical-align: top; font-weight: bold; font-size: 14px; line-height: 1.2;">
+                                        VISTO<br><br>_________________<br>Fisc Adm
+                                    </td>
+                                </tr>
+                            </table>
+                            
                             <div style="text-align: center; line-height: 1.2;">
-                                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/Coat_of_arms_of_Brazil.svg/150px-Coat_of_arms_of_Brazil.svg.png" width="80"><br><br>
                                 <b>MINISTÉRIO DA DEFESA</b><br>
                                 <b>EXÉRCITO BRASILEIRO</b><br>
                                 <b>23º BATALHÃO DE INFANTARIA</b><br>
                                 <span style="font-size: 12px;">(BATALHÃO JACINTHO MACHADO DE BITTENCOURT)</span>
                             </div>
                             <br>
+                            
                             <table style="width: 100%; border: none;">
                                 <tr style="border: none;">
                                     <td style="border: none; text-align: left; padding: 0;">DIEx nº ______ - CFGS/23ºBI<br>EB: _________________</td>
@@ -509,7 +524,7 @@ with menu_visualizacao:
                                 <b>Empresa:</b> {cnpj_atual} – {forn}
                             </div>
                             <br>
-                            <table style="width: 100%;">
+                            <table class="borda" style="width: 100%;">
                                 <tr style="font-weight: bold; background-color: #f2f2f2;">
                                     <td>Item</td><td>Nomenclatura</td><td>Qtd</td><td>Valor Unitário</td><td>Valor Total</td>
                                 </tr>
