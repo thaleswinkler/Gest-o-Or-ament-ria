@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from supabase import create_client, Client
+import os
+import io
+from docxtpl import DocxTemplate
 
 # =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA
@@ -87,7 +90,6 @@ if st.session_state.usuario_logado is None:
                     if len(verifica_user.data) > 0:
                         st.error("Este nome de usuário já está em uso.")
                     else:
-                        # TRAVA DE SEGURANÇA: Só permite 1 Fiscal por OM
                         verifica_fiscal = supabase.table("usuarios").select("id").eq("om", nova_om).eq("perfil", "Fiscal").execute()
                         
                         if len(verifica_fiscal.data) > 0:
@@ -395,9 +397,67 @@ with menu_visualizacao:
                 
                 for i, forn in enumerate(lista_fornecedores):
                     
-                    col_titulo, col_btn_baixa = st.columns([3, 1])
+                    col_titulo, col_btn_baixa, col_btn_doc = st.columns([2, 1, 1])
                     with col_titulo:
                         st.markdown(f"### 🏢 Fornecedor: **{forn}**")
+                    
+                    df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
+                    
+                    # -------------------------------------------------------------
+                    # LÓGICA DE AUTOMAÇÃO DE REQUISIÇÃO (USANDO O MODELO DO SISTEMA)
+                    # -------------------------------------------------------------
+                    with col_btn_doc:
+                        st.write("")
+                        caminho_modelo = "Modelo para sistema.docx"
+                        
+                        if os.path.exists(caminho_modelo):
+                            itens_formatados = []
+                            soma_total_forn = 0.0
+                            
+                            for _, row in df_forn_atual.iterrows():
+                                v_unit = float(row['Valor Unitário'])
+                                qtd = int(row['Qtd'])
+                                v_total = v_unit * qtd
+                                soma_total_forn += v_total
+                                
+                                itens_formatados.append({
+                                    "item": row["Item"],
+                                    "nome": row["Nome"],
+                                    "qtd": qtd,
+                                    "v_unit": f"R$ {v_unit:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                                    "v_total": f"R$ {v_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                                })
+                                
+                            contexto_requisicao = {
+                                "nc": nc_selecionada_vis,
+                                "nd": nd_vinculada,
+                                "pregao": df_forn_atual["Pregão"].iloc[0] if not df_forn_atual.empty else "",
+                                "uasg": df_forn_atual["UASG"].iloc[0] if not df_forn_atual.empty else "",
+                                "cnpj": df_forn_atual["CNPJ"].iloc[0] if not df_forn_atual.empty else "",
+                                "empresa": forn,
+                                "itens": itens_formatados,
+                                "total_geral": f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                            }
+                            
+                            try:
+                                doc = DocxTemplate(caminho_modelo)
+                                doc.render(contexto_requisicao)
+                                bio = io.BytesIO()
+                                doc.save(bio)
+                                
+                                st.download_button(
+                                    label="📄 Gerar Requisição",
+                                    data=bio.getvalue(),
+                                    file_name=f"Requisicao_{forn.replace(' ', '_')}.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    key=f"btn_doc_{nc_selecionada_vis}_{i}",
+                                    type="primary",
+                                    use_container_width=True
+                                )
+                            except Exception as e:
+                                st.error("Erro ao gerar documento. O modelo interno pode estar corrompido.")
+                        else:
+                            st.info("Modelo de Requisição não configurado no servidor.")
                     
                     if tipo_perfil != "Fiscal":
                         with col_btn_baixa:
@@ -410,8 +470,6 @@ with menu_visualizacao:
                                 st.session_state.banco = banco_dados
                                 st.toast(f"Itens de {forn} marcados como Recebidos!")
                                 st.rerun()
-                    
-                    df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
                     
                     cfg_colunas = {
                         "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
