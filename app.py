@@ -25,14 +25,14 @@ def extrair_ano(nc_nome):
     return "Outros/Sem Ano"
 
 # =====================================================================
-# 3. TELA DE LOGIN E CADASTRO INICIAL
+# 3. TELA DE LOGIN E CADASTRO INICIAL (BLINDAGEM DE ACESSO)
 # =====================================================================
 if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
 
 if st.session_state.usuario_logado is None:
     st.title("🖥 Sistema Profissional de Controle de Recursos")
-    st.markdown("Bem-vindo! Faça login ou crie a conta de Chefia para iniciar a gestão da sua Seção.")
+    st.markdown("Bem-vindo! Faça login ou registre a conta Matriz (Fiscal) da sua OM.")
     st.markdown("---")
     
     col_login, col_divisor, col_cadastro = st.columns([4, 1, 4])
@@ -63,21 +63,21 @@ if st.session_state.usuario_logado is None:
         st.write("")
 
     with col_cadastro:
-        st.subheader("📝 Criar Conta de Chefia / Fiscal")
-        st.info("⚠️ **Atenção:** Operadores convencionais não podem criar conta aqui. Solicite ao seu Chefe.")
+        st.subheader("🛡️ Criar Conta Matriz (Apenas Fiscal)")
+        st.info("⚠️ **Acesso Restrito:** Apenas o **Fiscal Administrativo** pode criar a primeira conta da OM. Contas de **Chefe** e **Operador** devem ser criadas pelo Fiscal internamente.")
         with st.form("form_cadastro"):
             novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
             nova_senha = st.text_input("Crie uma Senha:", type="password")
-            novo_nome = st.text_input("Seu Nome/Posto (Ex: 3º Sgt João):")
+            novo_nome = st.text_input("Seu Nome/Posto (Ex: Cap Moura):")
             nova_om = st.text_input("Sua OM (Ex: 23º BI):").strip().upper()
             
             col_cad1, col_cad2 = st.columns(2)
             with col_cad1:
-                nova_secao = st.text_input("Sua Seção (Ex: SALC, CFGS):").strip().upper()
+                nova_secao = st.text_input("Sua Seção Primária (Ex: FISCALIZACAO):").strip().upper()
             with col_cad2:
-                novo_perfil = st.selectbox("Nível de Acesso Inicial:", ["Chefe", "Fiscal"])
+                novo_perfil = st.selectbox("Nível de Acesso Inicial:", ["Fiscal"])
             
-            btn_cadastrar = st.form_submit_button("Criar Conta Matriz", type="secondary", use_container_width=True)
+            btn_cadastrar = st.form_submit_button("Criar Conta Matriz (Fiscal)", type="secondary", use_container_width=True)
             
             if btn_cadastrar:
                 if not novo_user or not nova_senha or not novo_nome or not nova_om or not nova_secao:
@@ -87,19 +87,23 @@ if st.session_state.usuario_logado is None:
                     if len(verifica_user.data) > 0:
                         st.error("Este nome de usuário já está em uso.")
                     else:
-                        id_secao = f"{nova_om}_{nova_secao}"
-                        verifica_banco = supabase.table("dados").select("id").eq("id", id_secao).execute()
+                        # TRAVA DE SEGURANÇA: Só permite 1 Fiscal por OM
+                        verifica_fiscal = supabase.table("usuarios").select("id").eq("om", nova_om).eq("perfil", "Fiscal").execute()
                         
-                        if len(verifica_banco.data) > 0:
-                            st.error("⛔ Esta OM e Seção já possuem cadastros. Solicite ao Chefe da Seção que crie seu usuário por dentro do sistema.")
+                        if len(verifica_fiscal.data) > 0:
+                            st.error("⛔ Esta OM já possui um Fiscal cadastrado no sistema. Solicite a ele a criação da sua conta.")
                         else:
                             supabase.table("usuarios").insert({
                                 "id": novo_user, "senha": nova_senha, "nome": novo_nome, 
                                 "om": nova_om, "secao": nova_secao, "perfil": novo_perfil
                             }).execute()
                             
-                            supabase.table("dados").insert({"id": id_secao, "ncs": {}}).execute()
-                            st.success("✅ Conta Matriz criada! Faça o login ao lado.")
+                            id_secao = f"{nova_om}_{nova_secao}"
+                            verifica_banco = supabase.table("dados").select("id").eq("id", id_secao).execute()
+                            if len(verifica_banco.data) == 0:
+                                supabase.table("dados").insert({"id": id_secao, "ncs": {}}).execute()
+                                
+                            st.success("✅ Conta de Fiscal criada! Faça o login ao lado.")
     
     st.markdown("---")
     st.markdown(
@@ -559,8 +563,8 @@ with menu_acessos:
             opcoes_perfil_novo = ["Operador"]
             secoes_permitidas = [secao_user]
         else:
-            st.info(f"Como **Fiscal**, você pode cadastrar **Chefes** ou outros **Fiscais** para qualquer seção do {om_user}.")
-            opcoes_perfil_novo = ["Chefe", "Fiscal", "Operador"]
+            st.info(f"Como **Fiscal**, você pode cadastrar os **Chefes** e **Operadores** de qualquer seção do {om_user}.")
+            opcoes_perfil_novo = ["Chefe", "Operador"]
             
             resp_secoes_gerais = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
             secoes_permitidas = sorted(list(set([r["secao"] for r in resp_secoes_gerais.data])))
@@ -578,7 +582,7 @@ with menu_acessos:
             if tipo_perfil == "Fiscal":
                 secao_selecionada = st.selectbox("Vincular à Seção:", secoes_permitidas)
                 if secao_selecionada == "NOVA SEÇÃO...":
-                    secao_final = st.text_input("Digite o nome da Nova Seção:").strip().upper()
+                    secao_final = st.text_input("Digite o nome da Nova Seção (Ex: ALMOX):").strip().upper()
                 else:
                     secao_final = secao_selecionada
             else:
