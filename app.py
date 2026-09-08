@@ -2,9 +2,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from supabase import create_client, Client
-import os
-import io
-from docxtpl import DocxTemplate
+import streamlit.components.v1 as components
 
 # =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA
@@ -397,67 +395,9 @@ with menu_visualizacao:
                 
                 for i, forn in enumerate(lista_fornecedores):
                     
-                    col_titulo, col_btn_baixa, col_btn_doc = st.columns([2, 1, 1])
+                    col_titulo, col_btn_baixa = st.columns([3, 1])
                     with col_titulo:
                         st.markdown(f"### 🏢 Fornecedor: **{forn}**")
-                    
-                    df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
-                    
-                    # -------------------------------------------------------------
-                    # LÓGICA DE AUTOMAÇÃO DE REQUISIÇÃO (USANDO O MODELO DO SISTEMA)
-                    # -------------------------------------------------------------
-                    with col_btn_doc:
-                        st.write("")
-                        caminho_modelo = "Modelo para sistema.docx"
-                        
-                        if os.path.exists(caminho_modelo):
-                            itens_formatados = []
-                            soma_total_forn = 0.0
-                            
-                            for _, row in df_forn_atual.iterrows():
-                                v_unit = float(row['Valor Unitário'])
-                                qtd = int(row['Qtd'])
-                                v_total = v_unit * qtd
-                                soma_total_forn += v_total
-                                
-                                itens_formatados.append({
-                                    "item": row["Item"],
-                                    "nome": row["Nome"],
-                                    "qtd": qtd,
-                                    "v_unit": f"R$ {v_unit:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                                    "v_total": f"R$ {v_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                                })
-                                
-                            contexto_requisicao = {
-                                "nc": nc_selecionada_vis,
-                                "nd": nd_vinculada,
-                                "pregao": df_forn_atual["Pregão"].iloc[0] if not df_forn_atual.empty else "",
-                                "uasg": df_forn_atual["UASG"].iloc[0] if not df_forn_atual.empty else "",
-                                "cnpj": df_forn_atual["CNPJ"].iloc[0] if not df_forn_atual.empty else "",
-                                "empresa": forn,
-                                "itens": itens_formatados,
-                                "total_geral": f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                            }
-                            
-                            try:
-                                doc = DocxTemplate(caminho_modelo)
-                                doc.render(contexto_requisicao)
-                                bio = io.BytesIO()
-                                doc.save(bio)
-                                
-                                st.download_button(
-                                    label="📄 Gerar Requisição",
-                                    data=bio.getvalue(),
-                                    file_name=f"Requisicao_{forn.replace(' ', '_')}.docx",
-                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    key=f"btn_doc_{nc_selecionada_vis}_{i}",
-                                    type="primary",
-                                    use_container_width=True
-                                )
-                            except Exception as e:
-                                st.error(f"Erro interno detalhado: {e}")
-                        else:
-                            st.info("Modelo de Requisição não configurado no servidor.")
                     
                     if tipo_perfil != "Fiscal":
                         with col_btn_baixa:
@@ -470,6 +410,142 @@ with menu_visualizacao:
                                 st.session_state.banco = banco_dados
                                 st.toast(f"Itens de {forn} marcados como Recebidos!")
                                 st.rerun()
+                                
+                    df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
+                    
+                    # -------------------------------------------------------------
+                    # AUTOMAÇÃO DE REQUISIÇÃO (HTML INTERATIVO / PDF)
+                    # -------------------------------------------------------------
+                    with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Clique para abrir e preencher)", expanded=False):
+                        st.info("💡 **Dica:** Clique nos campos em branco (como DIEx, Data e Assunto) diretamente no documento abaixo para preenchê-los. Depois, clique no botão verde para Salvar como PDF.")
+                        
+                        linhas_tabela_html = ""
+                        soma_total_forn = 0.0
+                        pregao_atual = df_forn_atual["Pregão"].iloc[0] if not df_forn_atual.empty else ""
+                        uasg_atual = df_forn_atual["UASG"].iloc[0] if not df_forn_atual.empty else ""
+                        cnpj_atual = df_forn_atual["CNPJ"].iloc[0] if not df_forn_atual.empty else ""
+                        
+                        for _, row in df_forn_atual.iterrows():
+                            v_unit = float(row['Valor Unitário'])
+                            qtd = int(row['Qtd'])
+                            v_total = v_unit * qtd
+                            soma_total_forn += v_total
+                            
+                            v_unit_str = f"R$ {v_unit:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                            v_total_str = f"R$ {v_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                            
+                            linhas_tabela_html += f"""
+                            <tr>
+                                <td>{row['Item']}</td>
+                                <td style="text-align: left; padding-left: 5px;">{row['Nome']}</td>
+                                <td>{qtd}</td>
+                                <td>{v_unit_str}</td>
+                                <td>{v_total_str}</td>
+                            </tr>
+                            """
+                            
+                        total_geral_str = f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                        
+                        html_template = f"""
+                        <html>
+                        <head>
+                        <style>
+                            @media print {{
+                                body {{ background-color: white; }}
+                                .no-print {{ display: none !important; }}
+                                .editable-doc {{ box-shadow: none !important; border: none !important; padding: 0 !important; }}
+                            }}
+                            body {{ font-family: 'Times New Roman', Times, serif; color: black; background-color: #f8f9fa; }}
+                            .editable-doc {{
+                                padding: 40px; 
+                                background-color: white; 
+                                max-width: 800px; 
+                                margin: auto; 
+                                border: 1px solid #ccc; 
+                                box-shadow: 2px 2px 10px #aaa;
+                            }}
+                            table, th, td {{
+                                border: 1px solid black;
+                                border-collapse: collapse;
+                            }}
+                            th, td {{ padding: 5px; text-align: center; }}
+                        </style>
+                        </head>
+                        <body>
+                        <div class="no-print" style="text-align: center; margin-bottom: 20px;">
+                            <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #28a745; color: white; border: none; border-radius: 5px; font-weight: bold; box-shadow: 1px 1px 5px #888;">
+                                🖨️ Imprimir / Salvar como PDF
+                            </button>
+                        </div>
+                    
+                        <div class="editable-doc" contenteditable="true">
+                            <div style="text-align: center; line-height: 1.2;">
+                                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/Coat_of_arms_of_Brazil.svg/150px-Coat_of_arms_of_Brazil.svg.png" width="80"><br><br>
+                                <b>MINISTÉRIO DA DEFESA</b><br>
+                                <b>EXÉRCITO BRASILEIRO</b><br>
+                                <b>23º BATALHÃO DE INFANTARIA</b><br>
+                                <span style="font-size: 12px;">(BATALHÃO JACINTHO MACHADO DE BITTENCOURT)</span>
+                            </div>
+                            <br>
+                            <table style="width: 100%; border: none;">
+                                <tr style="border: none;">
+                                    <td style="border: none; text-align: left; padding: 0;">DIEx nº ______ - CFGS/23ºBI<br>EB: _________________</td>
+                                    <td style="border: none; text-align: right; padding: 0;">Blumenau-SC, ____ de _______________ de 2026.</td>
+                                </tr>
+                            </table>
+                            <br>
+                            <div style="line-height: 1.5;">
+                                <b>Do:</b> Instrutor Chefe do Curso de Formação e Graduação de Sargentos<br>
+                                <b>Ao:</b> Sr Fiscal Administrativo<br>
+                                <b>Assunto:</b> aquisição de ______________________
+                            </div>
+                            <br>
+                            <div style="text-align: justify; text-indent: 30px; line-height: 1.5;">
+                                1. Nos termos contidos na lei 14.133/2021, solicito-vos providências junto ao Ordenador de Despesas no sentido de aprovar o empenho da despesa para aquisição de material, com os respectivos recursos e destinos:
+                            </div>
+                            <div style="margin-left: 30px; line-height: 1.5; margin-top: 10px;">
+                                a) <b>Nota de crédito:</b> {nc_selecionada_vis} &nbsp;&nbsp;&nbsp; b) <b>PI:</b> C1ENASCMAD; <b>ND:</b> {nd_vinculada}<br>
+                                <b>Edital de Pregão:</b> {pregao_atual} / <b>UASG:</b> {uasg_atual} / <b>Tipo de Empenho:</b> Ordinário<br>
+                                <b>Empresa:</b> {cnpj_atual} – {forn}
+                            </div>
+                            <br>
+                            <table style="width: 100%;">
+                                <tr style="font-weight: bold; background-color: #f2f2f2;">
+                                    <td>Item</td><td>Nomenclatura</td><td>Qtd</td><td>Valor Unitário</td><td>Valor Total</td>
+                                </tr>
+                                {linhas_tabela_html}
+                                <tr style="font-weight: bold;">
+                                    <td colspan="4">TOTAL</td><td>{total_geral_str}</td>
+                                </tr>
+                            </table>
+                            <br>
+                            <div style="text-align: justify; text-indent: 30px; line-height: 1.5;">
+                                2. O material solicitado deverá ser empenhado na empresa vencedora do item acima citado, proveniente de seu respectivo Pregão Eletrônico.
+                            </div>
+                            <br><br>
+                            <div style="text-align: center; line-height: 1.2;">
+                                <b>FLÁVIO RAMON MELO MOURA - Cap</b><br>
+                                Instrutor Chefe do Curso de Formação e Graduação de Sargentos
+                            </div>
+                            <br><br>
+                            <div style="border-top: 1px solid black; padding-top: 10px; line-height: 1.5; font-size: 14px;">
+                                <b>DESPACHO DO OD:</b><br>
+                                1. Autorizo a aquisição do material relacionado na letra b) do número 1);<br>
+                                2. Empregar os recursos provenientes da nota de crédito relacionado na letra a);<br>
+                                3. A SALC inicie os procedimentos legais, conforme legislação em vigor para empenho da despesa.<br>
+                                <br><br>
+                                <div style="text-align: center; line-height: 1.2;">
+                                    <b>ALAN RODRIGUES DOS SANTOS - Cel</b><br>
+                                    Ordenador de Despesas do 23º BI
+                                </div>
+                            </div>
+                        </div>
+                        </body>
+                        </html>
+                        """
+                        
+                        components.html(html_template, height=800, scrolling=True)
+                    # -------------------------------------------------------------
                     
                     cfg_colunas = {
                         "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
