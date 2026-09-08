@@ -230,18 +230,36 @@ with menu_cadastro:
     else:
         st.subheader("1. Cadastrar Nova Nota de Crédito (NC)")
         
+        # Mapear NDs e PIs existentes
+        lista_nds = list(set([dados.get("nd", "") for nc, dados in banco_dados.items() if dados.get("nd", "").strip()]))
+        lista_pis = list(set([dados.get("pi", "") for nc, dados in banco_dados.items() if dados.get("pi", "").strip()]))
+        
+        opcoes_nd = ["➕ Digitar Nova ND..."] + sorted(lista_nds)
+        opcoes_pi = ["➕ Digitar Novo PI..."] + sorted(lista_pis)
+        
         col_nc1, col_nc2, col_nc3 = st.columns(3)
         with col_nc1:
             nova_nc = st.text_input("Número da NC (Comece com o ano, ex: 2026NC000511):", "", key="cad_numero_nc").strip()
-        with col_nc2:
-            nova_nd = st.text_input("Natureza de Despesa (ND):", "", key="cad_nd_nc").strip()
-        with col_nc3:
             valor_nc = st.number_input("Valor Total Recebido na NC (R$):", min_value=0.0, step=100.0, key="cad_valor_nc")
+        
+        with col_nc2:
+            pi_selecionado = st.selectbox("Plano Interno (PI):", opcoes_pi)
+            if pi_selecionado == "➕ Digitar Novo PI...":
+                novo_pi = st.text_input("Digite o PI:").strip()
+            else:
+                novo_pi = pi_selecionado
+                
+        with col_nc3:
+            nd_selecionada = st.selectbox("Natureza de Despesa (ND):", opcoes_nd)
+            if nd_selecionada == "➕ Digitar Nova ND...":
+                nova_nd = st.text_input("Digite a ND:").strip()
+            else:
+                nova_nd = nd_selecionada
         
         if st.button("💾 Registrar Nova Nota de Crédito", type="primary", key="btn_cad_nc"):
             if nova_nc:
                 if nova_nc not in banco_dados:
-                    banco_dados[nova_nc] = {"valor_recebido": valor_nc, "nd": nova_nd, "itens": []}
+                    banco_dados[nova_nc] = {"valor_recebido": valor_nc, "nd": nova_nd, "pi": novo_pi, "itens": []}
                     salvar_dados(banco_dados)
                     st.session_state.banco = banco_dados
                     st.success(f"NC {nova_nc} salva com sucesso na seção {secao_ativa}!")
@@ -260,13 +278,16 @@ with menu_cadastro:
             dados_atuais = banco_dados[nc_para_editar]
             valor_atual = dados_atuais.get("valor_recebido", 0.0)
             nd_atual = dados_atuais.get("nd", "")
+            pi_atual = dados_atuais.get("pi", "")
             
-            col_ed1, col_ed2, col_ed3 = st.columns(3)
+            col_ed1, col_ed2, col_ed3, col_ed4 = st.columns(4)
             with col_ed1:
                 nome_editado = st.text_input("Número da NC:", value=nc_para_editar, key=f"edit_numero_nc_{nc_para_editar}").strip()
             with col_ed2:
-                nd_editada = st.text_input("Natureza de Despesa (ND):", value=nd_atual, key=f"edit_nd_nc_{nc_para_editar}").strip()
+                pi_editado = st.text_input("Plano Interno (PI):", value=pi_atual, key=f"edit_pi_nc_{nc_para_editar}").strip()
             with col_ed3:
+                nd_editada = st.text_input("Natureza de Despesa (ND):", value=nd_atual, key=f"edit_nd_nc_{nc_para_editar}").strip()
+            with col_ed4:
                 valor_editado = st.number_input("Valor Total (R$):", value=float(valor_atual), min_value=0.0, step=100.0, key=f"edit_valor_nc_{nc_para_editar}")
             
             if st.button("🔄 Confirmar Alterações da NC", type="secondary", key="btn_edit_nc"):
@@ -277,6 +298,7 @@ with menu_cadastro:
                         dados_preservados = banco_dados.pop(nc_para_editar)
                         dados_preservados["valor_recebido"] = valor_editado
                         dados_preservados["nd"] = nd_editada
+                        dados_preservados["pi"] = pi_editado
                         banco_dados[nome_editado] = dados_preservados
                         salvar_dados(banco_dados)
                         st.session_state.banco = banco_dados
@@ -314,7 +336,13 @@ with menu_cadastro:
             with col_it3:
                 fornecedor = st.text_input("Nome do Fornecedor / Empresa:", "", key="item_forn").strip()
                 cnpj = st.text_input("CNPJ do Fornecedor:", "", key="item_cnpj").strip()
-                situacao = st.selectbox("Situação Atual do Recurso:", ["Planejamento", "Aguardando entrega", "Recebido"], key="item_sit")
+                
+                opcoes_sit = ["Planejamento", "Aguardando entrega", "Recebido", "➕ Outra (Digitar)..."]
+                sit_selecionada = st.selectbox("Situação Atual do Recurso:", opcoes_sit, key="item_sit")
+                if sit_selecionada == "➕ Outra (Digitar)...":
+                    situacao = st.text_input("Digite a Situação:").strip()
+                else:
+                    situacao = sit_selecionada
             
             if st.button("➕ Adicionar Item ao Planejamento", type="primary", key="btn_add_item"):
                 if nome_resumido:
@@ -339,299 +367,341 @@ with menu_cadastro:
 # =====================================================================
 with menu_visualizacao:
     if ncs_do_ano:
-        nc_selecionada_vis = st.selectbox("Selecione a NC para Gerenciamento e Análise:", ncs_do_ano, key="vis_item_select_nc")
         
-        dados_nc = banco_dados[nc_selecionada_vis]
-        total_recebido = dados_nc.get("valor_recebido", 0.0)
-        nd_vinculada = dados_nc.get("nd", "Não informada")
+        # Filtro de PI
+        pis_disponiveis = list(set([banco_dados[nc].get("pi", "Não informado") for nc in ncs_do_ano if banco_dados[nc].get("pi", "Não informado").strip()]))
+        opcoes_filtro_pi = ["TODOS OS PIs"] + sorted(pis_disponiveis)
         
-        st.markdown(f"**Natureza de Despesa (ND):** {nd_vinculada}")
+        filtro_pi = st.selectbox("📌 Filtrar por PI:", opcoes_filtro_pi)
         
-        if dados_nc["itens"]:
-            for it in dados_nc["itens"]:
-                it["Total"] = float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0))
+        if filtro_pi == "TODOS OS PIs":
+            ncs_filtradas = ncs_do_ano
+        else:
+            ncs_filtradas = [nc for nc in ncs_do_ano if banco_dados[nc].get("pi", "Não informado") == filtro_pi]
             
-            df_base_mestre = pd.DataFrame(dados_nc["itens"])
+        if not ncs_filtradas:
+            st.warning("Nenhuma NC encontrada para o PI selecionado.")
+        else:
+            nc_selecionada_vis = st.selectbox("Selecione a NC para Gerenciamento e Análise:", ncs_filtradas, key="vis_item_select_nc")
             
-            if not df_base_mestre.empty:
-                df_base_mestre["Valor Unitário"] = df_base_mestre["Valor Unitário"].astype(float)
-                df_base_mestre["Qtd"] = df_base_mestre["Qtd"].astype(int)
-                df_base_mestre["Total"] = df_base_mestre["Valor Unitário"] * df_base_mestre["Qtd"]
-                total_gasto_geral = df_base_mestre["Total"].sum()
-            else:
-                total_gasto_geral = 0.0
+            dados_nc = banco_dados[nc_selecionada_vis]
+            total_recebido = dados_nc.get("valor_recebido", 0.0)
+            nd_vinculada = dados_nc.get("nd", "Não informada")
+            pi_vinculado = dados_nc.get("pi", "Não informado")
             
-            saldo_disponivel = total_recebido - total_gasto_geral
+            st.markdown(f"**PI:** {pi_vinculado} &nbsp;&nbsp;|&nbsp;&nbsp; **ND:** {nd_vinculada}")
             
-            st.write("")
-            card1, card2, card3 = st.columns(3)
-            with card1:
-                st.metric("Total Recebido na NC", f"R$ {total_recebido:,.2f}")
-            with card2:
-                st.metric("Total Planejado / Gasto", f"R$ {total_gasto_geral:,.2f}", delta=f"R$ {total_gasto_geral:,.2f}", delta_color="inverse")
-            with card3:
-                st.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
-            
-            if not df_base_mestre.empty:
+            if dados_nc["itens"]:
+                for it in dados_nc["itens"]:
+                    it["Total"] = float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0))
+                
+                df_base_mestre = pd.DataFrame(dados_nc["itens"])
+                
+                if not df_base_mestre.empty:
+                    df_base_mestre["Valor Unitário"] = df_base_mestre["Valor Unitário"].astype(float)
+                    df_base_mestre["Qtd"] = df_base_mestre["Qtd"].astype(int)
+                    df_base_mestre["Total"] = df_base_mestre["Valor Unitário"] * df_base_mestre["Qtd"]
+                    total_gasto_geral = df_base_mestre["Total"].sum()
+                else:
+                    total_gasto_geral = 0.0
+                
+                saldo_disponivel = total_recebido - total_gasto_geral
+                
+                st.write("")
+                card1, card2, card3 = st.columns(3)
+                with card1:
+                    st.metric("Total Recebido na NC", f"R$ {total_recebido:,.2f}")
+                with card2:
+                    st.metric("Total Planejado / Gasto", f"R$ {total_gasto_geral:,.2f}", delta=f"R$ {total_gasto_geral:,.2f}", delta_color="inverse")
+                with card3:
+                    st.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
+                
+                if not df_base_mestre.empty:
+                    st.markdown("---")
+                    st.markdown("### 📈 Resumo Gráfico das Aquisições")
+                    col_graf1, col_graf2 = st.columns(2)
+                    
+                    with col_graf1:
+                        st.markdown("**Valores Comprometidos por Fornecedor (R$)**")
+                        gasto_fornecedor = df_base_mestre.groupby("Fornecedor")["Total"].sum().reset_index()
+                        grafico_forn = alt.Chart(gasto_fornecedor).mark_bar(color='#1E88E5').encode(
+                            x=alt.X('Fornecedor', sort='-y'),
+                            y='Total',
+                            tooltip=['Fornecedor', 'Total']
+                        ).properties(height=300)
+                        st.altair_chart(grafico_forn, use_container_width=True)
+                    
+                    with col_graf2:
+                        st.markdown("**Status Atual das Entregas (Qtd. Itens)**")
+                        status_contagem = df_base_mestre["Situação"].value_counts().reset_index()
+                        status_contagem.columns = ["Situação", "Quantidade"]
+                        
+                        grafico_status = alt.Chart(status_contagem).mark_bar(color="#28a745").encode(
+                            x=alt.X("Situação", sort="-y"),
+                            y="Quantidade",
+                            tooltip=["Situação", "Quantidade"]
+                        ).properties(height=300)
+                        st.altair_chart(grafico_status, use_container_width=True)
+                
                 st.markdown("---")
-                st.markdown("### 📈 Resumo Gráfico das Aquisições")
-                col_graf1, col_graf2 = st.columns(2)
+                st.subheader("📋 Planilhas de Acompanhamento Separadas por Fornecedor")
                 
-                with col_graf1:
-                    st.markdown("**Valores Comprometidos por Fornecedor (R$)**")
-                    gasto_fornecedor = df_base_mestre.groupby("Fornecedor")["Total"].sum().reset_index()
-                    grafico_forn = alt.Chart(gasto_fornecedor).mark_bar(color='#1E88E5').encode(
-                        x=alt.X('Fornecedor', sort='-y'),
-                        y='Total',
-                        tooltip=['Fornecedor', 'Total']
-                    ).properties(height=300)
-                    st.altair_chart(grafico_forn, use_container_width=True)
-                
-                with col_graf2:
-                    st.markdown("**Status Atual das Entregas (Qtd. Itens)**")
-                    status_contagem = df_base_mestre["Situação"].value_counts().reset_index()
-                    status_contagem.columns = ["Situação", "Quantidade"]
+                if not df_base_mestre.empty:
+                    lista_fornecedores = sorted(df_base_mestre["Fornecedor"].unique())
+                    houve_alteracao = False
+                    df_atualizado_acumulado = []
                     
-                    escala_cores = alt.Scale(
-                        domain=["Recebido", "Planejamento", "Aguardando entrega"],
-                        range=["#28a745", "#007bff", "#dc3545"]
-                    )
-                    
-                    grafico_status = alt.Chart(status_contagem).mark_bar().encode(
-                        x=alt.X("Situação", sort="-y"),
-                        y="Quantidade",
-                        color=alt.Color("Situação", scale=escala_cores, legend=None),
-                        tooltip=["Situação", "Quantidade"]
-                    ).properties(height=300)
-                    st.altair_chart(grafico_status, use_container_width=True)
-            
-            st.markdown("---")
-            st.subheader("📋 Planilhas de Acompanhamento Separadas por Fornecedor")
-            
-            if not df_base_mestre.empty:
-                lista_fornecedores = sorted(df_base_mestre["Fornecedor"].unique())
-                houve_alteracao = False
-                df_atualizado_acumulado = []
-                
-                for i, forn in enumerate(lista_fornecedores):
-                    
-                    col_titulo, col_btn_baixa = st.columns([3, 1])
-                    with col_titulo:
-                        st.markdown(f"### 🏢 Fornecedor: **{forn}**")
-                    
-                    if tipo_perfil != "Fiscal":
-                        with col_btn_baixa:
-                            st.write("") 
-                            if st.button(f"✅ Receber todos os itens", key=f"btn_lote_{nc_selecionada_vis}_{i}", use_container_width=True):
-                                for it_bd in banco_dados[nc_selecionada_vis]["itens"]:
-                                    if it_bd.get("Fornecedor") == forn:
-                                        it_bd["Situação"] = "Recebido"
-                                salvar_dados(banco_dados)
-                                st.session_state.banco = banco_dados
-                                st.toast(f"Itens de {forn} marcados como Recebidos!")
-                                st.rerun()
+                    for i, forn in enumerate(lista_fornecedores):
+                        
+                        col_titulo, col_btn_baixa = st.columns([3, 1])
+                        with col_titulo:
+                            st.markdown(f"### 🏢 Fornecedor: **{forn}**")
+                        
+                        if tipo_perfil != "Fiscal":
+                            with col_btn_baixa:
+                                st.write("") 
+                                if st.button(f"✅ Receber todos os itens", key=f"btn_lote_{nc_selecionada_vis}_{i}", use_container_width=True):
+                                    for it_bd in banco_dados[nc_selecionada_vis]["itens"]:
+                                        if it_bd.get("Fornecedor") == forn:
+                                            it_bd["Situação"] = "Recebido"
+                                    salvar_dados(banco_dados)
+                                    st.session_state.banco = banco_dados
+                                    st.toast(f"Itens de {forn} marcados como Recebidos!")
+                                    st.rerun()
+                                    
+                        df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
+                        
+                        # -------------------------------------------------------------
+                        # AUTOMAÇÃO DE REQUISIÇÃO COM CAMPOS SALVOS E EMBUTIDOS
+                        # -------------------------------------------------------------
+                        with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Preencher Documento)", expanded=False):
+                            st.info("💡 Preencha os dados abaixo e clique em Salvar. Eles serão integrados ao documento PDF para você.")
+                            
+                            # Resgata dados já salvos desta NC/Fornecedor
+                            doc_info = banco_dados[nc_selecionada_vis].get("doc_info", {})
+                            info_forn = doc_info.get(forn, {"diex": "", "data": "", "assunto": "", "empenho": ""})
+                            
+                            with st.form(f"form_req_{forn}_{i}"):
+                                col_req1, col_req2 = st.columns(2)
+                                with col_req1:
+                                    diex_val = st.text_input("Nº do DIEx:", value=info_forn.get("diex", ""))
+                                    data_val = st.text_input("Data (Ex: 08 de setembro de 2026):", value=info_forn.get("data", ""))
+                                with col_req2:
+                                    assunto_val = st.text_input("Assunto (Ex: materiais de construção):", value=info_forn.get("assunto", ""))
+                                    empenho_val = st.text_input("Nota de Empenho:", value=info_forn.get("empenho", ""))
                                 
-                    df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
-                    
-                    # -------------------------------------------------------------
-                    # AUTOMAÇÃO DE REQUISIÇÃO (HTML INTERATIVO / PDF)
-                    # -------------------------------------------------------------
-                    with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Clique para abrir e preencher)", expanded=False):
-                        st.info("💡 **Dica:** Clique nos campos em branco (como DIEx, Data e Assunto) diretamente no documento abaixo para preenchê-los. Depois, clique no botão verde para Imprimir / Salvar como PDF.")
+                                btn_salvar_req = st.form_submit_button("💾 Salvar Dados da Requisição", type="primary")
+                                
+                                if btn_salvar_req:
+                                    if "doc_info" not in banco_dados[nc_selecionada_vis]:
+                                        banco_dados[nc_selecionada_vis]["doc_info"] = {}
+                                    banco_dados[nc_selecionada_vis]["doc_info"][forn] = {
+                                        "diex": diex_val, "data": data_val, "assunto": assunto_val, "empenho": empenho_val
+                                    }
+                                    salvar_dados(banco_dados)
+                                    st.session_state.banco = banco_dados
+                                    st.success("Dados salvos e documento atualizado!")
+                                    st.rerun()
+                            
+                            # Tratamento para exibição no HTML
+                            diex_display = info_forn.get("diex", "") if info_forn.get("diex", "") else "______"
+                            data_display = info_forn.get("data", "") if info_forn.get("data", "") else "____ de _______________ de 2026"
+                            assunto_display = info_forn.get("assunto", "") if info_forn.get("assunto", "") else "______________________"
+                            empenho_display = info_forn.get("empenho", "") if info_forn.get("empenho", "") else "______________________"
+                            
+                            linhas_tabela_html = ""
+                            soma_total_forn = 0.0
+                            pregao_atual = df_forn_atual["Pregão"].iloc[0] if not df_forn_atual.empty else ""
+                            uasg_atual = df_forn_atual["UASG"].iloc[0] if not df_forn_atual.empty else ""
+                            cnpj_atual = df_forn_atual["CNPJ"].iloc[0] if not df_forn_atual.empty else ""
+                            
+                            for _, row in df_forn_atual.iterrows():
+                                v_unit = float(row['Valor Unitário'])
+                                qtd = int(row['Qtd'])
+                                v_total = v_unit * qtd
+                                soma_total_forn += v_total
+                                
+                                v_unit_str = f"R$ {v_unit:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                                v_total_str = f"R$ {v_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                                
+                                linhas_tabela_html += f"""
+                                <tr>
+                                    <td>{row['Item']}</td>
+                                    <td style="text-align: left; padding-left: 5px;">{row['Nome']}</td>
+                                    <td>{qtd}</td>
+                                    <td>{v_unit_str}</td>
+                                    <td>{v_total_str}</td>
+                                </tr>
+                                """
+                                
+                            total_geral_str = f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                            
+                            html_template = f"""
+                            <html>
+                            <head>
+                            <style>
+                                @media print {{
+                                    @page {{ margin: 0; }} 
+                                    body {{ padding: 2cm; background-color: white; }} 
+                                    .no-print {{ display: none !important; }}
+                                    .editable-doc {{ box-shadow: none !important; border: none !important; padding: 0 !important; max-width: 100%; margin: 0 !important; }}
+                                }}
+                                body {{ font-family: 'Times New Roman', Times, serif; color: black; background-color: #f8f9fa; margin: 0; }}
+                                .editable-doc {{
+                                    padding: 40px; 
+                                    background-color: white; 
+                                    max-width: 800px; 
+                                    margin: 20px auto; 
+                                    border: 1px solid #ccc; 
+                                    box-shadow: 2px 2px 10px #aaa;
+                                }}
+                                table.borda, .borda th, .borda td {{
+                                    border: 1px solid black;
+                                    border-collapse: collapse;
+                                }}
+                                .borda th, .borda td {{ padding: 5px; text-align: center; }}
+                            </style>
+                            </head>
+                            <body>
+                            <div class="no-print" style="text-align: center; margin-bottom: 20px; padding-top: 20px;">
+                                <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #28a745; color: white; border: none; border-radius: 5px; font-weight: bold; box-shadow: 1px 1px 5px #888;">
+                                    🖨️ Imprimir / Salvar como PDF
+                                </button>
+                            </div>
                         
-                        linhas_tabela_html = ""
-                        soma_total_forn = 0.0
-                        pregao_atual = df_forn_atual["Pregão"].iloc[0] if not df_forn_atual.empty else ""
-                        uasg_atual = df_forn_atual["UASG"].iloc[0] if not df_forn_atual.empty else ""
-                        cnpj_atual = df_forn_atual["CNPJ"].iloc[0] if not df_forn_atual.empty else ""
-                        
-                        for _, row in df_forn_atual.iterrows():
-                            v_unit = float(row['Valor Unitário'])
-                            qtd = int(row['Qtd'])
-                            v_total = v_unit * qtd
-                            soma_total_forn += v_total
-                            
-                            v_unit_str = f"R$ {v_unit:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                            v_total_str = f"R$ {v_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                            
-                            linhas_tabela_html += f"""
-                            <tr>
-                                <td>{row['Item']}</td>
-                                <td style="text-align: left; padding-left: 5px;">{row['Nome']}</td>
-                                <td>{qtd}</td>
-                                <td>{v_unit_str}</td>
-                                <td>{v_total_str}</td>
-                            </tr>
-                            """
-                            
-                        total_geral_str = f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                        
-                        html_template = f"""
-                        <html>
-                        <head>
-                        <style>
-                            @media print {{
-                                @page {{ margin: 0; }} /* REMOVE OS CABEÇALHOS E RODAPÉS DO NAVEGADOR (Data, URL, etc) */
-                                body {{ padding: 2cm; background-color: white; }} /* Recria a margem física na folha */
-                                .no-print {{ display: none !important; }}
-                                .editable-doc {{ box-shadow: none !important; border: none !important; padding: 0 !important; max-width: 100%; margin: 0 !important; }}
-                            }}
-                            body {{ font-family: 'Times New Roman', Times, serif; color: black; background-color: #f8f9fa; margin: 0; }}
-                            .editable-doc {{
-                                padding: 40px; 
-                                background-color: white; 
-                                max-width: 800px; 
-                                margin: 20px auto; 
-                                border: 1px solid #ccc; 
-                                box-shadow: 2px 2px 10px #aaa;
-                            }}
-                            table.borda, .borda th, .borda td {{
-                                border: 1px solid black;
-                                border-collapse: collapse;
-                            }}
-                            .borda th, .borda td {{ padding: 5px; text-align: center; }}
-                        </style>
-                        </head>
-                        <body>
-                        <div class="no-print" style="text-align: center; margin-bottom: 20px; padding-top: 20px;">
-                            <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #28a745; color: white; border: none; border-radius: 5px; font-weight: bold; box-shadow: 1px 1px 5px #888;">
-                                🖨️ Imprimir / Salvar como PDF
-                            </button>
-                        </div>
-                    
-                        <div class="editable-doc" contenteditable="true">
-                            
-                            <!-- TABELA INVISÍVEL PARA ALINHAR O BRASÃO E O VISTO -->
-                            <table style="width: 100%; border: none; margin-bottom: 0;">
-                                <tr style="border: none;">
-                                    <td style="width: 30%; border: none;"></td>
-                                    <td style="width: 40%; border: none; text-align: center; vertical-align: top;">
-                                        <img src="https://upload.wikimedia.org/wikipedia/commons/b/bf/Coat_of_arms_of_Brazil.svg" width="80">
-                                    </td>
-                                    <td style="width: 30%; border: none; text-align: center; vertical-align: top; font-weight: bold; font-size: 14px; line-height: 1.2;">
-                                        VISTO<br><br>_________________<br>Fisc Adm
-                                    </td>
-                                </tr>
-                            </table>
-                            
-                            <div style="text-align: center; line-height: 1.2;">
-                                <b>MINISTÉRIO DA DEFESA</b><br>
-                                <b>EXÉRCITO BRASILEIRO</b><br>
-                                <b>23º BATALHÃO DE INFANTARIA</b><br>
-                                <span style="font-size: 12px;">(BATALHÃO JACINTHO MACHADO DE BITTENCOURT)</span>
-                            </div>
-                            <br>
-                            
-                            <table style="width: 100%; border: none;">
-                                <tr style="border: none;">
-                                    <td style="border: none; text-align: left; padding: 0;">DIEx nº ______ - CFGS/23ºBI<br>EB: _________________</td>
-                                    <td style="border: none; text-align: right; padding: 0;">Blumenau-SC, ____ de _______________ de 2026.</td>
-                                </tr>
-                            </table>
-                            <br>
-                            <div style="line-height: 1.5;">
-                                <b>Do:</b> Instrutor Chefe do Curso de Formação e Graduação de Sargentos<br>
-                                <b>Ao:</b> Sr Fiscal Administrativo<br>
-                                <b>Assunto:</b> aquisição de ______________________
-                            </div>
-                            <br>
-                            <div style="text-align: justify; text-indent: 30px; line-height: 1.5;">
-                                1. Nos termos contidos na lei 14.133/2021, solicito-vos providências junto ao Ordenador de Despesas no sentido de aprovar o empenho da despesa para aquisição de material, com os respectivos recursos e destinos:
-                            </div>
-                            <div style="margin-left: 30px; line-height: 1.5; margin-top: 10px;">
-                                a) <b>Nota de crédito:</b> {nc_selecionada_vis} &nbsp;&nbsp;&nbsp; b) <b>PI:</b> C1ENASCMAD; <b>ND:</b> {nd_vinculada}<br>
-                                <b>Edital de Pregão:</b> {pregao_atual} / <b>UASG:</b> {uasg_atual} / <b>Tipo de Empenho:</b> Ordinário<br>
-                                <b>Empresa:</b> {cnpj_atual} – {forn}
-                            </div>
-                            <br>
-                            <table class="borda" style="width: 100%;">
-                                <tr style="font-weight: bold; background-color: #f2f2f2;">
-                                    <td>Item</td><td>Nomenclatura</td><td>Qtd</td><td>Valor Unitário</td><td>Valor Total</td>
-                                </tr>
-                                {linhas_tabela_html}
-                                <tr style="font-weight: bold;">
-                                    <td colspan="4">TOTAL</td><td>{total_geral_str}</td>
-                                </tr>
-                            </table>
-                            <br>
-                            <div style="text-align: justify; text-indent: 30px; line-height: 1.5;">
-                                2. O material solicitado deverá ser empenhado na empresa vencedora do item acima citado, proveniente de seu respectivo Pregão Eletrônico.
-                            </div>
-                            <br><br>
-                            <div style="text-align: center; line-height: 1.2;">
-                                <b>FLÁVIO RAMON MELO MOURA - Cap</b><br>
-                                Instrutor Chefe do Curso de Formação e Graduação de Sargentos
-                            </div>
-                            <br><br>
-                            <div style="border-top: 1px solid black; padding-top: 10px; line-height: 1.5; font-size: 14px;">
-                                <b>DESPACHO DO OD:</b><br>
-                                1. Autorizo a aquisição do material relacionado na letra b) do número 1);<br>
-                                2. Empregar os recursos provenientes da nota de crédito relacionado na letra a);<br>
-                                3. A SALC inicie os procedimentos legais, conforme legislação em vigor para empenho da despesa.<br>
+                            <div class="editable-doc" contenteditable="true">
+                                
+                                <table style="width: 100%; border: none; margin-bottom: 0;">
+                                    <tr style="border: none;">
+                                        <td style="width: 30%; border: none;"></td>
+                                        <td style="width: 40%; border: none; text-align: center; vertical-align: top;">
+                                            <img src="https://upload.wikimedia.org/wikipedia/commons/b/bf/Coat_of_arms_of_Brazil.svg" width="80">
+                                        </td>
+                                        <td style="width: 30%; border: none; text-align: center; vertical-align: top; font-weight: bold; font-size: 14px; line-height: 1.2;">
+                                            VISTO<br><br>_________________<br>Fisc Adm
+                                        </td>
+                                    </tr>
+                                </table>
+                                
+                                <div style="text-align: center; line-height: 1.2;">
+                                    <b>MINISTÉRIO DA DEFESA</b><br>
+                                    <b>EXÉRCITO BRASILEIRO</b><br>
+                                    <b>23º BATALHÃO DE INFANTARIA</b><br>
+                                    <span style="font-size: 12px;">(BATALHÃO JACINTHO MACHADO DE BITTENCOURT)</span>
+                                </div>
+                                <br>
+                                
+                                <table style="width: 100%; border: none;">
+                                    <tr style="border: none;">
+                                        <td style="border: none; text-align: left; padding: 0;">DIEx nº {diex_display} - CFGS/23ºBI<br>EB: _________________</td>
+                                        <td style="border: none; text-align: right; padding: 0;">Blumenau-SC, {data_display}.</td>
+                                    </tr>
+                                </table>
+                                <br>
+                                <div style="line-height: 1.5;">
+                                    <b>Do:</b> Instrutor Chefe do Curso de Formação e Graduação de Sargentos<br>
+                                    <b>Ao:</b> Sr Fiscal Administrativo<br>
+                                    <b>Assunto:</b> aquisição de {assunto_display}
+                                </div>
+                                <br>
+                                <div style="text-align: justify; text-indent: 30px; line-height: 1.5;">
+                                    1. Nos termos contidos na lei 14.133/2021, solicito-vos providências junto ao Ordenador de Despesas no sentido de aprovar o empenho da despesa para aquisição de material, com os respectivos recursos e destinos:
+                                </div>
+                                <div style="margin-left: 30px; line-height: 1.5; margin-top: 10px;">
+                                    a) <b>Nota de crédito:</b> {nc_selecionada_vis} &nbsp;&nbsp;&nbsp; b) <b>PI:</b> {pi_vinculado}; <b>ND:</b> {nd_vinculada}<br>
+                                    <b>Edital de Pregão:</b> {pregao_atual} / <b>UASG:</b> {uasg_atual} / <b>Tipo de Empenho:</b> Ordinário<br>
+                                    <b>Nota de Empenho:</b> {empenho_display}<br>
+                                    <b>Empresa:</b> {cnpj_atual} – {forn}
+                                </div>
+                                <br>
+                                <table class="borda" style="width: 100%;">
+                                    <tr style="font-weight: bold; background-color: #f2f2f2;">
+                                        <td>Item</td><td>Nomenclatura</td><td>Qtd</td><td>Valor Unitário</td><td>Valor Total</td>
+                                    </tr>
+                                    {linhas_tabela_html}
+                                    <tr style="font-weight: bold;">
+                                        <td colspan="4">TOTAL</td><td>{total_geral_str}</td>
+                                    </tr>
+                                </table>
+                                <br>
+                                <div style="text-align: justify; text-indent: 30px; line-height: 1.5;">
+                                    2. O material solicitado deverá ser empenhado na empresa vencedora do item acima citado, proveniente de seu respectivo Pregão Eletrônico.
+                                </div>
                                 <br><br>
                                 <div style="text-align: center; line-height: 1.2;">
-                                    <b>ALAN RODRIGUES DOS SANTOS - Cel</b><br>
-                                    Ordenador de Despesas do 23º BI
+                                    <b>FLÁVIO RAMON MELO MOURA - Cap</b><br>
+                                    Instrutor Chefe do Curso de Formação e Graduação de Sargentos
+                                </div>
+                                <br><br>
+                                <div style="border-top: 1px solid black; padding-top: 10px; line-height: 1.5; font-size: 14px;">
+                                    <b>DESPACHO DO OD:</b><br>
+                                    1. Autorizo a aquisição do material relacionado na letra b) do número 1);<br>
+                                    2. Empregar os recursos provenientes da nota de crédito relacionado na letra a);<br>
+                                    3. A SALC inicie os procedimentos legais, conforme legislação em vigor para empenho da despesa.<br>
+                                    <br><br>
+                                    <div style="text-align: center; line-height: 1.2;">
+                                        <b>ALAN RODRIGUES DOS SANTOS - Cel</b><br>
+                                        Ordenador de Despesas do 23º BI
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                        </body>
-                        </html>
-                        """
+                            </body>
+                            </html>
+                            """
+                            
+                            components.html(html_template, height=800, scrolling=True)
+                        # -------------------------------------------------------------
                         
-                        components.html(html_template, height=800, scrolling=True)
-                    # -------------------------------------------------------------
+                        cfg_colunas = {
+                            "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
+                            "Nome": st.column_config.TextColumn("Nome", required=True),
+                            "Qtd": st.column_config.NumberColumn("Qtd", min_value=0, step=1, required=True),
+                            "Valor Unitário": st.column_config.NumberColumn("Valor Unitário", min_value=0.0, step=0.01, format="R$ %.2f", required=True),
+                            "Total": st.column_config.NumberColumn("Total", format="R$ %.2f"),
+                            "UASG": st.column_config.TextColumn("UASG"),
+                            "Pregão": st.column_config.TextColumn("Pregão"),
+                            "Ata": st.column_config.TextColumn("Ata"),
+                            "Fornecedor": st.column_config.TextColumn("Fornecedor"),
+                            "CNPJ": st.column_config.TextColumn("CNPJ"),
+                            "Situação": st.column_config.TextColumn("Situação", required=True) # Alterado para texto livre
+                        }
+                        ordem_col = ["Item", "Nome", "Qtd", "Valor Unitário", "Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
+                        
+                        if tipo_perfil == "Fiscal":
+                            st.dataframe(df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, hide_index=True, use_container_width=True)
+                            total_desse_forn = df_forn_atual["Total"].sum()
+                            st.markdown(f"<h4 style='text-align: right; color: #1E88E5;'>Total {forn}: R$ {total_desse_forn:,.2f}</h4>", unsafe_allow_html=True)
+                        
+                        else:
+                            df_editado_forn = st.data_editor(
+                                df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, disabled=["Total"], 
+                                num_rows="dynamic", use_container_width=True, hide_index=True,
+                                key=f"editor_forn_{nc_selecionada_vis}_{forn.replace(' ', '_')}_{i}"
+                            )
+                            
+                            dict_antigo = df_forn_atual.drop(columns=["Total"]).to_dict("records")
+                            dict_novo = df_editado_forn.drop(columns=["Total"]).to_dict("records")
+                            
+                            if dict_antigo != dict_novo:
+                                houve_alteracao = True
+                            
+                            df_editado_forn["Total"] = df_editado_forn["Valor Unitário"].astype(float) * df_editado_forn["Qtd"].astype(int)
+                            total_desse_forn = df_editado_forn["Total"].sum()
+                            
+                            st.markdown(f"<h4 style='text-align: right; color: #1E88E5;'>Total {forn}: R$ {total_desse_forn:,.2f}</h4>", unsafe_allow_html=True)
+                            st.write("") 
+                            
+                            df_atualizado_acumulado.append(df_editado_forn)
                     
-                    cfg_colunas = {
-                        "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
-                        "Nome": st.column_config.TextColumn("Nome", required=True),
-                        "Qtd": st.column_config.NumberColumn("Qtd", min_value=0, step=1, required=True),
-                        "Valor Unitário": st.column_config.NumberColumn("Valor Unitário", min_value=0.0, step=0.01, format="R$ %.2f", required=True),
-                        "Total": st.column_config.NumberColumn("Total", format="R$ %.2f"),
-                        "UASG": st.column_config.TextColumn("UASG"),
-                        "Pregão": st.column_config.TextColumn("Pregão"),
-                        "Ata": st.column_config.TextColumn("Ata"),
-                        "Fornecedor": st.column_config.TextColumn("Fornecedor"),
-                        "CNPJ": st.column_config.TextColumn("CNPJ"),
-                        "Situação": st.column_config.SelectboxColumn("Situação", options=["Planejamento", "Aguardando entrega", "Recebido"], required=True)
-                    }
-                    ordem_col = ["Item", "Nome", "Qtd", "Valor Unitário", "Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
-                    
-                    if tipo_perfil == "Fiscal":
-                        st.dataframe(df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, hide_index=True, use_container_width=True)
-                        total_desse_forn = df_forn_atual["Total"].sum()
-                        st.markdown(f"<h4 style='text-align: right; color: #1E88E5;'>Total {forn}: R$ {total_desse_forn:,.2f}</h4>", unsafe_allow_html=True)
-                    
-                    else:
-                        df_editado_forn = st.data_editor(
-                            df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, disabled=["Total"], 
-                            num_rows="dynamic", use_container_width=True, hide_index=True,
-                            key=f"editor_forn_{nc_selecionada_vis}_{forn.replace(' ', '_')}_{i}"
-                        )
+                    if tipo_perfil != "Fiscal" and houve_alteracao:
+                        df_final_para_salvar = pd.concat(df_atualizado_acumulado, ignore_index=True)
+                        df_final_para_salvar["Total"] = df_final_para_salvar["Valor Unitário"].astype(float) * df_final_para_salvar["Qtd"].astype(int)
                         
-                        dict_antigo = df_forn_atual.drop(columns=["Total"]).to_dict("records")
-                        dict_novo = df_editado_forn.drop(columns=["Total"]).to_dict("records")
-                        
-                        if dict_antigo != dict_novo:
-                            houve_alteracao = True
-                        
-                        df_editado_forn["Total"] = df_editado_forn["Valor Unitário"].astype(float) * df_editado_forn["Qtd"].astype(int)
-                        total_desse_forn = df_editado_forn["Total"].sum()
-                        
-                        st.markdown(f"<h4 style='text-align: right; color: #1E88E5;'>Total {forn}: R$ {total_desse_forn:,.2f}</h4>", unsafe_allow_html=True)
-                        st.write("") 
-                        
-                        df_atualizado_acumulado.append(df_editado_forn)
-                
-                if tipo_perfil != "Fiscal" and houve_alteracao:
-                    df_final_para_salvar = pd.concat(df_atualizado_acumulado, ignore_index=True)
-                    df_final_para_salvar["Total"] = df_final_para_salvar["Valor Unitário"].astype(float) * df_final_para_salvar["Qtd"].astype(int)
-                    
-                    banco_dados[nc_selecionada_vis]["itens"] = df_final_para_salvar.to_dict(orient="records")
-                    salvar_dados(banco_dados)
-                    st.session_state.banco = banco_dados
-                    st.toast("✅ Alteração salva automaticamente!")
-                    st.rerun()
+                        banco_dados[nc_selecionada_vis]["itens"] = df_final_para_salvar.to_dict(orient="records")
+                        salvar_dados(banco_dados)
+                        st.session_state.banco = banco_dados
+                        st.toast("✅ Alteração salva automaticamente!")
+                        st.rerun()
     else:
          st.info("Nenhuma NC cadastrada para este ano nesta seção.")
 
