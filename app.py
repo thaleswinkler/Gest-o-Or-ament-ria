@@ -8,7 +8,7 @@ import streamlit.components.v1 as components
 # 1. CONFIGURAÇÃO DA PÁGINA
 # =====================================================================
 st.set_page_config(
-    page_title="Gerenciador de Recursos - 23º BI",
+    page_title="Gerenciador de Recursos",
     page_icon="💰",
     layout="wide"
 )
@@ -166,7 +166,7 @@ def salvar_dados(dados):
 st.sidebar.markdown("---")
 
 # =====================================================================
-# NOVO MÓDULO: ALTERAÇÃO DE SENHA
+# ALTERAÇÃO DE SENHA
 # =====================================================================
 with st.sidebar.expander("⚙️ Alterar Minha Senha"):
     with st.form("form_alterar_senha"):
@@ -192,10 +192,11 @@ if st.sidebar.button("Sair da Conta (Logout)", use_container_width=True):
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📅 Filtro de Exercício")
 
-anos_disponiveis = set(extrair_ano(nc) for nc in banco_dados.keys())
+# Ocultando o dado interno de configuração para não aparecer na lista de anos
+anos_disponiveis = set(extrair_ano(nc) for nc in banco_dados.keys() if nc != "CONFIG_REQUISICAO")
 lista_anos = sorted(list(anos_disponiveis), reverse=True) if anos_disponiveis else ["2026"]
 ano_selecionado = st.sidebar.selectbox("Selecione o Ano de Referência:", lista_anos)
-ncs_do_ano = [nc for nc in banco_dados.keys() if extrair_ano(nc) == ano_selecionado]
+ncs_do_ano = [nc for nc in banco_dados.keys() if nc != "CONFIG_REQUISICAO" and extrair_ano(nc) == ano_selecionado]
 
 st.sidebar.markdown("---")
 st.sidebar.markdown(
@@ -230,9 +231,8 @@ with menu_cadastro:
     else:
         st.subheader("1. Cadastrar Nova Nota de Crédito (NC)")
         
-        # Mapear NDs e PIs existentes
-        lista_nds = list(set([dados.get("nd", "") for nc, dados in banco_dados.items() if dados.get("nd", "").strip()]))
-        lista_pis = list(set([dados.get("pi", "") for nc, dados in banco_dados.items() if dados.get("pi", "").strip()]))
+        lista_nds = list(set([dados.get("nd", "") for nc, dados in banco_dados.items() if nc != "CONFIG_REQUISICAO" and isinstance(dados, dict) and dados.get("nd", "").strip()]))
+        lista_pis = list(set([dados.get("pi", "") for nc, dados in banco_dados.items() if nc != "CONFIG_REQUISICAO" and isinstance(dados, dict) and dados.get("pi", "").strip()]))
         
         opcoes_nd = ["➕ Digitar Nova ND..."] + sorted(lista_nds)
         opcoes_pi = ["➕ Digitar Novo PI..."] + sorted(lista_pis)
@@ -258,14 +258,14 @@ with menu_cadastro:
         
         if st.button("💾 Registrar Nova Nota de Crédito", type="primary", key="btn_cad_nc"):
             if nova_nc:
-                if nova_nc not in banco_dados:
+                if nova_nc != "CONFIG_REQUISICAO" and nova_nc not in banco_dados:
                     banco_dados[nova_nc] = {"valor_recebido": valor_nc, "nd": nova_nd, "pi": novo_pi, "itens": []}
                     salvar_dados(banco_dados)
                     st.session_state.banco = banco_dados
                     st.success(f"NC {nova_nc} salva com sucesso na seção {secao_ativa}!")
                     st.rerun()
                 else:
-                    st.warning("Esta NC já existe. Use a seção abaixo para alterá-la.")
+                    st.warning("Esta NC já existe ou o nome é inválido.")
             else:
                 st.warning("Por favor, digite o número da NC.")
         
@@ -368,8 +368,7 @@ with menu_cadastro:
 with menu_visualizacao:
     if ncs_do_ano:
         
-        # Filtro de PI
-        pis_disponiveis = list(set([banco_dados[nc].get("pi", "Não informado") for nc in ncs_do_ano if banco_dados[nc].get("pi", "Não informado").strip()]))
+        pis_disponiveis = list(set([banco_dados[nc].get("pi", "Não informado") for nc in ncs_do_ano if isinstance(banco_dados[nc], dict) and banco_dados[nc].get("pi", "Não informado").strip()]))
         opcoes_filtro_pi = ["TODOS OS PIs"] + sorted(pis_disponiveis)
         
         filtro_pi = st.selectbox("📌 Filtrar por PI:", opcoes_filtro_pi)
@@ -446,6 +445,52 @@ with menu_visualizacao:
                 st.markdown("---")
                 st.subheader("📋 Planilhas de Acompanhamento Separadas por Fornecedor")
                 
+                # -------------------------------------------------------------
+                # CONFIGURAÇÃO DE TIMBRE E ASSINATURAS POR SEÇÃO
+                # -------------------------------------------------------------
+                config_req = banco_dados.get("CONFIG_REQUISICAO", {})
+                
+                with st.expander("⚙️ Personalizar Cabeçalho e Assinaturas (Padrão da sua Seção)", expanded=not bool(config_req)):
+                    st.info("Preencha estes dados uma única vez. Eles ficarão salvos no banco de dados e padronizarão automaticamente todas as requisições impressas por esta Seção.")
+                    with st.form("form_config_req"):
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            cfg_om = st.text_area("Nome da OM (Pode usar 2 linhas):", value=config_req.get("cabecalho_om", f"{om_user}\n(NOME HISTÓRICO DA OM)"))
+                            cfg_ind = st.text_input("Indicativo do DIEx (Ex: CFGS/23ºBI):", value=config_req.get("indicativo_diex", f"SEÇÃO/{om_user}"))
+                            cfg_remetente = st.text_input("Remetente (Campo 'Do:'):", value=config_req.get("remetente_do", "Chefe da Seção"))
+                        with c2:
+                            cfg_ass_nome = st.text_input("Sua Assinatura (Ex: FLÁVIO - Cap):", value=config_req.get("assinatura_nome", "NOME - Posto"))
+                            cfg_ass_func = st.text_input("Função de quem Assina:", value=config_req.get("assinatura_funcao", "Chefe da Seção"))
+                            cfg_od_nome = st.text_input("Nome do OD (Ex: SILVA - Cel):", value=config_req.get("od_nome", "NOME DO OD - Posto"))
+                            cfg_od_func = st.text_input("Função do OD:", value=config_req.get("od_funcao", f"Ordenador de Despesas do {om_user}"))
+                        
+                        if st.form_submit_button("💾 Salvar Novo Padrão da Seção", type="primary"):
+                            banco_dados["CONFIG_REQUISICAO"] = {
+                                "cabecalho_om": cfg_om,
+                                "indicativo_diex": cfg_ind,
+                                "remetente_do": cfg_remetente,
+                                "assinatura_nome": cfg_ass_nome,
+                                "assinatura_funcao": cfg_ass_func,
+                                "od_nome": cfg_od_nome,
+                                "od_funcao": cfg_od_func
+                            }
+                            salvar_dados(banco_dados)
+                            st.session_state.banco = banco_dados
+                            st.success("Configuração padrão da seção atualizada com sucesso!")
+                            st.rerun()
+                
+                def format_html_var(val, default):
+                    return str(val).strip() if val else default
+
+                html_cabecalho_om = format_html_var(config_req.get("cabecalho_om"), f"{om_user}<br>(NOME HISTÓRICO)").replace("\n", "<br>")
+                html_ind = format_html_var(config_req.get("indicativo_diex"), f"SEÇÃO/{om_user}")
+                html_rem = format_html_var(config_req.get("remetente_do"), "Função do Remetente")
+                html_ass_nome = format_html_var(config_req.get("assinatura_nome"), "NOME DO MILITAR - Posto")
+                html_ass_func = format_html_var(config_req.get("assinatura_funcao"), "Função do Remetente")
+                html_od_nome = format_html_var(config_req.get("od_nome"), "NOME DO OD - Posto")
+                html_od_func = format_html_var(config_req.get("od_funcao"), "Ordenador de Despesas da OM")
+                # -------------------------------------------------------------
+
                 if not df_base_mestre.empty:
                     lista_fornecedores = sorted(df_base_mestre["Fornecedor"].unique())
                     houve_alteracao = False
@@ -471,13 +516,9 @@ with menu_visualizacao:
                                     
                         df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
                         
-                        # -------------------------------------------------------------
-                        # AUTOMAÇÃO DE REQUISIÇÃO COM CAMPOS SALVOS E EMBUTIDOS
-                        # -------------------------------------------------------------
                         with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Preencher Documento)", expanded=False):
-                            st.info("💡 Preencha os dados abaixo e clique em Salvar. Eles serão integrados ao documento PDF para você.")
+                            st.info("💡 Preencha os dados e clique em Salvar. O documento carregará automaticamente o timbre da sua seção.")
                             
-                            # Resgata dados já salvos desta NC/Fornecedor
                             doc_info = banco_dados[nc_selecionada_vis].get("doc_info", {})
                             info_forn = doc_info.get(forn, {"diex": "", "data": "", "assunto": "", "empenho": ""})
                             
@@ -503,7 +544,6 @@ with menu_visualizacao:
                                     st.success("Dados salvos e documento atualizado!")
                                     st.rerun()
                             
-                            # Tratamento para exibição no HTML
                             diex_display = info_forn.get("diex", "") if info_forn.get("diex", "") else "______"
                             data_display = info_forn.get("data", "") if info_forn.get("data", "") else "____ de _______________ de 2026"
                             assunto_display = info_forn.get("assunto", "") if info_forn.get("assunto", "") else "______________________"
@@ -545,6 +585,7 @@ with menu_visualizacao:
                                     body {{ padding: 2cm; background-color: white; }} 
                                     .no-print {{ display: none !important; }}
                                     .editable-doc {{ box-shadow: none !important; border: none !important; padding: 0 !important; max-width: 100%; margin: 0 !important; }}
+                                    .quebra-pagina {{ page-break-before: always; }}
                                 }}
                                 body {{ font-family: 'Times New Roman', Times, serif; color: black; background-color: #f8f9fa; margin: 0; }}
                                 .editable-doc {{
@@ -560,6 +601,16 @@ with menu_visualizacao:
                                     border-collapse: collapse;
                                 }}
                                 .borda th, .borda td {{ padding: 5px; text-align: center; }}
+                                .separador-tela {{
+                                    border-top: 2px dashed #ccc;
+                                    color: #999;
+                                    text-align: center;
+                                    margin: 40px 0;
+                                    padding-top: 10px;
+                                    font-size: 12px;
+                                    font-family: Arial, sans-serif;
+                                    user-select: none;
+                                }}
                             </style>
                             </head>
                             <body>
@@ -586,20 +637,19 @@ with menu_visualizacao:
                                 <div style="text-align: center; line-height: 1.2;">
                                     <b>MINISTÉRIO DA DEFESA</b><br>
                                     <b>EXÉRCITO BRASILEIRO</b><br>
-                                    <b>23º BATALHÃO DE INFANTARIA</b><br>
-                                    <span style="font-size: 12px;">(BATALHÃO JACINTHO MACHADO DE BITTENCOURT)</span>
+                                    <b>{html_cabecalho_om}</b>
                                 </div>
                                 <br>
                                 
                                 <table style="width: 100%; border: none;">
                                     <tr style="border: none;">
-                                        <td style="border: none; text-align: left; padding: 0;">DIEx nº {diex_display} - CFGS/23ºBI<br>EB: _________________</td>
+                                        <td style="border: none; text-align: left; padding: 0;">DIEx nº {diex_display} - {html_ind}<br>EB: _________________</td>
                                         <td style="border: none; text-align: right; padding: 0;">Blumenau-SC, {data_display}.</td>
                                     </tr>
                                 </table>
                                 <br>
                                 <div style="line-height: 1.5;">
-                                    <b>Do:</b> Instrutor Chefe do Curso de Formação e Graduação de Sargentos<br>
+                                    <b>Do:</b> {html_rem}<br>
                                     <b>Ao:</b> Sr Fiscal Administrativo<br>
                                     <b>Assunto:</b> aquisição de {assunto_display}
                                 </div>
@@ -629,19 +679,23 @@ with menu_visualizacao:
                                 </div>
                                 <br><br>
                                 <div style="text-align: center; line-height: 1.2;">
-                                    <b>FLÁVIO RAMON MELO MOURA - Cap</b><br>
-                                    Instrutor Chefe do Curso de Formação e Graduação de Sargentos
+                                    <b>{html_ass_nome}</b><br>
+                                    {html_ass_func}
                                 </div>
-                                <br><br>
-                                <div style="border-top: 1px solid black; padding-top: 10px; line-height: 1.5; font-size: 14px;">
+                                
+                                <div class="separador-tela no-print" contenteditable="false">
+                                    ✂️ --- QUEBRA DE PÁGINA (Na impressão o Despacho do OD sairá em folha exclusiva) --- ✂️
+                                </div>
+                                
+                                <div class="quebra-pagina" style="padding-top: 10px; line-height: 1.5; font-size: 14px;">
                                     <b>DESPACHO DO OD:</b><br>
                                     1. Autorizo a aquisição do material relacionado na letra b) do número 1);<br>
                                     2. Empregar os recursos provenientes da nota de crédito relacionado na letra a);<br>
                                     3. A SALC inicie os procedimentos legais, conforme legislação em vigor para empenho da despesa.<br>
                                     <br><br>
                                     <div style="text-align: center; line-height: 1.2;">
-                                        <b>ALAN RODRIGUES DOS SANTOS - Cel</b><br>
-                                        Ordenador de Despesas do 23º BI
+                                        <b>{html_od_nome}</b><br>
+                                        {html_od_func}
                                     </div>
                                 </div>
                             </div>
@@ -650,7 +704,6 @@ with menu_visualizacao:
                             """
                             
                             components.html(html_template, height=800, scrolling=True)
-                        # -------------------------------------------------------------
                         
                         cfg_colunas = {
                             "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
@@ -663,7 +716,7 @@ with menu_visualizacao:
                             "Ata": st.column_config.TextColumn("Ata"),
                             "Fornecedor": st.column_config.TextColumn("Fornecedor"),
                             "CNPJ": st.column_config.TextColumn("CNPJ"),
-                            "Situação": st.column_config.TextColumn("Situação", required=True) # Alterado para texto livre
+                            "Situação": st.column_config.TextColumn("Situação", required=True) 
                         }
                         ordem_col = ["Item", "Nome", "Qtd", "Valor Unitário", "Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
                         
@@ -721,7 +774,7 @@ with menu_visao_global:
         for linha in resp_todas_secoes.data:
             banco_secao_laco = linha.get("ncs", {})
             for nc in banco_secao_laco.keys():
-                if extrair_ano(nc) == ano_selecionado:
+                if nc != "CONFIG_REQUISICAO" and extrair_ano(nc) == ano_selecionado:
                     nd_atual = banco_secao_laco[nc].get("nd", "Não informada")
                     for item in banco_secao_laco[nc].get("itens", []):
                         valor_total_item = float(item.get("Valor Unitário", 0.0)) * int(item.get("Qtd", 0))
