@@ -457,6 +457,7 @@ with menu_visualizacao:
                         with c1:
                             cfg_om = st.text_area("Nome da OM (Pode usar 2 linhas):", value=config_req.get("cabecalho_om", f"{om_user}\n(NOME HISTÓRICO DA OM)"))
                             cfg_ind = st.text_input("Indicativo do DIEx (Ex: CFGS/23ºBI):", value=config_req.get("indicativo_diex", f"SEÇÃO/{om_user}"))
+                            cfg_local = st.text_input("Local/Cidade (Ex: Blumenau-SC):", value=config_req.get("local_cidade", "Blumenau-SC"))
                             cfg_remetente = st.text_input("Remetente (Campo 'Do:'):", value=config_req.get("remetente_do", "Chefe da Seção"))
                         with c2:
                             cfg_ass_nome = st.text_input("Sua Assinatura (Ex: FLÁVIO - Cap):", value=config_req.get("assinatura_nome", "NOME - Posto"))
@@ -468,6 +469,7 @@ with menu_visualizacao:
                             banco_dados["CONFIG_REQUISICAO"] = {
                                 "cabecalho_om": cfg_om,
                                 "indicativo_diex": cfg_ind,
+                                "local_cidade": cfg_local,
                                 "remetente_do": cfg_remetente,
                                 "assinatura_nome": cfg_ass_nome,
                                 "assinatura_funcao": cfg_ass_func,
@@ -484,6 +486,7 @@ with menu_visualizacao:
 
                 html_cabecalho_om = format_html_var(config_req.get("cabecalho_om"), f"{om_user}<br>(NOME HISTÓRICO)").replace("\n", "<br>")
                 html_ind = format_html_var(config_req.get("indicativo_diex"), f"SEÇÃO/{om_user}")
+                html_local = format_html_var(config_req.get("local_cidade"), "Blumenau-SC")
                 html_rem = format_html_var(config_req.get("remetente_do"), "Função do Remetente")
                 html_ass_nome = format_html_var(config_req.get("assinatura_nome"), "NOME DO MILITAR - Posto")
                 html_ass_func = format_html_var(config_req.get("assinatura_funcao"), "Função do Remetente")
@@ -520,12 +523,13 @@ with menu_visualizacao:
                             st.info("💡 Preencha os dados e clique em Salvar. O documento carregará automaticamente o timbre da sua seção.")
                             
                             doc_info = banco_dados[nc_selecionada_vis].get("doc_info", {})
-                            info_forn = doc_info.get(forn, {"diex": "", "data": "", "assunto": "", "empenho": ""})
+                            info_forn = doc_info.get(forn, {"diex": "", "eb": "", "data": "", "assunto": "", "empenho": ""})
                             
                             with st.form(f"form_req_{forn}_{i}"):
                                 col_req1, col_req2 = st.columns(2)
                                 with col_req1:
                                     diex_val = st.text_input("Nº do DIEx:", value=info_forn.get("diex", ""))
+                                    eb_val = st.text_input("Número do EB (Processo):", value=info_forn.get("eb", ""))
                                     data_val = st.text_input("Data (Ex: 08 de setembro de 2026):", value=info_forn.get("data", ""))
                                 with col_req2:
                                     assunto_val = st.text_input("Assunto (Ex: materiais de construção):", value=info_forn.get("assunto", ""))
@@ -537,7 +541,7 @@ with menu_visualizacao:
                                     if "doc_info" not in banco_dados[nc_selecionada_vis]:
                                         banco_dados[nc_selecionada_vis]["doc_info"] = {}
                                     banco_dados[nc_selecionada_vis]["doc_info"][forn] = {
-                                        "diex": diex_val, "data": data_val, "assunto": assunto_val, "empenho": empenho_val
+                                        "diex": diex_val, "eb": eb_val, "data": data_val, "assunto": assunto_val, "empenho": empenho_val
                                     }
                                     salvar_dados(banco_dados)
                                     st.session_state.banco = banco_dados
@@ -545,6 +549,7 @@ with menu_visualizacao:
                                     st.rerun()
                             
                             diex_display = info_forn.get("diex", "") if info_forn.get("diex", "") else "______"
+                            eb_display = info_forn.get("eb", "") if info_forn.get("eb", "") else "_________________"
                             data_display = info_forn.get("data", "") if info_forn.get("data", "") else "____ de _______________ de 2026"
                             assunto_display = info_forn.get("assunto", "") if info_forn.get("assunto", "") else "______________________"
                             empenho_display = info_forn.get("empenho", "") if info_forn.get("empenho", "") else "______________________"
@@ -643,8 +648,8 @@ with menu_visualizacao:
                                 
                                 <table style="width: 100%; border: none;">
                                     <tr style="border: none;">
-                                        <td style="border: none; text-align: left; padding: 0;">DIEx nº {diex_display} - {html_ind}<br>EB: _________________</td>
-                                        <td style="border: none; text-align: right; padding: 0;">Blumenau-SC, {data_display}.</td>
+                                        <td style="border: none; text-align: left; padding: 0;">DIEx nº {diex_display} - {html_ind}<br>EB: {eb_display}</td>
+                                        <td style="border: none; text-align: right; padding: 0;">{html_local}, {data_display}.</td>
                                     </tr>
                                 </table>
                                 <br>
