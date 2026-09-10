@@ -6,6 +6,10 @@ import streamlit.components.v1 as components
 import hashlib
 import re
 import io
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.chart import BarChart, Reference
 
 # =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA
@@ -51,16 +55,343 @@ def extrair_ano(nc_nome: str) -> str:
         return nc_nome[:4]
     return "Outros/Sem Ano"
 
-def gerar_download_excel(df: pd.DataFrame):
-    """Gera arquivo pronto para Excel (XLSX com fallback para CSV UTF-8-SIG)."""
-    try:
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Itens_NC")
-        return buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
-    except Exception:
-        csv_bytes = df.to_csv(index=False, sep=";", decimal=",", encoding="utf-8-sig").encode("utf-8-sig")
-        return csv_bytes, "text/csv", "csv"
+# =====================================================================
+# GERADORES DE PLANILHAS PROFISSIONAIS EM EXCEL (COM GRÁFICOS E ESTILOS)
+# =====================================================================
+def gerar_planilha_nc_completa(nc_nome: str, dados_nc: dict, om_nome: str, secao_nome: str):
+    """Gera um arquivo Excel multi-abas completo com dados da NC, resumo e gráfico embutido."""
+    wb = openpyxl.Workbook()
+    
+    # Cores no padrão militar profissional
+    cor_cabecalho = "1F4E79"     # Azul escuro executivo
+    cor_sub = "D9E1F2"           # Azul claro suave
+    cor_destaque = "2E75B6"
+    fonte_branca = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    fonte_titulo = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+    fonte_negrito = Font(name="Calibri", size=11, bold=True)
+    fonte_normal = Font(name="Calibri", size=11)
+    
+    fill_cabecalho = PatternFill(start_color=cor_cabecalho, end_color=cor_cabecalho, fill_type="solid")
+    fill_sub = PatternFill(start_color=cor_sub, end_color=cor_sub, fill_type="solid")
+    borda_fina = Border(
+        left=Side(style='thin', color='BFBFBF'),
+        right=Side(style='thin', color='BFBFBF'),
+        top=Side(style='thin', color='BFBFBF'),
+        bottom=Side(style='thin', color='BFBFBF')
+    )
+
+    # -------------------------------------------------------------
+    # ABA 1: RESUMO EXECUTIVO DA NC COM GRÁFICO
+    # -------------------------------------------------------------
+    ws_resumo = wb.active
+    ws_resumo.title = "Resumo Executivo"
+    ws_resumo.views.sheetView[0].showGridLines = True
+    
+    # Título Principal
+    ws_resumo.merge_cells("A1:F1")
+    celula_titulo = ws_resumo["A1"]
+    celula_titulo.value = f"RELATÓRIO GERENCIAL - NOTA DE CRÉDITO {nc_nome}"
+    celula_titulo.font = fonte_titulo
+    celula_titulo.fill = fill_cabecalho
+    celula_titulo.alignment = Alignment(horizontal="center", vertical="center")
+    ws_resumo.row_dimensions[1].height = 35
+
+    # Informações Institucionais
+    info_institucional = [
+        ("Organização Militar (OM):", om_nome, "Plano Interno (PI):", dados_nc.get("pi", "Não informado")),
+        ("Seção Responsável:", secao_nome, "Natureza de Despesa (ND):", dados_nc.get("nd", "Não informada")),
+    ]
+    
+    linha_atual = 3
+    for linha in info_institucional:
+        ws_resumo.cell(row=linha_atual, column=1, value=linha[0]).font = fonte_negrito
+        ws_resumo.cell(row=linha_atual, column=2, value=linha[1]).font = fonte_normal
+        ws_resumo.cell(row=linha_atual, column=4, value=linha[2]).font = fonte_negrito
+        ws_resumo.cell(row=linha_atual, column=5, value=linha[3]).font = fonte_normal
+        linha_atual += 1
+
+    # Cálculos Financeiros
+    itens = dados_nc.get("itens", [])
+    total_recebido = float(dados_nc.get("valor_recebido", 0.0))
+    total_gasto = sum(float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0)) for it in itens)
+    saldo_restante = total_recebido - total_gasto
+    perc_exec = (total_gasto / total_recebido * 100) if total_recebido > 0 else 0.0
+
+    linha_atual += 1
+    ws_resumo.merge_cells(f"A{linha_atual}:F{linha_atual}")
+    ws_resumo[f"A{linha_atual}"] = "QUADRO DE EXECUÇÃO ORÇAMENTÁRIA"
+    ws_resumo[f"A{linha_atual}"].font = fonte_branca
+    ws_resumo[f"A{linha_atual}"].fill = PatternFill(start_color=cor_destaque, end_color=cor_destaque, fill_type="solid")
+    ws_resumo[f"A{linha_atual}"].alignment = Alignment(horizontal="center", vertical="center")
+    
+    linha_atual += 1
+    cards = [
+        ("Total Recebido na NC", total_recebido, "R$ #,##0.00"),
+        ("Total Planejado / Gasto", total_gasto, "R$ #,##0.00"),
+        ("Saldo Restante Disponível", saldo_restante, "R$ #,##0.00"),
+        ("Percentual Executado", perc_exec / 100, "0.0%")
+    ]
+    
+    for idx, (label, val, num_fmt) in enumerate(cards, start=1):
+        col_letra = get_column_letter(idx if idx <= 3 else idx + 1)
+        ws_resumo[f"{col_letra}{linha_atual}"] = label
+        ws_resumo[f"{col_letra}{linha_atual}"].font = fonte_negrito
+        ws_resumo[f"{col_letra}{linha_atual}"].fill = fill_sub
+        ws_resumo[f"{col_letra}{linha_atual}"].alignment = Alignment(horizontal="center")
+        
+        cel_val = ws_resumo[f"{col_letra}{linha_atual+1}"]
+        cel_val.value = val
+        cel_val.font = Font(name="Calibri", size=12, bold=True)
+        cel_val.number_format = num_fmt
+        cel_val.alignment = Alignment(horizontal="center")
+
+    linha_atual += 4
+    # Tabela Resumo por Fornecedor (Base do Gráfico)
+    ws_resumo.cell(row=linha_atual, column=1, value="Fornecedor").font = fonte_branca
+    ws_resumo.cell(row=linha_atual, column=1).fill = fill_cabecalho
+    ws_resumo.cell(row=linha_atual, column=2, value="Qtd Itens").font = fonte_branca
+    ws_resumo.cell(row=linha_atual, column=2).fill = fill_cabecalho
+    ws_resumo.cell(row=linha_atual, column=3, value="Total Comprometido (R$)").font = fonte_branca
+    ws_resumo.cell(row=linha_atual, column=3).fill = fill_cabecalho
+
+    fornecedores_dict = {}
+    for it in itens:
+        f = it.get("Fornecedor", "NÃO INFORMADO")
+        subt = float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0))
+        if f not in fornecedores_dict:
+            fornecedores_dict[f] = {"qtd": 0, "total": 0.0}
+        fornecedores_dict[f]["qtd"] += int(it.get("Qtd", 0))
+        fornecedores_dict[f]["total"] += subt
+
+    linha_inicio_graf = linha_atual + 1
+    for f_nome, f_dados in fornecedores_dict.items():
+        linha_atual += 1
+        c1 = ws_resumo.cell(row=linha_atual, column=1, value=f_nome)
+        c2 = ws_resumo.cell(row=linha_atual, column=2, value=f_dados["qtd"])
+        c3 = ws_resumo.cell(row=linha_atual, column=3, value=f_dados["total"])
+        c1.font = fonte_normal; c2.font = fonte_normal; c3.font = fonte_normal
+        c1.border = borda_fina; c2.border = borda_fina; c3.border = borda_fina
+        c2.alignment = Alignment(horizontal="center")
+        c3.number_format = "R$ #,##0.00"
+
+    linha_fim_graf = linha_atual
+
+    # Adicionando Gráfico de Barras se houver dados
+    if fornecedores_dict:
+        chart = BarChart()
+        chart.type = "col"
+        chart.style = 10
+        chart.title = "Distribuição de Recursos por Fornecedor (R$)"
+        chart.y_axis.title = "Total (R$)"
+        chart.x_axis.title = "Fornecedor"
+        chart.width = 16
+        chart.height = 9
+        
+        data_ref = Reference(ws_resumo, min_col=3, min_row=linha_inicio_graf - 1, max_row=linha_fim_graf)
+        cats_ref = Reference(ws_resumo, min_col=1, min_row=linha_inicio_graf, max_row=linha_fim_graf)
+        chart.add_data(data_ref, titles_from_data=True)
+        chart.set_categories(cats_ref)
+        chart.legend = None
+        ws_resumo.add_chart(chart, "E10")
+
+    # -------------------------------------------------------------
+    # ABA 2: DETALHAMENTO DE ITENS
+    # -------------------------------------------------------------
+    ws_itens = wb.create_sheet(title="Itens Detalhados")
+    ws_itens.views.sheetView[0].showGridLines = True
+    
+    cabecalhos_itens = ["Item", "Material / Descrição", "Qtd", "Valor Unitário", "Valor Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
+    for col_num, h_title in enumerate(cabecalhos_itens, 1):
+        cell = ws_itens.cell(row=1, column=col_num, value=h_title)
+        cell.font = fonte_branca
+        cell.fill = fill_cabecalho
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws_itens.row_dimensions[1].height = 25
+
+    for row_idx, it in enumerate(itens, start=2):
+        qtd = int(it.get("Qtd", 0))
+        v_unit = float(it.get("Valor Unitário", 0.0))
+        v_tot = qtd * v_unit
+        
+        ws_itens.cell(row=row_idx, column=1, value=it.get("Item")).alignment = Alignment(horizontal="center")
+        ws_itens.cell(row=row_idx, column=2, value=it.get("Nome"))
+        ws_itens.cell(row=row_idx, column=3, value=qtd).alignment = Alignment(horizontal="center")
+        
+        cel_unit = ws_itens.cell(row=row_idx, column=4, value=v_unit)
+        cel_unit.number_format = "R$ #,##0.00"
+        
+        cel_tot = ws_itens.cell(row=row_idx, column=5, value=v_tot)
+        cel_tot.number_format = "R$ #,##0.00"
+        
+        ws_itens.cell(row=row_idx, column=6, value=it.get("Situação")).alignment = Alignment(horizontal="center")
+        ws_itens.cell(row=row_idx, column=7, value=it.get("Fornecedor"))
+        ws_itens.cell(row=row_idx, column=8, value=formatar_cnpj(it.get("CNPJ", ""))).alignment = Alignment(horizontal="center")
+        ws_itens.cell(row=row_idx, column=9, value=it.get("Pregão")).alignment = Alignment(horizontal="center")
+        ws_itens.cell(row=row_idx, column=10, value=it.get("Ata")).alignment = Alignment(horizontal="center")
+        ws_itens.cell(row=row_idx, column=11, value=it.get("UASG")).alignment = Alignment(horizontal="center")
+        
+        for col_num in range(1, 12):
+            ws_itens.cell(row=row_idx, column=col_num).border = borda_fina
+
+    # Linha de Totalizador
+    ult_linha = len(itens) + 2
+    ws_itens.cell(row=ult_linha, column=2, value="TOTAL GERAL").font = fonte_negrito
+    cel_soma = ws_itens.cell(row=ult_linha, column=5, value=f"=SUM(E2:E{ult_linha-1})")
+    cel_soma.font = fonte_negrito
+    cel_soma.number_format = "R$ #,##0.00"
+
+    # Ajuste automático de largura de colunas
+    for ws in [ws_resumo, ws_itens]:
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                val = str(cell.value or "")
+                if len(val) > max_len and not cell.coordinate.startswith("E10"): # Evita conflito com o gráfico
+                    max_len = len(val)
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+def gerar_planilha_global_ano_completa(ano: str, banco_dados: dict, om_nome: str, secao_nome: str):
+    """Gera um arquivo Excel corporativo consolidando todas as NCs e itens do ano."""
+    wb = openpyxl.Workbook()
+    cor_cabecalho = "1F4E79"
+    cor_destaque = "2E75B6"
+    fonte_branca = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    fonte_titulo = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+    fonte_negrito = Font(name="Calibri", size=11, bold=True)
+    fonte_normal = Font(name="Calibri", size=11)
+    fill_cabecalho = PatternFill(start_color=cor_cabecalho, end_color=cor_cabecalho, fill_type="solid")
+    fill_destaque = PatternFill(start_color=cor_destaque, end_color=cor_destaque, fill_type="solid")
+    borda_fina = Border(
+        left=Side(style='thin', color='BFBFBF'), right=Side(style='thin', color='BFBFBF'),
+        top=Side(style='thin', color='BFBFBF'), bottom=Side(style='thin', color='BFBFBF')
+    )
+
+    # -------------------------------------------------------------
+    # ABA 1: RESUMO CONSOLIDADO POR NC
+    # -------------------------------------------------------------
+    ws_resumo = wb.active
+    ws_resumo.title = f"Consolidado {ano}"
+    ws_resumo.views.sheetView[0].showGridLines = True
+    
+    ws_resumo.merge_cells("A1:G1")
+    ws_resumo["A1"] = f"EXÉRCITO BRASILEIRO - {om_nome} - GESTÃO ORÇAMENTÁRIA {ano}"
+    ws_resumo["A1"].font = fonte_titulo
+    ws_resumo["A1"].fill = fill_cabecalho
+    ws_resumo["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws_resumo.row_dimensions[1].height = 35
+
+    cabecalhos_ncs = ["Nota de Crédito (NC)", "Plano Interno (PI)", "Natureza Despesa (ND)", "Valor Recebido (R$)", "Total Comprometido (R$)", "Saldo Disponível (R$)", "Itens"]
+    for col_idx, h_title in enumerate(cabecalhos_ncs, start=1):
+        cell = ws_resumo.cell(row=3, column=col_idx, value=h_title)
+        cell.font = fonte_branca
+        cell.fill = fill_destaque
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    ncs_do_ano = [nc for nc in banco_dados.keys() if nc != "CONFIG_REQUISICAO" and extrair_ano(nc) == ano]
+    
+    total_geral_rec = 0.0
+    total_geral_comp = 0.0
+    
+    row_nc = 4
+    for nc in ncs_do_ano:
+        dados_nc = banco_dados[nc]
+        v_rec = float(dados_nc.get("valor_recebido", 0.0))
+        itens_nc = dados_nc.get("itens", [])
+        v_gasto = sum(float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0)) for it in itens_nc)
+        v_saldo = v_rec - v_gasto
+        
+        total_geral_rec += v_rec
+        total_geral_comp += v_gasto
+        
+        ws_resumo.cell(row=row_nc, column=1, value=nc).alignment = Alignment(horizontal="center")
+        ws_resumo.cell(row=row_nc, column=2, value=dados_nc.get("pi", "")).alignment = Alignment(horizontal="center")
+        ws_resumo.cell(row=row_nc, column=3, value=dados_nc.get("nd", "")).alignment = Alignment(horizontal="center")
+        
+        c_rec = ws_resumo.cell(row=row_nc, column=4, value=v_rec)
+        c_rec.number_format = "R$ #,##0.00"
+        
+        c_gasto = ws_resumo.cell(row=row_nc, column=5, value=v_gasto)
+        c_gasto.number_format = "R$ #,##0.00"
+        
+        c_saldo = ws_resumo.cell(row=row_nc, column=6, value=v_saldo)
+        c_saldo.number_format = "R$ #,##0.00"
+        
+        ws_resumo.cell(row=row_nc, column=7, value=len(itens_nc)).alignment = Alignment(horizontal="center")
+        
+        for c in range(1, 8):
+            ws_resumo.cell(row=row_nc, column=c).border = borda_fina
+        row_nc += 1
+
+    # Totais Globais
+    ws_resumo.cell(row=row_nc, column=3, value="TOTAIS GERAIS:").font = fonte_negrito
+    c_tot_rec = ws_resumo.cell(row=row_nc, column=4, value=total_geral_rec)
+    c_tot_rec.font = fonte_negrito; c_tot_rec.number_format = "R$ #,##0.00"
+    c_tot_comp = ws_resumo.cell(row=row_nc, column=5, value=total_geral_comp)
+    c_tot_comp.font = fonte_negrito; c_tot_comp.number_format = "R$ #,##0.00"
+    c_tot_sal = ws_resumo.cell(row=row_nc, column=6, value=total_geral_rec - total_geral_comp)
+    c_tot_sal.font = fonte_negrito; c_tot_sal.number_format = "R$ #,##0.00"
+
+    # -------------------------------------------------------------
+    # ABA 2: INVENTÁRIO COMPLETO DE TODOS OS ITENS DO ANO
+    # -------------------------------------------------------------
+    ws_todos_itens = wb.create_sheet(title=f"Todos os Itens {ano}")
+    ws_todos_itens.views.sheetView[0].showGridLines = True
+    
+    cabecalhos_todos = ["NC de Origem", "PI", "ND", "Item", "Nomenclatura", "Qtd", "Valor Unitário", "Valor Total", "Situação", "Fornecedor", "CNPJ", "Pregão"]
+    for col_idx, h_title in enumerate(cabecalhos_todos, start=1):
+        cell = ws_todos_itens.cell(row=1, column=col_idx, value=h_title)
+        cell.font = fonte_branca
+        cell.fill = fill_cabecalho
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    row_it_global = 2
+    for nc in ncs_do_ano:
+        dados_nc = banco_dados[nc]
+        pi_nc = dados_nc.get("pi", "")
+        nd_nc = dados_nc.get("nd", "")
+        for it in dados_nc.get("itens", []):
+            qtd = int(it.get("Qtd", 0))
+            v_u = float(it.get("Valor Unitário", 0.0))
+            
+            ws_todos_itens.cell(row=row_it_global, column=1, value=nc).alignment = Alignment(horizontal="center")
+            ws_todos_itens.cell(row=row_it_global, column=2, value=pi_nc).alignment = Alignment(horizontal="center")
+            ws_todos_itens.cell(row=row_it_global, column=3, value=nd_nc).alignment = Alignment(horizontal="center")
+            ws_todos_itens.cell(row=row_it_global, column=4, value=it.get("Item")).alignment = Alignment(horizontal="center")
+            ws_todos_itens.cell(row=row_it_global, column=5, value=it.get("Nome"))
+            ws_todos_itens.cell(row=row_it_global, column=6, value=qtd).alignment = Alignment(horizontal="center")
+            
+            c_u = ws_todos_itens.cell(row=row_it_global, column=7, value=v_u)
+            c_u.number_format = "R$ #,##0.00"
+            c_t = ws_todos_itens.cell(row=row_it_global, column=8, value=qtd * v_u)
+            c_t.number_format = "R$ #,##0.00"
+            
+            ws_todos_itens.cell(row=row_it_global, column=9, value=it.get("Situação")).alignment = Alignment(horizontal="center")
+            ws_todos_itens.cell(row=row_it_global, column=10, value=it.get("Fornecedor"))
+            ws_todos_itens.cell(row=row_it_global, column=11, value=formatar_cnpj(it.get("CNPJ", ""))).alignment = Alignment(horizontal="center")
+            ws_todos_itens.cell(row=row_it_global, column=12, value=it.get("Pregão")).alignment = Alignment(horizontal="center")
+            
+            for c in range(1, 13):
+                ws_todos_itens.cell(row=row_it_global, column=c).border = borda_fina
+            row_it_global += 1
+
+    # Ajuste automático de largura
+    for ws in [ws_resumo, ws_todos_itens]:
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                val = str(cell.value or "")
+                if len(val) > max_len: max_len = len(val)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
 
 # =====================================================================
 # 3. TELA DE LOGIN E CADASTRO INICIAL (BLINDAGEM DE ACESSO COM HASH)
@@ -90,7 +421,6 @@ if st.session_state.usuario_logado is None:
                     if len(resposta.data) > 0:
                         usuario_db = resposta.data[0]
                         if checar_senha(senha_login, usuario_db.get("senha", "")):
-                            # Migração transparente de senha antiga em texto puro para hash
                             if usuario_db.get("senha") == senha_login:
                                 supabase.table("usuarios").update({"senha": hash_senha(senha_login)}).eq("id", usuario_login).execute()
                             
@@ -148,7 +478,7 @@ if st.session_state.usuario_logado is None:
                             if len(verifica_banco.data) == 0:
                                 supabase.table("dados").insert({"id": id_secao, "ncs": {}}).execute()
                                 
-                            st.success("✅ Conta de Fiscal criada com segurança criptográfica! Faça o login ao lado.")
+                            st.success("✅ Conta de Fiscal criada com sucesso! Faça o login ao lado.")
     
     st.markdown("---")
     st.markdown(
@@ -208,7 +538,6 @@ if "banco" not in st.session_state or st.session_state.get("secao_carregada") !=
 banco_dados = st.session_state.banco
 
 def salvar_dados(dados_para_salvar):
-    """Salva os dados com proteção de integridade contra sobreposição."""
     supabase.table("dados").update({"ncs": dados_para_salvar}).eq("id", id_banco).execute()
 
 st.sidebar.markdown("---")
@@ -229,7 +558,7 @@ with st.sidebar.expander("⚙️ Alterar Minha Senha"):
                 st.error("As senhas não coincidem.")
             else:
                 supabase.table("usuarios").update({"senha": hash_senha(nova_senha_input)}).eq("id", usuario_atual).execute()
-                st.success("✅ Senha criptografada e atualizada com sucesso!")
+                st.success("✅ Senha atualizada com sucesso!")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("Sair da Conta (Logout)", use_container_width=True):
@@ -411,38 +740,43 @@ with menu_cadastro:
             st.info("Cadastre uma Nota de Crédito (NC) para este ano primeiro.")
 
 # =====================================================================
-# ABA 2: VISUALIZAÇÃO, BUSCA, EXPORTAÇÃO E CONTROLE
+# ABA 2: VISUALIZAÇÃO, BUSCA DETALHADA E EXPORTAÇÃO EXECUTIVA
 # =====================================================================
 with menu_visualizacao:
     if ncs_do_ano:
         # -------------------------------------------------------------
-        # 🔍 RECURSO DE PESQUISA RÁPIDA DE MATERIAIS NO ANO INTEIRO
+        # 🔍 FILTRO DE PESQUISA INTELIGENTE COM DESTAQUE CLARO DA NC
         # -------------------------------------------------------------
-        with st.expander("🔍 Pesquisa Rápida de Materiais no Ano (Onde compramos isso?)", expanded=False):
-            termo_busca = st.text_input("Digite o nome do material, pregão, fornecedor ou CNPJ:").strip().lower()
+        with st.expander("🔍 Pesquisa Rápida de Materiais no Ano (Localizar Item e NC)", expanded=False):
+            termo_busca = st.text_input("Digite o nome do material, fornecedor, pregão ou CNPJ:").strip().lower()
             if termo_busca:
                 resultados_busca = []
                 for nc_chave in ncs_do_ano:
                     itens_nc = banco_dados[nc_chave].get("itens", [])
+                    pi_nc = banco_dados[nc_chave].get("pi", "S/PI")
+                    nd_nc = banco_dados[nc_chave].get("nd", "S/ND")
                     for it in itens_nc:
                         texto_completo = f"{it.get('Nome', '')} {it.get('Fornecedor', '')} {it.get('Pregão', '')} {it.get('CNPJ', '')}".lower()
                         if termo_busca in texto_completo:
+                            qtd_item = int(it.get("Qtd", 0))
+                            v_unit_item = float(it.get("Valor Unitário", 0.0))
                             resultados_busca.append({
-                                "NC": nc_chave,
+                                "NC Vinculada": nc_chave,
+                                "PI / ND": f"{pi_nc} / {nd_nc}",
                                 "Item": it.get("Item"),
                                 "Material": it.get("Nome"),
-                                "Qtd": it.get("Qtd"),
-                                "Valor Unitário": f"R$ {float(it.get('Valor Unitário', 0.0)):,.2f}",
-                                "Total": f"R$ {float(it.get('Total', 0.0)):,.2f}",
+                                "Qtd": qtd_item,
+                                "Valor Unitário": f"R$ {v_unit_item:,.2f}",
+                                "Valor Total": f"R$ {(qtd_item * v_unit_item):,.2f}",
                                 "Fornecedor": it.get("Fornecedor"),
-                                "Pregão": it.get("Pregão"),
+                                "Pregão": it.get("Pregão", "N/I"),
                                 "Situação": it.get("Situação")
                             })
                 if resultados_busca:
-                    st.success(f"Encontrado(s) {len(resultados_busca)} item(ns):")
+                    st.success(f"🎯 Encontrado(s) **{len(resultados_busca)}** registro(s). A coluna **NC Vinculada** indica a qual NC o item pertence:")
                     st.dataframe(pd.DataFrame(resultados_busca), use_container_width=True, hide_index=True)
                 else:
-                    st.info("Nenhum material encontrado com os termos pesquisados.")
+                    st.warning("Nenhum material encontrado com os termos digitados.")
 
         pis_disponiveis = list(set([banco_dados[nc].get("pi", "Não informado") for nc in ncs_do_ano if isinstance(banco_dados[nc], dict) and banco_dados[nc].get("pi", "Não informado").strip()]))
         opcoes_filtro_pi = ["TODOS OS PIs"] + sorted(pis_disponiveis)
@@ -496,15 +830,17 @@ with menu_visualizacao:
                     st.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
                 
                 # -------------------------------------------------------------
-                # 📥 BOTÃO DE EXPORTAÇÃO PARA EXCEL
+                # 📥 BOTÃO DE EXPORTAÇÃO PROFISSIONAL EM EXCEL (COM GRÁFICO)
                 # -------------------------------------------------------------
-                dados_excel, mime_tipo, extensao = gerar_download_excel(df_base_mestre)
+                st.write("")
+                excel_nc_bytes = gerar_planilha_nc_completa(nc_selecionada_vis, dados_nc, om_user, secao_ativa)
                 st.download_button(
-                    label=f"📥 Baixar Planilha da NC {nc_selecionada_vis} (Excel)",
-                    data=dados_excel,
-                    file_name=f"Controle_{om_user}_{nc_selecionada_vis}.{extensao}",
-                    mime=mime_tipo,
-                    use_container_width=False
+                    label=f"📥 Baixar Planilha Executiva da NC {nc_selecionada_vis} (Excel com Gráfico)",
+                    data=excel_nc_bytes,
+                    file_name=f"Relatorio_NC_{nc_selecionada_vis}_{om_user}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=False,
+                    type="secondary"
                 )
 
                 if not df_base_mestre.empty:
@@ -655,7 +991,6 @@ with menu_visualizacao:
                                     st.success("Dados salvos e atualizados!")
                                     st.rerun()
                             
-                            # Indicador visual para o Almoxarifado / Depósito
                             if info_forn.get("empenho"):
                                 st.success(f"📦 **Depósito Vinculado:** DIEx nº **{info_forn.get('diex', 'S/N')}** &nbsp;➔&nbsp; Nota de Empenho: **{info_forn.get('empenho')}**")
                             else:
@@ -694,7 +1029,6 @@ with menu_visualizacao:
                                 
                             total_geral_str = f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                             
-                            # Documento HTML formal (sem expor a NE na requisição prévia)
                             html_template = f"""
                             <html>
                             <head>
@@ -877,7 +1211,7 @@ with menu_visualizacao:
          st.info("Nenhuma NC cadastrada para este ano nesta seção.")
 
 # =====================================================================
-# ABA 3: VISÃO GLOBAL ANUAL
+# ABA 3: VISÃO GLOBAL ANUAL (COM RELATÓRIO EXCEL EXECUTIVO)
 # =====================================================================
 with menu_visao_global:
     
@@ -922,6 +1256,17 @@ with menu_visao_global:
                     })
                     
     if dados_anuais:
+        # Botão de Exportação Executiva Anual
+        planilha_anual_bytes = gerar_planilha_global_ano_completa(ano_selecionado, banco_dados, om_user, secao_ativa)
+        st.download_button(
+            label=f"📥 Baixar Relatório Anual Consolidado do Ano {ano_selecionado} (Excel)",
+            data=planilha_anual_bytes,
+            file_name=f"Relatorio_Anual_Geral_{ano_selecionado}_{om_user}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
+        )
+        st.write("")
+
         df_anual = pd.DataFrame(dados_anuais)
         df_agrupado = df_anual.groupby(["ND", "Situação"])["Valor Total"].sum().reset_index()
         
