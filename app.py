@@ -192,7 +192,6 @@ if st.sidebar.button("Sair da Conta (Logout)", use_container_width=True):
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📅 Filtro de Exercício")
 
-# Ocultando o dado interno de configuração para não aparecer na lista de anos
 anos_disponiveis = set(extrair_ano(nc) for nc in banco_dados.keys() if nc != "CONFIG_REQUISICAO")
 lista_anos = sorted(list(anos_disponiveis), reverse=True) if anos_disponiveis else ["2026"]
 ano_selecionado = st.sidebar.selectbox("Selecione o Ano de Referência:", lista_anos)
@@ -446,19 +445,23 @@ with menu_visualizacao:
                 st.subheader("📋 Planilhas de Acompanhamento Separadas por Fornecedor")
                 
                 # -------------------------------------------------------------
-                # CONFIGURAÇÃO DE TIMBRE E ASSINATURAS POR SEÇÃO
+                # CONFIGURAÇÃO DE TIMBRE E ASSINATURAS POR SEÇÃO (PRÉ-CADASTRO)
                 # -------------------------------------------------------------
                 config_req = banco_dados.get("CONFIG_REQUISICAO", {})
+                pre_cadastro_pendente = not bool(config_req)
                 
-                with st.expander("⚙️ Personalizar Cabeçalho e Assinaturas (Padrão da sua Seção)", expanded=not bool(config_req)):
+                if pre_cadastro_pendente:
+                    st.warning("⚠️ **Atenção:** O cabeçalho padrão da sua Seção ainda não foi configurado. Preencha os dados abaixo uma única vez para liberar a emissão padronizada de requisições.")
+                
+                with st.expander("⚙️ Personalizar Cabeçalho, Local e Assinaturas (Padrão da sua Seção)", expanded=pre_cadastro_pendente):
                     st.info("Preencha estes dados uma única vez. Eles ficarão salvos no banco de dados e padronizarão automaticamente todas as requisições impressas por esta Seção.")
                     with st.form("form_config_req"):
                         c1, c2 = st.columns(2)
                         with c1:
                             cfg_om = st.text_area("Nome da OM (Pode usar 2 linhas):", value=config_req.get("cabecalho_om", f"{om_user}\n(NOME HISTÓRICO DA OM)"))
                             cfg_ind = st.text_input("Indicativo do DIEx (Ex: CFGS/23ºBI):", value=config_req.get("indicativo_diex", f"SEÇÃO/{om_user}"))
-                            cfg_local = st.text_input("Local/Cidade (Ex: Blumenau-SC):", value=config_req.get("local_cidade", "Blumenau-SC"))
                             cfg_remetente = st.text_input("Remetente (Campo 'Do:'):", value=config_req.get("remetente_do", "Chefe da Seção"))
+                            cfg_cidade = st.text_input("Cidade/UF da OM (Ex: Blumenau-SC):", value=config_req.get("cidade_om", "Blumenau-SC"))
                         with c2:
                             cfg_ass_nome = st.text_input("Sua Assinatura (Ex: FLÁVIO - Cap):", value=config_req.get("assinatura_nome", "NOME - Posto"))
                             cfg_ass_func = st.text_input("Função de quem Assina:", value=config_req.get("assinatura_funcao", "Chefe da Seção"))
@@ -469,8 +472,8 @@ with menu_visualizacao:
                             banco_dados["CONFIG_REQUISICAO"] = {
                                 "cabecalho_om": cfg_om,
                                 "indicativo_diex": cfg_ind,
-                                "local_cidade": cfg_local,
                                 "remetente_do": cfg_remetente,
+                                "cidade_om": cfg_cidade,
                                 "assinatura_nome": cfg_ass_nome,
                                 "assinatura_funcao": cfg_ass_func,
                                 "od_nome": cfg_od_nome,
@@ -486,8 +489,8 @@ with menu_visualizacao:
 
                 html_cabecalho_om = format_html_var(config_req.get("cabecalho_om"), f"{om_user}<br>(NOME HISTÓRICO)").replace("\n", "<br>")
                 html_ind = format_html_var(config_req.get("indicativo_diex"), f"SEÇÃO/{om_user}")
-                html_local = format_html_var(config_req.get("local_cidade"), "Blumenau-SC")
                 html_rem = format_html_var(config_req.get("remetente_do"), "Função do Remetente")
+                html_cidade = format_html_var(config_req.get("cidade_om"), "Cidade-UF")
                 html_ass_nome = format_html_var(config_req.get("assinatura_nome"), "NOME DO MILITAR - Posto")
                 html_ass_func = format_html_var(config_req.get("assinatura_funcao"), "Função do Remetente")
                 html_od_nome = format_html_var(config_req.get("od_nome"), "NOME DO OD - Posto")
@@ -520,7 +523,7 @@ with menu_visualizacao:
                         df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
                         
                         with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Preencher Documento)", expanded=False):
-                            st.info("💡 Preencha os dados e clique em Salvar. O documento carregará automaticamente o timbre da sua seção.")
+                            st.info("💡 Preencha os dados e clique em Salvar. O documento carregará automaticamente o timbre da sua seção e salvará o número do EB desta requisição.")
                             
                             doc_info = banco_dados[nc_selecionada_vis].get("doc_info", {})
                             info_forn = doc_info.get(forn, {"diex": "", "eb": "", "data": "", "assunto": "", "empenho": ""})
@@ -529,7 +532,7 @@ with menu_visualizacao:
                                 col_req1, col_req2 = st.columns(2)
                                 with col_req1:
                                     diex_val = st.text_input("Nº do DIEx:", value=info_forn.get("diex", ""))
-                                    eb_val = st.text_input("Número do EB (Processo):", value=info_forn.get("eb", ""))
+                                    eb_val = st.text_input("Nº do EB (Processo/Documento):", value=info_forn.get("eb", ""))
                                     data_val = st.text_input("Data (Ex: 08 de setembro de 2026):", value=info_forn.get("data", ""))
                                 with col_req2:
                                     assunto_val = st.text_input("Assunto (Ex: materiais de construção):", value=info_forn.get("assunto", ""))
@@ -541,7 +544,11 @@ with menu_visualizacao:
                                     if "doc_info" not in banco_dados[nc_selecionada_vis]:
                                         banco_dados[nc_selecionada_vis]["doc_info"] = {}
                                     banco_dados[nc_selecionada_vis]["doc_info"][forn] = {
-                                        "diex": diex_val, "eb": eb_val, "data": data_val, "assunto": assunto_val, "empenho": empenho_val
+                                        "diex": diex_val,
+                                        "eb": eb_val,
+                                        "data": data_val,
+                                        "assunto": assunto_val,
+                                        "empenho": empenho_val
                                     }
                                     salvar_dados(banco_dados)
                                     st.session_state.banco = banco_dados
@@ -553,6 +560,7 @@ with menu_visualizacao:
                             data_display = info_forn.get("data", "") if info_forn.get("data", "") else "____ de _______________ de 2026"
                             assunto_display = info_forn.get("assunto", "") if info_forn.get("assunto", "") else "______________________"
                             empenho_display = info_forn.get("empenho", "") if info_forn.get("empenho", "") else "______________________"
+                            local_display = html_cidade
                             
                             linhas_tabela_html = ""
                             soma_total_forn = 0.0
@@ -649,7 +657,7 @@ with menu_visualizacao:
                                 <table style="width: 100%; border: none;">
                                     <tr style="border: none;">
                                         <td style="border: none; text-align: left; padding: 0;">DIEx nº {diex_display} - {html_ind}<br>EB: {eb_display}</td>
-                                        <td style="border: none; text-align: right; padding: 0;">{html_local}, {data_display}.</td>
+                                        <td style="border: none; text-align: right; padding: 0;">{local_display}, {data_display}.</td>
                                     </tr>
                                 </table>
                                 <br>
