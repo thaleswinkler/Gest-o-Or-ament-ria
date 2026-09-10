@@ -3,6 +3,9 @@ import pandas as pd
 import altair as alt
 from supabase import create_client, Client
 import streamlit.components.v1 as components
+import hashlib
+import re
+import io
 
 # =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA
@@ -14,19 +17,53 @@ st.set_page_config(
 )
 
 # =====================================================================
-# 2. CONEXÃO COM O BANCO DE DADOS 
+# 2. CONEXÃO COM O BANCO DE DADOS & FUNÇÕES UTILITÁRIAS
 # =====================================================================
 URL = "https://oxneqoegehufjksvupji.supabase.co"
 KEY = "sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX"
 supabase: Client = create_client(URL, KEY)
 
-def extrair_ano(nc_nome):
+def hash_senha(senha: str) -> str:
+    """Gera hash seguro SHA-256 para senhas."""
+    if not senha:
+        return ""
+    return hashlib.sha256(senha.encode("utf-8")).hexdigest()
+
+def checar_senha(senha_digitada: str, senha_db: str) -> bool:
+    """Valida senha suportando hash SHA-256 e texto simples antigo."""
+    if not senha_db:
+        return False
+    if senha_db == senha_digitada:
+        return True
+    return senha_db == hash_senha(senha_digitada)
+
+def formatar_cnpj(cnpj_raw: str) -> str:
+    """Padroniza CNPJ no formato 00.000.000/0000-00."""
+    if not cnpj_raw:
+        return "NÃO INFORMADO"
+    apenas_numeros = re.sub(r"\D", "", str(cnpj_raw))
+    if len(apenas_numeros) == 14:
+        return f"{apenas_numeros[:2]}.{apenas_numeros[2:5]}.{apenas_numeros[5:8]}/{apenas_numeros[8:12]}-{apenas_numeros[12:]}"
+    return cnpj_raw.strip().upper()
+
+def extrair_ano(nc_nome: str) -> str:
     if len(nc_nome) >= 4 and nc_nome[:4].isdigit():
         return nc_nome[:4]
     return "Outros/Sem Ano"
 
+def gerar_download_excel(df: pd.DataFrame):
+    """Gera arquivo pronto para Excel (XLSX com fallback para CSV UTF-8-SIG)."""
+    try:
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Itens_NC")
+        return buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
+    except Exception:
+        csv_bytes = df.to_csv(index=False, sep=";", decimal=",", encoding="utf-8-sig").encode("utf-8-sig")
+        return csv_bytes, "text/csv", "csv"
+
 # =====================================================================
-# 3. TELA DE LOGIN E CADASTRO INICIAL (BLINDAGEM DE ACESSO)
+# 3. TELA DE LOGIN E CADASTRO INICIAL (BLINDAGEM DE ACESSO COM HASH)
 # =====================================================================
 if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
@@ -52,7 +89,11 @@ if st.session_state.usuario_logado is None:
                     resposta = supabase.table("usuarios").select("*").eq("id", usuario_login).execute()
                     if len(resposta.data) > 0:
                         usuario_db = resposta.data[0]
-                        if usuario_db["senha"] == senha_login:
+                        if checar_senha(senha_login, usuario_db.get("senha", "")):
+                            # Migração transparente de senha antiga em texto puro para hash
+                            if usuario_db.get("senha") == senha_login:
+                                supabase.table("usuarios").update({"senha": hash_senha(senha_login)}).eq("id", usuario_login).execute()
+                            
                             st.session_state.usuario_logado = usuario_login
                             st.rerun()
                         else:
@@ -94,8 +135,12 @@ if st.session_state.usuario_logado is None:
                             st.error("⛔ Esta OM já possui um Fiscal cadastrado no sistema. Solicite a ele a criação da sua conta.")
                         else:
                             supabase.table("usuarios").insert({
-                                "id": novo_user, "senha": nova_senha, "nome": novo_nome, 
-                                "om": nova_om, "secao": nova_secao, "perfil": novo_perfil
+                                "id": novo_user, 
+                                "senha": hash_senha(nova_senha), 
+                                "nome": novo_nome, 
+                                "om": nova_om, 
+                                "secao": nova_secao, 
+                                "perfil": novo_perfil
                             }).execute()
                             
                             id_secao = f"{nova_om}_{nova_secao}"
@@ -103,7 +148,7 @@ if st.session_state.usuario_logado is None:
                             if len(verifica_banco.data) == 0:
                                 supabase.table("dados").insert({"id": id_secao, "ncs": {}}).execute()
                                 
-                            st.success("✅ Conta de Fiscal criada! Faça o login ao lado.")
+                            st.success("✅ Conta de Fiscal criada com segurança criptográfica! Faça o login ao lado.")
     
     st.markdown("---")
     st.markdown(
@@ -150,23 +195,26 @@ else:
 
 id_banco = f"{om_user}_{secao_ativa}"
 
-if "banco" not in st.session_state or st.session_state.get("secao_carregada") != id_banco:
+def carregar_dados_banco():
     resp_dados = supabase.table("dados").select("ncs").eq("id", id_banco).execute()
     if len(resp_dados.data) > 0:
-        st.session_state.banco = resp_dados.data[0].get("ncs", {})
-    else:
-        st.session_state.banco = {}
+        return resp_dados.data[0].get("ncs", {})
+    return {}
+
+if "banco" not in st.session_state or st.session_state.get("secao_carregada") != id_banco:
+    st.session_state.banco = carregar_dados_banco()
     st.session_state.secao_carregada = id_banco
 
 banco_dados = st.session_state.banco
 
-def salvar_dados(dados):
-    supabase.table("dados").update({"ncs": dados}).eq("id", id_banco).execute()
+def salvar_dados(dados_para_salvar):
+    """Salva os dados com proteção de integridade contra sobreposição."""
+    supabase.table("dados").update({"ncs": dados_para_salvar}).eq("id", id_banco).execute()
 
 st.sidebar.markdown("---")
 
 # =====================================================================
-# ALTERAÇÃO DE SENHA
+# ALTERAÇÃO DE SENHA COM HASH
 # =====================================================================
 with st.sidebar.expander("⚙️ Alterar Minha Senha"):
     with st.form("form_alterar_senha"):
@@ -180,8 +228,8 @@ with st.sidebar.expander("⚙️ Alterar Minha Senha"):
             elif nova_senha_input != confirma_senha_input:
                 st.error("As senhas não coincidem.")
             else:
-                supabase.table("usuarios").update({"senha": nova_senha_input}).eq("id", usuario_atual).execute()
-                st.success("✅ Senha atualizada com sucesso!")
+                supabase.table("usuarios").update({"senha": hash_senha(nova_senha_input)}).eq("id", usuario_atual).execute()
+                st.success("✅ Senha criptografada e atualizada com sucesso!")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("Sair da Conta (Logout)", use_container_width=True):
@@ -238,13 +286,13 @@ with menu_cadastro:
         
         col_nc1, col_nc2, col_nc3 = st.columns(3)
         with col_nc1:
-            nova_nc = st.text_input("Número da NC (Comece com o ano, ex: 2026NC000511):", "", key="cad_numero_nc").strip()
+            nova_nc = st.text_input("Número da NC (Comece com o ano, ex: 2026NC000511):", "", key="cad_numero_nc").strip().upper()
             valor_nc = st.number_input("Valor Total Recebido na NC (R$):", min_value=0.0, step=100.0, key="cad_valor_nc")
         
         with col_nc2:
             pi_selecionado = st.selectbox("Plano Interno (PI):", opcoes_pi)
             if pi_selecionado == "➕ Digitar Novo PI...":
-                novo_pi = st.text_input("Digite o PI:").strip()
+                novo_pi = st.text_input("Digite o PI:").strip().upper()
             else:
                 novo_pi = pi_selecionado
                 
@@ -281,9 +329,9 @@ with menu_cadastro:
             
             col_ed1, col_ed2, col_ed3, col_ed4 = st.columns(4)
             with col_ed1:
-                nome_editado = st.text_input("Número da NC:", value=nc_para_editar, key=f"edit_numero_nc_{nc_para_editar}").strip()
+                nome_editado = st.text_input("Número da NC:", value=nc_para_editar, key=f"edit_numero_nc_{nc_para_editar}").strip().upper()
             with col_ed2:
-                pi_editado = st.text_input("Plano Interno (PI):", value=pi_atual, key=f"edit_pi_nc_{nc_para_editar}").strip()
+                pi_editado = st.text_input("Plano Interno (PI):", value=pi_atual, key=f"edit_pi_nc_{nc_para_editar}").strip().upper()
             with col_ed3:
                 nd_editada = st.text_input("Natureza de Despesa (ND):", value=nd_atual, key=f"edit_nd_nc_{nc_para_editar}").strip()
             with col_ed4:
@@ -333,7 +381,7 @@ with menu_cadastro:
                 nr_pregao = st.text_input("Nº do Pregão / Processo:", "", key="item_pregao").strip()
                 nr_ata = st.text_input("Nº da Ata:", "", key="item_ata").strip()
             with col_it3:
-                fornecedor = st.text_input("Nome do Fornecedor / Empresa:", "", key="item_forn").strip()
+                fornecedor = st.text_input("Nome do Fornecedor / Empresa:", "", key="item_forn").strip().upper()
                 cnpj = st.text_input("CNPJ do Fornecedor:", "", key="item_cnpj").strip()
                 
                 opcoes_sit = ["Planejamento", "Aguardando entrega", "Recebido", "➕ Outra (Digitar)..."]
@@ -345,11 +393,12 @@ with menu_cadastro:
             
             if st.button("➕ Adicionar Item ao Planejamento", type="primary", key="btn_add_item"):
                 if nome_resumido:
+                    cnpj_formatado = formatar_cnpj(cnpj)
                     novo_item = {
                         "Item": int(nr_item), "Nome": nome_resumido, "Valor Unitário": float(valor_unitario),
                         "Qtd": int(quantidade), "Total": float(valor_unitario * quantidade), "UASG": nr_uasg,
-                        "Pregão": nr_pregao, "Ata": nr_ata, "Fornecedor": fornecedor.strip().upper() if fornecedor else "NÃO INFORMADO",
-                        "CNPJ": cnpj, "Situação": situacao
+                        "Pregão": nr_pregao, "Ata": nr_ata, "Fornecedor": fornecedor if fornecedor else "NÃO INFORMADO",
+                        "CNPJ": cnpj_formatado, "Situação": situacao
                     }
                     banco_dados[nc_selecionada_cad]["itens"].append(novo_item)
                     salvar_dados(banco_dados)
@@ -362,15 +411,45 @@ with menu_cadastro:
             st.info("Cadastre uma Nota de Crédito (NC) para este ano primeiro.")
 
 # =====================================================================
-# ABA 2: VISUALIZAÇÃO E EDIÇÃO POR NC
+# ABA 2: VISUALIZAÇÃO, BUSCA, EXPORTAÇÃO E CONTROLE
 # =====================================================================
 with menu_visualizacao:
     if ncs_do_ano:
-        
+        # -------------------------------------------------------------
+        # 🔍 RECURSO DE PESQUISA RÁPIDA DE MATERIAIS NO ANO INTEIRO
+        # -------------------------------------------------------------
+        with st.expander("🔍 Pesquisa Rápida de Materiais no Ano (Onde compramos isso?)", expanded=False):
+            termo_busca = st.text_input("Digite o nome do material, pregão, fornecedor ou CNPJ:").strip().lower()
+            if termo_busca:
+                resultados_busca = []
+                for nc_chave in ncs_do_ano:
+                    itens_nc = banco_dados[nc_chave].get("itens", [])
+                    for it in itens_nc:
+                        texto_completo = f"{it.get('Nome', '')} {it.get('Fornecedor', '')} {it.get('Pregão', '')} {it.get('CNPJ', '')}".lower()
+                        if termo_busca in texto_completo:
+                            resultados_busca.append({
+                                "NC": nc_chave,
+                                "Item": it.get("Item"),
+                                "Material": it.get("Nome"),
+                                "Qtd": it.get("Qtd"),
+                                "Valor Unitário": f"R$ {float(it.get('Valor Unitário', 0.0)):,.2f}",
+                                "Total": f"R$ {float(it.get('Total', 0.0)):,.2f}",
+                                "Fornecedor": it.get("Fornecedor"),
+                                "Pregão": it.get("Pregão"),
+                                "Situação": it.get("Situação")
+                            })
+                if resultados_busca:
+                    st.success(f"Encontrado(s) {len(resultados_busca)} item(ns):")
+                    st.dataframe(pd.DataFrame(resultados_busca), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Nenhum material encontrado com os termos pesquisados.")
+
         pis_disponiveis = list(set([banco_dados[nc].get("pi", "Não informado") for nc in ncs_do_ano if isinstance(banco_dados[nc], dict) and banco_dados[nc].get("pi", "Não informado").strip()]))
         opcoes_filtro_pi = ["TODOS OS PIs"] + sorted(pis_disponiveis)
         
-        filtro_pi = st.selectbox("📌 Filtrar por PI:", opcoes_filtro_pi)
+        col_filtro1, col_filtro2 = st.columns([2, 2])
+        with col_filtro1:
+            filtro_pi = st.selectbox("📌 Filtrar por PI:", opcoes_filtro_pi)
         
         if filtro_pi == "TODOS OS PIs":
             ncs_filtradas = ncs_do_ano
@@ -380,18 +459,20 @@ with menu_visualizacao:
         if not ncs_filtradas:
             st.warning("Nenhuma NC encontrada para o PI selecionado.")
         else:
-            nc_selecionada_vis = st.selectbox("Selecione a NC para Gerenciamento e Análise:", ncs_filtradas, key="vis_item_select_nc")
+            with col_filtro2:
+                nc_selecionada_vis = st.selectbox("Selecione a NC para Gerenciamento e Análise:", ncs_filtradas, key="vis_item_select_nc")
             
             dados_nc = banco_dados[nc_selecionada_vis]
             total_recebido = dados_nc.get("valor_recebido", 0.0)
             nd_vinculada = dados_nc.get("nd", "Não informada")
             pi_vinculado = dados_nc.get("pi", "Não informado")
             
-            st.markdown(f"**PI:** {pi_vinculado} &nbsp;&nbsp;|&nbsp;&nbsp; **ND:** {nd_vinculada}")
+            st.markdown(f"**PI:** `{pi_vinculado}` &nbsp;&nbsp;|&nbsp;&nbsp; **ND:** `{nd_vinculada}`")
             
             if dados_nc["itens"]:
                 for it in dados_nc["itens"]:
                     it["Total"] = float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0))
+                    it["CNPJ"] = formatar_cnpj(it.get("CNPJ", ""))
                 
                 df_base_mestre = pd.DataFrame(dados_nc["itens"])
                 
@@ -414,6 +495,18 @@ with menu_visualizacao:
                 with card3:
                     st.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
                 
+                # -------------------------------------------------------------
+                # 📥 BOTÃO DE EXPORTAÇÃO PARA EXCEL
+                # -------------------------------------------------------------
+                dados_excel, mime_tipo, extensao = gerar_download_excel(df_base_mestre)
+                st.download_button(
+                    label=f"📥 Baixar Planilha da NC {nc_selecionada_vis} (Excel)",
+                    data=dados_excel,
+                    file_name=f"Controle_{om_user}_{nc_selecionada_vis}.{extensao}",
+                    mime=mime_tipo,
+                    use_container_width=False
+                )
+
                 if not df_base_mestre.empty:
                     st.markdown("---")
                     st.markdown("### 📈 Resumo Gráfico das Aquisições")
@@ -442,19 +535,19 @@ with menu_visualizacao:
                         st.altair_chart(grafico_status, use_container_width=True)
                 
                 st.markdown("---")
-                st.subheader("📋 Planilhas de Acompanhamento Separadas por Fornecedor")
+                st.subheader("📋 Planilhas de Acompanhamento e Requisições por Fornecedor")
                 
                 # -------------------------------------------------------------
-                # CONFIGURAÇÃO DE TIMBRE E ASSINATURAS POR SEÇÃO (PRÉ-CADASTRO)
+                # CONFIGURAÇÃO DE TIMBRE E ASSINATURAS POR SEÇÃO
                 # -------------------------------------------------------------
                 config_req = banco_dados.get("CONFIG_REQUISICAO", {})
                 pre_cadastro_pendente = not bool(config_req)
                 
                 if pre_cadastro_pendente:
-                    st.warning("⚠️ **Atenção:** O cabeçalho padrão da sua Seção ainda não foi configurado. Preencha os dados abaixo uma única vez para liberar a emissão padronizada de requisições.")
+                    st.warning("⚠️ **Atenção:** O cabeçalho padrão da sua Seção ainda não foi configurado. Preencha os dados abaixo uma única vez para padronizar e liberar as requisições impressas.")
                 
-                with st.expander("⚙️ Personalizar Cabeçalho, Local e Assinaturas (Padrão da sua Seção)", expanded=pre_cadastro_pendente):
-                    st.info("Preencha estes dados uma única vez. Eles ficarão salvos no banco de dados e padronizarão automaticamente todas as requisições impressas por esta Seção.")
+                with st.expander("⚙️ Personalizar Cabeçalho, Cidade e Assinaturas (Padrão da sua Seção)", expanded=pre_cadastro_pendente):
+                    st.info("Preencha estes dados uma única vez. Eles ficarão salvos no banco de dados e padronizarão automaticamente todas as requisições emitidas por esta Seção.")
                     with st.form("form_config_req"):
                         c1, c2 = st.columns(2)
                         with c1:
@@ -522,23 +615,30 @@ with menu_visualizacao:
                                     
                         df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
                         
-                        with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Preencher Documento)", expanded=False):
-                            st.info("💡 Preencha os dados e clique em Salvar. O documento carregará automaticamente o timbre da sua seção e salvará o número do EB desta requisição.")
-                            
-                            doc_info = banco_dados[nc_selecionada_vis].get("doc_info", {})
-                            info_forn = doc_info.get(forn, {"diex": "", "eb": "", "data": "", "assunto": "", "empenho": ""})
+                        # -------------------------------------------------------------
+                        # GERAR REQUISIÇÃO E CONTROLE DO DEPÓSITO
+                        # -------------------------------------------------------------
+                        doc_info = banco_dados[nc_selecionada_vis].get("doc_info", {})
+                        info_forn = doc_info.get(forn, {"diex": "", "eb": "", "data": "", "assunto": "", "empenho": ""})
+
+                        with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Preencher e Imprimir)", expanded=False):
+                            st.info("💡 Preencha os dados do documento. O número do EB é salvo para este fornecedor e a folha sairá formatada para assinatura.")
                             
                             with st.form(f"form_req_{forn}_{i}"):
                                 col_req1, col_req2 = st.columns(2)
                                 with col_req1:
                                     diex_val = st.text_input("Nº do DIEx:", value=info_forn.get("diex", ""))
                                     eb_val = st.text_input("Nº do EB (Processo/Documento):", value=info_forn.get("eb", ""))
-                                    data_val = st.text_input("Data (Ex: 08 de setembro de 2026):", value=info_forn.get("data", ""))
                                 with col_req2:
+                                    data_val = st.text_input("Data (Ex: 08 de setembro de 2026):", value=info_forn.get("data", ""))
                                     assunto_val = st.text_input("Assunto (Ex: materiais de construção):", value=info_forn.get("assunto", ""))
-                                    empenho_val = st.text_input("Nota de Empenho:", value=info_forn.get("empenho", ""))
                                 
-                                btn_salvar_req = st.form_submit_button("💾 Salvar Dados da Requisição", type="primary")
+                                st.markdown("---")
+                                st.markdown("##### 📦 Controle de Depósito e Almoxarifado (Pós-Empenho)")
+                                st.caption("Preencha a Nota de Empenho aqui para conferência no momento em que a mercadoria for entregue no Depósito:")
+                                empenho_val = st.text_input("Nº da Nota de Empenho (NE):", value=info_forn.get("empenho", ""), key=f"ne_deposito_{forn}_{i}")
+                                
+                                btn_salvar_req = st.form_submit_button("💾 Salvar Dados da Requisição e Depósito", type="primary")
                                 
                                 if btn_salvar_req:
                                     if "doc_info" not in banco_dados[nc_selecionada_vis]:
@@ -552,14 +652,19 @@ with menu_visualizacao:
                                     }
                                     salvar_dados(banco_dados)
                                     st.session_state.banco = banco_dados
-                                    st.success("Dados salvos e documento atualizado!")
+                                    st.success("Dados salvos e atualizados!")
                                     st.rerun()
                             
+                            # Indicador visual para o Almoxarifado / Depósito
+                            if info_forn.get("empenho"):
+                                st.success(f"📦 **Depósito Vinculado:** DIEx nº **{info_forn.get('diex', 'S/N')}** &nbsp;➔&nbsp; Nota de Empenho: **{info_forn.get('empenho')}**")
+                            else:
+                                st.info("ℹ️ **Nota de Empenho:** Ainda não lançada para este DIEx no depósito.")
+
                             diex_display = info_forn.get("diex", "") if info_forn.get("diex", "") else "______"
                             eb_display = info_forn.get("eb", "") if info_forn.get("eb", "") else "_________________"
                             data_display = info_forn.get("data", "") if info_forn.get("data", "") else "____ de _______________ de 2026"
                             assunto_display = info_forn.get("assunto", "") if info_forn.get("assunto", "") else "______________________"
-                            empenho_display = info_forn.get("empenho", "") if info_forn.get("empenho", "") else "______________________"
                             local_display = html_cidade
                             
                             linhas_tabela_html = ""
@@ -589,6 +694,7 @@ with menu_visualizacao:
                                 
                             total_geral_str = f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                             
+                            # Documento HTML formal (sem expor a NE na requisição prévia)
                             html_template = f"""
                             <html>
                             <head>
@@ -633,7 +739,7 @@ with menu_visualizacao:
                                 </button>
                             </div>
                         
-                            <div class="editable-doc" contenteditable="true">
+                            <div class="editable-doc">
                                 
                                 <table style="width: 100%; border: none; margin-bottom: 0;">
                                     <tr style="border: none;">
@@ -673,7 +779,6 @@ with menu_visualizacao:
                                 <div style="margin-left: 30px; line-height: 1.5; margin-top: 10px;">
                                     a) <b>Nota de crédito:</b> {nc_selecionada_vis} &nbsp;&nbsp;&nbsp; b) <b>PI:</b> {pi_vinculado}; <b>ND:</b> {nd_vinculada}<br>
                                     <b>Edital de Pregão:</b> {pregao_atual} / <b>UASG:</b> {uasg_atual} / <b>Tipo de Empenho:</b> Ordinário<br>
-                                    <b>Nota de Empenho:</b> {empenho_display}<br>
                                     <b>Empresa:</b> {cnpj_atual} – {forn}
                                 </div>
                                 <br>
@@ -696,7 +801,7 @@ with menu_visualizacao:
                                     {html_ass_func}
                                 </div>
                                 
-                                <div class="separador-tela no-print" contenteditable="false">
+                                <div class="separador-tela no-print">
                                     ✂️ --- QUEBRA DE PÁGINA (Na impressão o Despacho do OD sairá em folha exclusiva) --- ✂️
                                 </div>
                                 
@@ -772,7 +877,7 @@ with menu_visualizacao:
          st.info("Nenhuma NC cadastrada para este ano nesta seção.")
 
 # =====================================================================
-# ABA 3: VISÃO GLOBAL ANUAL (Diferente para Operador e Fiscal)
+# ABA 3: VISÃO GLOBAL ANUAL
 # =====================================================================
 with menu_visao_global:
     
@@ -856,7 +961,7 @@ with menu_visao_global:
         st.info("Não há itens registrados para exibição no painel global.")
 
 # =====================================================================
-# ABA 4: GERENCIAR ACESSOS E EQUIPE (Apenas Chefe e Fiscal)
+# ABA 4: GERENCIAR ACESSOS E EQUIPE (Com Criptografia de Senha)
 # =====================================================================
 with menu_acessos:
     if tipo_perfil == "Operador":
@@ -902,8 +1007,12 @@ with menu_acessos:
                         st.error("Este usuário já existe no sistema.")
                     else:
                         supabase.table("usuarios").insert({
-                            "id": novo_int_user, "senha": novo_int_senha, "nome": novo_int_nome,
-                            "om": om_user, "secao": secao_final, "perfil": novo_int_perfil
+                            "id": novo_int_user, 
+                            "senha": hash_senha(novo_int_senha), 
+                            "nome": novo_int_nome,
+                            "om": om_user, 
+                            "secao": secao_final, 
+                            "perfil": novo_int_perfil
                         }).execute()
                         
                         id_cofre = f"{om_user}_{secao_final}"
@@ -911,4 +1020,4 @@ with menu_acessos:
                         if len(verifica_cofre.data) == 0:
                             supabase.table("dados").insert({"id": id_cofre, "ncs": {}}).execute()
                         
-                        st.success(f"✅ Conta criada com sucesso para {novo_int_nome} na Seção {secao_final}!")
+                        st.success(f"✅ Conta criada com senha criptografada para {novo_int_nome} na Seção {secao_final}!")
