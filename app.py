@@ -1,3 +1,15 @@
+import sys
+import asyncio
+import warnings
+
+warnings.filterwarnings("ignore")
+
+if sys.platform == 'win32':
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
+
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -6,23 +18,45 @@ import streamlit.components.v1 as components
 import hashlib
 import re
 import io
+import datetime
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from typing import Tuple, Optional, List, Dict
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA
 # =====================================================================
 st.set_page_config(
-    page_title="Gerenciador de Recursos",
+    page_title="Gerenciador de Recursos & Pregões",
     page_icon="💰",
     layout="wide"
 )
 
 # =====================================================================
-# 2. CONEXÃO COM O BANCO DE DADOS & FUNÇÕES UTILITÁRIAS
+# 2. CONSTANTES E CONEXÃO SUPABASE
 # =====================================================================
 URL = "https://oxneqoegehufjksvupji.supabase.co"
 KEY = "sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX"
 supabase: Client = create_client(URL, KEY)
 
+SIASG_BASE = "https://www2.comprasnet.gov.br/siasgnet-atasrp/public"
+URL_PESQUISA_SIASG = f"{SIASG_BASE}/pesquisarLicitacaoSRP.do"
+URL_ITENS_SIASG = f"{SIASG_BASE}/pesquisarItemSRP.do"
+BASE_CONTRATOS = "https://contratos.sistema.gov.br"
+
+HEADERS_HTTP = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
+}
+
+# =====================================================================
+# 3. FUNÇÕES UTILITÁRIAS DO SISTEMA
+# =====================================================================
 def hash_senha(senha: str) -> str:
     """Gera hash seguro SHA-256 para senhas."""
     if not senha:
@@ -52,127 +86,498 @@ def extrair_ano(nc_nome: str) -> str:
     return "Outros/Sem Ano"
 
 # =====================================================================
-# GERADORES DE PLANILHAS (BLINDADOS CONTRA AUSÊNCIA DE OPENPYXL)
+# 4. MÓDULO HTTP & RASTREAMENTO SIASG / CONTRATOS.GOV.BR
+# =====================================================================
+@st.cache_resource
+def get_http_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS", "POST"]
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+@st.cache_data(show_spinner=False)
+def baixar_arquivo_pdf(pdf_url: str) -> Optional[bytes]:
+    if not pdf_url:
+        return None
+    session = get_http_session()
+    try:
+        r = session.get(pdf_url.strip(), headers=HEADERS_HTTP, timeout=25)
+        if r.ok and len(r.content) > 1000:
+            return r.content
+    except Exception:
+        pass
+    return None
+
+def iniciar_sessao_siasg(session: requests.Session) -> None:
+    try:
+        session.get(f"{URL_PESQUISA_SIASG}?method=iniciar", headers=HEADERS_HTTP, verify=False, timeout=12)
+    except Exception:
+        pass
+
+def obter_id_unidade_contratos(session: requests.Session, uasg: str) -> Optional[int]:
+    uasg_clean = uasg.strip()
+    if 'cache_unidades' not in st.session_state:
+        st.session_state['cache_unidades'] = {}
+    if uasg_clean in st.session_state['cache_unidades']:
+        return st.session_state['cache_unidades'][uasg_clean]
+
+    try:
+        url = f"{BASE_CONTRATOS}/arp/ajax-unidade-options?q={uasg_clean}"
+        res = session.get(url, headers=HEADERS_HTTP, timeout=10)
+        if res.ok:
+            data = res.json()
+            if isinstance(data, list) and len(data) > 0:
+                match = next((x for x in data if uasg_clean in x.get('nome', '')), data[0])
+                uid = match.get('id')
+                st.session_state['cache_unidades'][uasg_clean] = uid
+                return uid
+    except Exception:
+        pass
+    return None
+
+def buscar_atas_contratos(session: requests.Session, uasg: str, num_compra: str, ano_compra: str) -> List[Dict]:
+    if 'cache_atas' not in st.session_state:
+        st.session_state['cache_atas'] = {}
+    cache_key = f"{uasg}-{num_compra}-{ano_compra}"
+    if cache_key in st.session_state['cache_atas']:
+        return st.session_state['cache_atas'][cache_key]
+
+    from bs4 import BeautifulSoup
+    id_unidade = obter_id_unidade_contratos(session, uasg)
+    arp_ids: List[str] = []
+    
+    page = 1
+    has_more = True
+    while has_more and page <= 5:
+        url = f"{BASE_CONTRATOS}/transparencia/arp?situacao=vigente&numeroCompra={num_compra}&anoCompra={ano_compra}"
+        if id_unidade:
+            url += f"&unidadesGerenciadoras[]={id_unidade}"
+        if page > 1:
+            url += f"&page={page}"
+
+        try:
+            res = session.get(url, headers=HEADERS_HTTP, timeout=15)
+            if not res.ok:
+                break
+
+            soup = BeautifulSoup(res.text, 'html.parser')
+            novos = 0
+            for a in soup.find_all('a', href=True):
+                m = re.search(r"/transparencia/arpshow/(\d+)/show", a['href'])
+                if m:
+                    arp_id = m.group(1)
+                    if arp_id not in arp_ids:
+                        arp_ids.append(arp_id)
+                        novos += 1
+
+            proxima_pag = soup.find('a', href=re.compile(rf"page={page + 1}"))
+            if novos == 0 or not proxima_pag:
+                has_more = False
+            else:
+                page += 1
+        except Exception:
+            break
+
+    atas_detalhadas: List[Dict] = []
+    for arp_id in arp_ids:
+        try:
+            url_arp = f"{BASE_CONTRATOS}/transparencia/arpshow/{arp_id}/show"
+            r_arp = session.get(url_arp, headers=HEADERS_HTTP, timeout=12)
+            if not r_arp.ok:
+                continue
+            s_arp = BeautifulSoup(r_arp.text, 'html.parser')
+            
+            num_ata = ""
+            for lbl in s_arp.find_all('label'):
+                txt = lbl.get_text(strip=True)
+                if re.match(r"\d{5}/\d{4}", txt) and not num_ata:
+                    num_ata = txt
+            
+            pdf_url = ""
+            for tbl in s_arp.find_all('table'):
+                ths = [th.get_text(strip=True).lower() for th in tbl.find_all('th')]
+                if any(h in ['tipo', 'incluído em', 'descrição', 'ação'] for h in ths):
+                    for tr in tbl.find_all('tr'):
+                        tr_txt = tr.get_text(strip=True).lower()
+                        if 'ata de registro de preços' in tr_txt or 'ata' in tr_txt:
+                            a_link = tr.find('a', href=True)
+                            if a_link:
+                                h = a_link['href'].strip()
+                                if ('/storage/arp/' in h or h.lower().endswith('.pdf')) and 'manual' not in h.lower():
+                                    pdf_url = h if h.startswith('http') else f"{BASE_CONTRATOS}{h}"
+                                    break
+                    if pdf_url:
+                        break
+
+            if not pdf_url:
+                for a in s_arp.find_all('a', href=True):
+                    h = a['href'].strip()
+                    title = a.get('title', '').lower()
+                    if 'manual' in h.lower():
+                        continue
+                    if '/storage/arp/' in h or 'baixar' in title or a.find('i', class_=re.compile(r'download')):
+                        pdf_url = h if h.startswith('http') else f"{BASE_CONTRATOS}{h}"
+                        break
+            
+            itens_olho = {}
+            for tbl in s_arp.find_all('table'):
+                ths = [th.get_text(strip=True) for th in tbl.find_all('th')]
+                if any('Item' in h or 'Número' in h for h in ths):
+                    for tr in tbl.find_all('tr'):
+                        tds = tr.find_all('td')
+                        if len(tds) >= 2:
+                            raw_num = tds[0].get_text(strip=True)
+                            a_eye = tr.find('a', href=re.compile(r"/arpshow/itens/"))
+                            if raw_num and a_eye:
+                                link_eye = a_eye['href'].strip()
+                                link_eye = link_eye if link_eye.startswith('http') else f"{BASE_CONTRATOS}{link_eye}"
+                                itens_olho[raw_num] = link_eye
+
+            atas_detalhadas.append({
+                "arpId": arp_id,
+                "numeroAta": num_ata or f"ARP {arp_id}",
+                "pdfUrl": pdf_url,
+                "linkAta": url_arp,
+                "itensOlho": itens_olho
+            })
+        except Exception:
+            continue
+
+    st.session_state['cache_atas'][cache_key] = atas_detalhadas
+    return atas_detalhadas
+
+def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra: str, ano_compra: str, num_item: str) -> Dict:
+    from bs4 import BeautifulSoup
+    atas = buscar_atas_contratos(session, uasg, num_compra, ano_compra)
+    num_int = int(num_item) if num_item.isdigit() else 0
+    num_5 = str(num_int).zfill(5)
+
+    target_eye_url = ""
+    target_ata = None
+
+    for ata in atas:
+        for it_key, eye_url in ata.get("itensOlho", {}).items():
+            clean_it_key = re.sub(r"\D", "", it_key)
+            if clean_it_key and int(clean_it_key) == num_int:
+                target_eye_url = re.sub(r"/itens/\d+/", f"/itens/{num_5}/", eye_url.strip())
+                target_ata = ata
+                break
+        if target_eye_url:
+            break
+
+    if not target_eye_url and atas:
+        target_ata = atas[0]
+        target_eye_url = f"{BASE_CONTRATOS}/transparencia/arpshow/itens/{num_5}/{target_ata['arpId']}/show"
+
+    resultado = {
+        "qtd_registrada": "0",
+        "qtd_empenhada": "0",
+        "saldo_empenho": "0",
+        "fornecedor": "",
+        "fornecedor_puro": "",
+        "cnpj_puro": "",
+        "valor_unitario_sugerido": 0.0,
+        "empenhos_resumo": "Nenhum",
+        "empenhos_lista": [],
+        "numero_ata": target_ata["numeroAta"] if target_ata else "",
+        "pdf_ata": target_ata["pdfUrl"] if target_ata else "",
+        "link_olho": target_eye_url
+    }
+
+    if not target_eye_url:
+        return resultado
+
+    try:
+        res = session.get(target_eye_url.strip(), headers=HEADERS_HTTP, timeout=15)
+        if not res.ok:
+            return resultado
+
+        soup = BeautifulSoup(res.text, 'html.parser')
+
+        for tr in soup.find_all('tr'):
+            tds = tr.find_all('td')
+            if len(tds) >= 5:
+                cnpj_txt = tds[1].get_text(strip=True)
+                cnpj_m = re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", cnpj_txt)
+                if cnpj_m:
+                    razao = tds[2].get_text(strip=True)
+                    v_unit_txt = tds[4].get_text(strip=True)
+                    resultado["fornecedor"] = f"{razao} ({cnpj_m.group(0)}) - {v_unit_txt}"
+                    resultado["fornecedor_puro"] = razao
+                    resultado["cnpj_puro"] = cnpj_m.group(0)
+                    
+                    # Converte valor unitário para float
+                    v_limpo = re.sub(r"[^\d,\.]", "", v_unit_txt).replace(".", "").replace(",", ".")
+                    try:
+                        resultado["valor_unitario_sugerido"] = float(v_limpo)
+                    except Exception:
+                        resultado["valor_unitario_sugerido"] = 0.0
+                    break
+
+        uasg_clean = uasg.strip()
+        for tr in soup.find_all('tr'):
+            tds = tr.find_all('td')
+            if len(tds) == 5:
+                u_txt = tds[0].get_text(strip=True)
+                tipo_txt = tds[1].get_text(strip=True)
+                reg_txt = tds[2].get_text(strip=True)
+                emp_txt = tds[3].get_text(strip=True)
+                sal_txt = tds[4].get_text(strip=True)
+
+                if (uasg_clean in u_txt or "gerenciadora" in tipo_txt.lower()) and any(c.isdigit() for c in reg_txt):
+                    resultado["qtd_registrada"] = reg_txt
+                    resultado["qtd_empenhada"] = emp_txt
+                    resultado["saldo_empenho"] = sal_txt
+                    if uasg_clean in u_txt:
+                        break
+
+        empenhos_list = []
+        for tr in soup.find_all('tr'):
+            tds = tr.find_all('td')
+            if len(tds) == 9:
+                ne_txt = tds[0].get_text(strip=True)
+                if "NE" in ne_txt and not "não" in ne_txt.lower():
+                    d_ne = tds[3].get_text(strip=True)
+                    q_ne = tds[7].get_text(strip=True)
+                    v_ne = tds[8].get_text(strip=True)
+                    empenho_str = f"{ne_txt} ({d_ne}): Qtd {q_ne} [R$ {v_ne}]"
+                    if empenho_str not in empenhos_list:
+                        empenhos_list.append(empenho_str)
+
+        if empenhos_list:
+            resultado["empenhos_resumo"] = " | ".join(empenhos_list)
+            resultado["empenhos_lista"] = empenhos_list
+
+    except Exception:
+        pass
+
+    return resultado
+
+def extrair_pregoes_por_ano(session: requests.Session, uasg: str, ano: str) -> List[Dict]:
+    from bs4 import BeautifulSoup
+    payload = {
+        'method': 'pesquisar',
+        'parametro.uasg.numeroUasg': uasg.strip(),
+        'parametro.codigosModalidadeCompra': '5',
+        'parametro.anoLicitacao': str(ano).strip(),
+    }
+
+    response = session.post(URL_PESQUISA_SIASG, data=payload, headers=HEADERS_HTTP, verify=False, timeout=15)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+    tabela = soup.find('table', {'id': 'licitacao'}) or soup.find('table', {'class': 'dados'})
+    if not tabela:
+        return []
+
+    dados = []
+    for linha in tabela.find_all('tr')[1:]:
+        colunas = linha.find_all('td')
+        if len(colunas) < 5:
+            continue
+
+        uasg_row = colunas[0].get_text(strip=True)
+        if "nenhum" in uasg_row.lower():
+            continue
+
+        modalidade = colunas[1].get_text(strip=True)
+        num_licitacao = colunas[2].get_text(strip=True)
+        objeto = colunas[3].get_text(strip=True)
+
+        link_tag = colunas[4].find('a')
+        js_code = link_tag['href'] if link_tag and 'href' in link_tag.attrs else ""
+        match = re.search(r"selecionarLicitacao\s*\(\s*['\"]?(\d+)['\"]?\s*,\s*['\"]?(\d+)['\"]?\s*,\s*['\"]?(\d+)['\"]?\s*,\s*['\"]?(\d+)['\"]?\s*,\s*(\d+)", js_code)
+
+        num_compra = ""
+        ano_compra = str(ano)
+        cod_licitacao = ""
+
+        if match:
+            num_compra = match.group(3)
+            ano_compra = match.group(4)
+            cod_licitacao = match.group(5)
+        elif "/" in num_licitacao:
+            parts = num_licitacao.split("/")
+            num_compra = parts[0]
+            ano_compra = parts[1]
+
+        dados.append({
+            "UASG": uasg_row,
+            "Modalidade": modalidade,
+            "Nº da Licitação": num_licitacao,
+            "Ano": ano_compra,
+            "Objeto": objeto,
+            "Nº Compra": num_compra,
+            "Ano Compra": ano_compra,
+            "Código Licitação": cod_licitacao,
+            "Link Contratos": f"{BASE_CONTRATOS}/transparencia/arp?numeroCompra={num_compra}&anoCompra={ano_compra}"
+        })
+
+    return dados
+
+def extrair_pregoes_siasg(uasg: str, anos: List[str]) -> Tuple[pd.DataFrame, Optional[str]]:
+    session = get_http_session()
+    iniciar_sessao_siasg(session)
+
+    todos_dados = []
+    erros = []
+
+    for ano in anos:
+        try:
+            dados_ano = extrair_pregoes_por_ano(session, uasg, ano)
+            todos_dados.extend(dados_ano)
+        except Exception as e:
+            erros.append(f"Ano {ano}: {str(e)}")
+
+    if not todos_dados and erros:
+        return pd.DataFrame(), f"Falha na consulta: {'; '.join(erros)}"
+
+    df = pd.DataFrame(todos_dados)
+    if not df.empty:
+        df.drop_duplicates(subset=["Nº da Licitação"], inplace=True)
+        df.sort_values(by=["Ano", "Nº da Licitação"], ascending=[False, False], inplace=True)
+
+    return df, None
+
+def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> List[Dict]:
+    from bs4 import BeautifulSoup
+    session = get_http_session()
+    iniciar_sessao_siasg(session)
+
+    itens_detectados = []
+    vistos = set()
+
+    def parsear_pagina_itens(html: str) -> int:
+        soup = BeautifulSoup(html, 'html.parser')
+        tabela = soup.find('table', {'id': 'item'}) or soup.find('table', {'class': 'dados'})
+        if not tabela:
+            return 1
+
+        for tr in tabela.find_all('tr')[1:]:
+            tds = tr.find_all('td')
+            if len(tds) < 5:
+                continue
+
+            num_item = tds[0].get_text(strip=True)
+            tipo_item = tds[1].get_text(strip=True)
+            desc_item = tds[2].get_text(strip=True)
+            qtd_item = tds[3].get_text(strip=True)
+            unidade = tds[4].get_text(strip=True)
+
+            if num_item not in vistos:
+                vistos.add(num_item)
+                itens_detectados.append({
+                    "Item": num_item,
+                    "Tipo": tipo_item,
+                    "Descrição": desc_item,
+                    "Qtd SIASG": qtd_item,
+                    "Unidade": unidade
+                })
+
+        pags = re.findall(r"numeroPagina=(\d+)", html)
+        return max([int(p) for p in pags], default=1)
+
+    try:
+        url_itens = (
+            f"{URL_ITENS_SIASG}?method=iniciar"
+            f"&parametro.identificacaoCompra.numeroUasg={uasg.strip()}"
+            f"&parametro.identificacaoCompra.modalidadeCompra=5"
+            f"&parametro.identificacaoCompra.numeroCompra={num_compra}"
+            f"&parametro.identificacaoCompra.anoCompra={ano_compra}"
+        )
+        res = session.get(url_itens, headers=HEADERS_HTTP, verify=False, timeout=15)
+        max_pags = parsear_pagina_itens(res.text)
+
+        for p in range(2, max_pags + 1):
+            url_p = (
+                f"{URL_ITENS_SIASG}?parametro.identificacaoCompra.anoCompra={ano_compra}"
+                f"&numeroPagina={p}&parametro.identificacaoCompra.numeroUasg={uasg.strip()}"
+                f"&parametro.identificacaoCompra.modalidadeCompra=5&method=consultarPorFiltro"
+                f"&parametro.identificacaoCompra.numeroCompra={num_compra}"
+            )
+            r_p = session.get(url_p, headers=HEADERS_HTTP, verify=False, timeout=12)
+            if r_p.ok:
+                parsear_pagina_itens(r_p.text)
+
+        if not itens_detectados:
+            return []
+
+        itens_detectados.sort(key=lambda x: int(x["Item"]) if x["Item"].isdigit() else 9999)
+
+        dados_finais = []
+        prog_bar = st.progress(0)
+        status_txt = st.empty()
+
+        for idx, it in enumerate(itens_detectados):
+            status_txt.text(f"Consultando Contratos.gov.br: Item {it['Item']} de {len(itens_detectados)}...")
+            saldo_info = obter_saldo_item_contratos(session, uasg, num_compra, ano_compra, it["Item"])
+
+            qtd_registrada_final = saldo_info["qtd_registrada"] if saldo_info["qtd_registrada"] != "0" else it["Qtd SIASG"]
+
+            dados_finais.append({
+                "Item": it["Item"],
+                "Tipo": it["Tipo"],
+                "Descrição": it["Descrição"],
+                "Unidade": it["Unidade"],
+                "Qtd Registrada": qtd_registrada_final,
+                "Qtd Empenhada": saldo_info["qtd_empenhada"],
+                "Saldo p/ Empenho": saldo_info["saldo_empenho"],
+                "Ata Vinculada": saldo_info["numero_ata"] or "Não identificada",
+                "Fornecedor": saldo_info["fornecedor"] or "N/D",
+                "Fornecedor Puro": saldo_info["fornecedor_puro"],
+                "CNPJ Puro": saldo_info["cnpj_puro"],
+                "Valor Unitario Sugerido": saldo_info["valor_unitario_sugerido"],
+                "PDF da Ata": saldo_info["pdf_ata"],
+                "Empenhos": saldo_info["empenhos_resumo"],
+                "empenhos_lista": saldo_info.get("empenhos_lista", [])
+            })
+            prog_bar.progress((idx + 1) / len(itens_detectados))
+
+        status_txt.empty()
+        prog_bar.empty()
+        return dados_finais
+
+    except Exception as e:
+        st.error(f"Erro ao obter itens: {str(e)}")
+        return []
+
+# =====================================================================
+# 5. GERADORES DE PLANILHAS (BLINDADOS)
 # =====================================================================
 def gerar_planilha_nc_completa(nc_nome: str, dados_nc: dict, om_nome: str, secao_nome: str):
-    """Gera planilha XLSX se openpyxl estiver instalado, senão gera CSV compatível com Excel."""
     itens = dados_nc.get("itens", [])
-    
     try:
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
         from openpyxl.utils import get_column_letter
-        from openpyxl.chart import BarChart, Reference
-        
-        wb = openpyxl.Workbook()
-        cor_cabecalho = "1F4E79"
-        cor_sub = "D9E1F2"
-        cor_destaque = "2E75B6"
-        fonte_branca = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        fonte_titulo = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
-        fonte_negrito = Font(name="Calibri", size=11, bold=True)
-        fonte_normal = Font(name="Calibri", size=11)
-        fill_cabecalho = PatternFill(start_color=cor_cabecalho, end_color=cor_cabecalho, fill_type="solid")
-        fill_sub = PatternFill(start_color=cor_sub, end_color=cor_sub, fill_type="solid")
-        borda_fina = Border(
-            left=Side(style='thin', color='BFBFBF'), right=Side(style='thin', color='BFBFBF'),
-            top=Side(style='thin', color='BFBFBF'), bottom=Side(style='thin', color='BFBFBF')
-        )
 
-        # Aba 1: Resumo
+        wb = openpyxl.Workbook()
         ws_resumo = wb.active
         ws_resumo.title = "Resumo Executivo"
         ws_resumo.views.sheetView[0].showGridLines = True
         
         ws_resumo.merge_cells("A1:F1")
         ws_resumo["A1"] = f"RELATÓRIO GERENCIAL - NOTA DE CRÉDITO {nc_nome}"
-        ws_resumo["A1"].font = fonte_titulo
-        ws_resumo["A1"].fill = fill_cabecalho
+        ws_resumo["A1"].font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+        ws_resumo["A1"].fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
         ws_resumo["A1"].alignment = Alignment(horizontal="center", vertical="center")
         ws_resumo.row_dimensions[1].height = 35
 
-        info_inst = [
-            ("Organização Militar (OM):", om_nome, "Plano Interno (PI):", dados_nc.get("pi", "Não informado")),
-            ("Seção Responsável:", secao_nome, "Natureza de Despesa (ND):", dados_nc.get("nd", "Não informada")),
-        ]
-        linha_atual = 3
-        for l in info_inst:
-            ws_resumo.cell(row=linha_atual, column=1, value=l[0]).font = fonte_negrito
-            ws_resumo.cell(row=linha_atual, column=2, value=l[1]).font = fonte_normal
-            ws_resumo.cell(row=linha_atual, column=4, value=l[2]).font = fonte_negrito
-            ws_resumo.cell(row=linha_atual, column=5, value=l[3]).font = fonte_normal
-            linha_atual += 1
-
-        total_rec = float(dados_nc.get("valor_recebido", 0.0))
-        total_gasto = sum(float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0)) for it in itens)
-        saldo_rest = total_rec - total_gasto
-        perc_exec = (total_gasto / total_rec * 100) if total_rec > 0 else 0.0
-
-        linha_atual += 1
-        ws_resumo.merge_cells(f"A{linha_atual}:F{linha_atual}")
-        ws_resumo[f"A{linha_atual}"] = "EXECUÇÃO ORÇAMENTÁRIA"
-        ws_resumo[f"A{linha_atual}"].font = fonte_branca
-        ws_resumo[f"A{linha_atual}"].fill = PatternFill(start_color=cor_destaque, end_color=cor_destaque, fill_type="solid")
-        ws_resumo[f"A{linha_atual}"].alignment = Alignment(horizontal="center", vertical="center")
-        
-        linha_atual += 1
-        cards = [
-            ("Total Recebido", total_rec, "R$ #,##0.00"),
-            ("Total Comprometido", total_gasto, "R$ #,##0.00"),
-            ("Saldo Disponível", saldo_rest, "R$ #,##0.00"),
-            ("% Executado", perc_exec / 100, "0.0%")
-        ]
-        for idx, (label, val, num_fmt) in enumerate(cards, start=1):
-            col_l = get_column_letter(idx if idx <= 3 else idx + 1)
-            ws_resumo[f"{col_l}{linha_atual}"] = label
-            ws_resumo[f"{col_l}{linha_atual}"].font = fonte_negrito
-            ws_resumo[f"{col_l}{linha_atual}"].fill = fill_sub
-            ws_resumo[f"{col_l}{linha_atual}"].alignment = Alignment(horizontal="center")
-            c_val = ws_resumo[f"{col_l}{linha_atual+1}"]
-            c_val.value = val
-            c_val.font = Font(name="Calibri", size=12, bold=True)
-            c_val.number_format = num_fmt
-            c_val.alignment = Alignment(horizontal="center")
-
-        linha_atual += 4
-        ws_resumo.cell(row=linha_atual, column=1, value="Fornecedor").font = fonte_branca
-        ws_resumo.cell(row=linha_atual, column=1).fill = fill_cabecalho
-        ws_resumo.cell(row=linha_atual, column=2, value="Qtd").font = fonte_branca
-        ws_resumo.cell(row=linha_atual, column=2).fill = fill_cabecalho
-        ws_resumo.cell(row=linha_atual, column=3, value="Total (R$)").font = fonte_branca
-        ws_resumo.cell(row=linha_atual, column=3).fill = fill_cabecalho
-
-        forn_map = {}
-        for it in itens:
-            f = it.get("Fornecedor", "N/I")
-            subt = float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0))
-            if f not in forn_map: forn_map[f] = {"qtd": 0, "total": 0.0}
-            forn_map[f]["qtd"] += int(it.get("Qtd", 0))
-            forn_map[f]["total"] += subt
-
-        ini_g = linha_atual + 1
-        for fn, fd in forn_map.items():
-            linha_atual += 1
-            ws_resumo.cell(row=linha_atual, column=1, value=fn).border = borda_fina
-            c2 = ws_resumo.cell(row=linha_atual, column=2, value=fd["qtd"]); c2.border = borda_fina; c2.alignment = Alignment(horizontal="center")
-            c3 = ws_resumo.cell(row=linha_atual, column=3, value=fd["total"]); c3.border = borda_fina; c3.number_format = "R$ #,##0.00"
-
-        if forn_map:
-            chart = BarChart()
-            chart.type = "col"; chart.title = "Recursos por Fornecedor (R$)"
-            chart.width = 15; chart.height = 8
-            data_ref = Reference(ws_resumo, min_col=3, min_row=ini_g - 1, max_row=linha_atual)
-            cats_ref = Reference(ws_resumo, min_col=1, min_row=ini_g, max_row=linha_atual)
-            chart.add_data(data_ref, titles_from_data=True); chart.set_categories(cats_ref); chart.legend = None
-            ws_resumo.add_chart(chart, "E10")
-
-        # Aba 2: Itens
         ws_itens = wb.create_sheet(title="Itens Detalhados")
         ws_itens.views.sheetView[0].showGridLines = True
         cab_it = ["Item", "Material", "Qtd", "Valor Unitário", "Valor Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
         for c_idx, h in enumerate(cab_it, 1):
             cell = ws_itens.cell(row=1, column=c_idx, value=h)
-            cell.font = fonte_branca; cell.fill = fill_cabecalho; cell.alignment = Alignment(horizontal="center")
+            cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center")
 
         for r_idx, it in enumerate(itens, start=2):
             q = int(it.get("Qtd", 0))
@@ -188,92 +593,47 @@ def gerar_planilha_nc_completa(nc_nome: str, dados_nc: dict, om_nome: str, secao
             ws_itens.cell(row=r_idx, column=9, value=it.get("Pregão")).alignment = Alignment(horizontal="center")
             ws_itens.cell(row=r_idx, column=10, value=it.get("Ata")).alignment = Alignment(horizontal="center")
             ws_itens.cell(row=r_idx, column=11, value=it.get("UASG")).alignment = Alignment(horizontal="center")
-            for c in range(1, 12): ws_itens.cell(row=r_idx, column=c).border = borda_fina
 
-        # Ajuste de largura
         for ws in [ws_resumo, ws_itens]:
             for col in ws.columns:
-                max_l = max(len(str(c.value or "")) for c in col if not str(c.coordinate).startswith("E10"))
-                ws.column_dimensions[get_column_letter(col[0].column)].width = max(max_l + 3, 12)
+                m_l = max(len(str(c.value or "")) for c in col)
+                ws.column_dimensions[get_column_letter(col[0].column)].width = max(m_l + 3, 12)
 
         buf = io.BytesIO()
         wb.save(buf)
         return buf.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
 
     except ImportError:
-        # Fallback elegante caso openpyxl não esteja no ambiente
         df_exp = pd.DataFrame(itens)
         csv_str = df_exp.to_csv(index=False, sep=";", decimal=",", encoding="utf-8-sig")
         return csv_str.encode("utf-8-sig"), "text/csv", "csv"
 
 def gerar_planilha_global_ano_completa(ano: str, banco_dados: dict, om_nome: str, secao_nome: str):
-    """Gera consolidado anual em XLSX se openpyxl existir, senão em CSV compatível."""
     ncs_do_ano = [nc for nc in banco_dados.keys() if nc != "CONFIG_REQUISICAO" and extrair_ano(nc) == ano]
-    
     try:
         import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.styles import Font, PatternFill, Alignment
         from openpyxl.utils import get_column_letter
 
         wb = openpyxl.Workbook()
-        cor_cab = "1F4E79"
-        cor_dest = "2E75B6"
-        fonte_branca = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        fonte_titulo = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
-        fonte_negrito = Font(name="Calibri", size=11, bold=True)
-        borda_fina = Border(
-            left=Side(style='thin', color='BFBFBF'), right=Side(style='thin', color='BFBFBF'),
-            top=Side(style='thin', color='BFBFBF'), bottom=Side(style='thin', color='BFBFBF')
-        )
-
         ws_resumo = wb.active
         ws_resumo.title = f"Consolidado {ano}"
         ws_resumo.views.sheetView[0].showGridLines = True
         
         ws_resumo.merge_cells("A1:G1")
         ws_resumo["A1"] = f"EXÉRCITO BRASILEIRO - {om_nome} - GESTÃO ORÇAMENTÁRIA {ano}"
-        ws_resumo["A1"].font = fonte_titulo
-        ws_resumo["A1"].fill = PatternFill(start_color=cor_cab, end_color=cor_cab, fill_type="solid")
+        ws_resumo["A1"].font = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+        ws_resumo["A1"].fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
         ws_resumo["A1"].alignment = Alignment(horizontal="center", vertical="center")
         ws_resumo.row_dimensions[1].height = 35
 
-        cab_ncs = ["Nota de Crédito (NC)", "Plano Interno (PI)", "Natureza Despesa (ND)", "Valor Recebido (R$)", "Total Comprometido (R$)", "Saldo Disponível (R$)", "Itens"]
-        for c_i, h in enumerate(cab_ncs, 1):
-            cell = ws_resumo.cell(row=3, column=c_i, value=h)
-            cell.font = fonte_branca; cell.fill = PatternFill(start_color=cor_dest, end_color=cor_dest, fill_type="solid")
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-
-        row_nc = 4
-        tot_rec = 0.0; tot_gasto = 0.0
-        for nc in ncs_do_ano:
-            d_nc = banco_dados[nc]
-            vr = float(d_nc.get("valor_recebido", 0.0))
-            it_nc = d_nc.get("itens", [])
-            vg = sum(float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0)) for it in it_nc)
-            tot_rec += vr; tot_gasto += vg
-
-            ws_resumo.cell(row=row_nc, column=1, value=nc).alignment = Alignment(horizontal="center")
-            ws_resumo.cell(row=row_nc, column=2, value=d_nc.get("pi", "")).alignment = Alignment(horizontal="center")
-            ws_resumo.cell(row=row_nc, column=3, value=d_nc.get("nd", "")).alignment = Alignment(horizontal="center")
-            c_r = ws_resumo.cell(row=row_nc, column=4, value=vr); c_r.number_format = "R$ #,##0.00"
-            c_g = ws_resumo.cell(row=row_nc, column=5, value=vg); c_g.number_format = "R$ #,##0.00"
-            c_s = ws_resumo.cell(row=row_nc, column=6, value=vr - vg); c_s.number_format = "R$ #,##0.00"
-            ws_resumo.cell(row=row_nc, column=7, value=len(it_nc)).alignment = Alignment(horizontal="center")
-            for c in range(1, 8): ws_resumo.cell(row=row_nc, column=c).border = borda_fina
-            row_nc += 1
-
-        ws_resumo.cell(row=row_nc, column=3, value="TOTAIS:").font = fonte_negrito
-        c_tr = ws_resumo.cell(row=row_nc, column=4, value=tot_rec); c_tr.font = fonte_negrito; c_tr.number_format = "R$ #,##0.00"
-        c_tg = ws_resumo.cell(row=row_nc, column=5, value=tot_gasto); c_tg.font = fonte_negrito; c_tg.number_format = "R$ #,##0.00"
-        c_ts = ws_resumo.cell(row=row_nc, column=6, value=tot_rec - tot_gasto); c_ts.font = fonte_negrito; c_ts.number_format = "R$ #,##0.00"
-
-        # Aba de todos os itens
         ws_it_ano = wb.create_sheet(title=f"Itens {ano}")
         ws_it_ano.views.sheetView[0].showGridLines = True
         cab_todos = ["NC de Origem", "PI", "ND", "Item", "Nomenclatura", "Qtd", "Valor Unitário", "Valor Total", "Situação", "Fornecedor", "CNPJ", "Pregão"]
         for c_i, h in enumerate(cab_todos, 1):
             cell = ws_it_ano.cell(row=1, column=c_i, value=h)
-            cell.font = fonte_branca; cell.fill = PatternFill(start_color=cor_cab, end_color=cor_cab, fill_type="solid")
+            cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
             cell.alignment = Alignment(horizontal="center")
 
         row_it = 2
@@ -293,7 +653,6 @@ def gerar_planilha_global_ano_completa(ano: str, banco_dados: dict, om_nome: str
                 ws_it_ano.cell(row=row_it, column=10, value=it.get("Fornecedor"))
                 ws_it_ano.cell(row=row_it, column=11, value=formatar_cnpj(it.get("CNPJ", ""))).alignment = Alignment(horizontal="center")
                 ws_it_ano.cell(row=row_it, column=12, value=it.get("Pregão")).alignment = Alignment(horizontal="center")
-                for c in range(1, 13): ws_it_ano.cell(row=row_it, column=c).border = borda_fina
                 row_it += 1
 
         for ws in [ws_resumo, ws_it_ano]:
@@ -317,13 +676,13 @@ def gerar_planilha_global_ano_completa(ano: str, banco_dados: dict, om_nome: str
         return csv_str.encode("utf-8-sig"), "text/csv", "csv"
 
 # =====================================================================
-# 3. TELA DE LOGIN E CADASTRO INICIAL (BLINDAGEM DE ACESSO COM HASH)
+# 6. TELA DE LOGIN E CADASTRO INICIAL
 # =====================================================================
 if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
 
 if st.session_state.usuario_logado is None:
-    st.title("🖥 Sistema Profissional de Controle de Recursos")
+    st.title("🖥 Sistema Profissional de Controle de Recursos & Pregões")
     st.markdown("Bem-vindo! Faça login ou registre a conta Matriz (Fiscal) da sua OM.")
     st.markdown("---")
     
@@ -414,7 +773,7 @@ if st.session_state.usuario_logado is None:
     st.stop() 
 
 # =====================================================================
-# 4. CARREGAMENTO DOS DADOS CORPORATIVOS
+# 7. CARREGAMENTO DOS DADOS DO MILITAR LOGADO
 # =====================================================================
 usuario_atual = st.session_state.usuario_logado
 
@@ -425,7 +784,7 @@ secao_user = perfil.get("secao", "Geral")
 tipo_perfil = perfil.get("perfil", "Operador")
 
 # =====================================================================
-# 5. ASSINATURA E FILTROS LATERAIS (SIDEBAR)
+# 8. BARRA LATERAL (SIDEBAR)
 # =====================================================================
 st.sidebar.title("💰 Gestão Orçamentária")
 st.sidebar.markdown("---")
@@ -437,7 +796,6 @@ if tipo_perfil == "Fiscal":
     resp_secoes = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
     secoes_da_om = sorted(list(set([r["secao"] for r in resp_secoes.data])))
     if not secoes_da_om: secoes_da_om = [secao_user]
-    
     secao_ativa = st.sidebar.selectbox("🔎 Operar dados da Seção:", secoes_da_om, index=secoes_da_om.index(secao_user) if secao_user in secoes_da_om else 0)
 elif tipo_perfil == "Chefe":
     st.sidebar.success(f"👑 **Perfil: CHEFE**\n\n**Seção:** {secao_user}")
@@ -465,9 +823,6 @@ def salvar_dados(dados_para_salvar):
 
 st.sidebar.markdown("---")
 
-# =====================================================================
-# ALTERAÇÃO DE SENHA COM HASH
-# =====================================================================
 with st.sidebar.expander("⚙️ Alterar Minha Senha"):
     with st.form("form_alterar_senha"):
         nova_senha_input = st.text_input("Nova Senha:", type="password")
@@ -508,25 +863,26 @@ st.sidebar.markdown(
 )
 
 # =====================================================================
-# 6. TÍTULO PRINCIPAL E ABAS 
+# 9. TÍTULO PRINCIPAL E NAVEGAÇÃO POR ABAS
 # =====================================================================
-st.title(f"🖥 Sistema de Controle de Recursos - {om_user}")
+st.title(f"🖥 Sistema de Controle de Recursos & Pregões - {om_user}")
 st.markdown(f"**Área de Trabalho Ativa:** {secao_ativa}")
 st.markdown("---")
 
-menu_cadastro, menu_visualizacao, menu_visao_global, menu_acessos = st.tabs([
+tab_cadastro, tab_visualizacao, tab_visao_global, tab_consulta_pregoes, tab_acessos = st.tabs([
     "📝 Cadastrar e Lançar Compras",
     "📊 Controle Individual por NC",
     "📈 Visão Global do Ano",
+    "🔎 Consultar Pregões & Importar para NC",
     "👥 Gerenciar Acessos"
 ])
 
 # =====================================================================
-# ABA 1: CADASTRO
+# ABA 1: CADASTRO MANUAL
 # =====================================================================
-with menu_cadastro:
+with tab_cadastro:
     if tipo_perfil == "Fiscal":
-        st.error("🛡️ **Acesso Negado:** O perfil de Fiscal possui acesso de Auditoria e Visualização. Você não pode cadastrar, alterar ou deletar Notas de Crédito. Retorne para as Abas de Análise e Visão Global.")
+        st.error("🛡️ **Acesso Negado:** O perfil de Fiscal possui acesso de Auditoria e Visualização.")
     else:
         st.subheader("1. Cadastrar Nova Nota de Crédito (NC)")
         
@@ -538,7 +894,7 @@ with menu_cadastro:
         
         col_nc1, col_nc2, col_nc3 = st.columns(3)
         with col_nc1:
-            nova_nc = st.text_input("Número da NC (Comece com o ano, ex: 2026NC000511):", "", key="cad_numero_nc").strip().upper()
+            nova_nc = st.text_input("Número da NC (Ex: 2026NC000511):", "", key="cad_numero_nc").strip().upper()
             valor_nc = st.number_input("Valor Total Recebido na NC (R$):", min_value=0.0, step=100.0, key="cad_valor_nc")
         
         with col_nc2:
@@ -617,7 +973,7 @@ with menu_cadastro:
                 st.rerun()
 
         st.markdown("---")
-        st.subheader("2. Lançar Itens e Planejar Aquisição")
+        st.subheader("2. Lançar Itens Manualmente")
         
         if ncs_do_ano:
             nc_selecionada_cad = st.selectbox("Selecione a NC para vincular este item:", ncs_do_ano, key="cad_item_select_nc")
@@ -663,13 +1019,10 @@ with menu_cadastro:
             st.info("Cadastre uma Nota de Crédito (NC) para este ano primeiro.")
 
 # =====================================================================
-# ABA 2: VISUALIZAÇÃO, BUSCA DETALHADA E EXPORTAÇÃO EXECUTIVA
+# ABA 2: VISUALIZAÇÃO E CONTROLE POR NC
 # =====================================================================
-with menu_visualizacao:
+with tab_visualizacao:
     if ncs_do_ano:
-        # -------------------------------------------------------------
-        # 🔍 FILTRO DE PESQUISA INTELIGENTE COM DESTAQUE CLARO DA NC
-        # -------------------------------------------------------------
         with st.expander("🔍 Pesquisa Rápida de Materiais no Ano (Localizar Item e NC)", expanded=False):
             termo_busca = st.text_input("Digite o nome do material, fornecedor, pregão ou CNPJ:").strip().lower()
             if termo_busca:
@@ -752,9 +1105,6 @@ with menu_visualizacao:
                 with card3:
                     st.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
                 
-                # -------------------------------------------------------------
-                # 📥 BOTÃO DE EXPORTAÇÃO PROFISSIONAL EM EXCEL (BLINDADO)
-                # -------------------------------------------------------------
                 st.write("")
                 excel_nc_bytes, mime_nc, ext_nc = gerar_planilha_nc_completa(nc_selecionada_vis, dados_nc, om_user, secao_ativa)
                 st.download_button(
@@ -796,17 +1146,14 @@ with menu_visualizacao:
                 st.markdown("---")
                 st.subheader("📋 Planilhas de Acompanhamento e Requisições por Fornecedor")
                 
-                # -------------------------------------------------------------
-                # CONFIGURAÇÃO DE TIMBRE E ASSINATURAS POR SEÇÃO
-                # -------------------------------------------------------------
                 config_req = banco_dados.get("CONFIG_REQUISICAO", {})
                 pre_cadastro_pendente = not bool(config_req)
                 
                 if pre_cadastro_pendente:
-                    st.warning("⚠️ **Atenção:** O cabeçalho padrão da sua Seção ainda não foi configurado. Preencha os dados abaixo uma única vez para padronizar e liberar as requisições impressas.")
+                    st.warning("⚠️ **Atenção:** O cabeçalho padrão da sua Seção ainda não foi configurado.")
                 
                 with st.expander("⚙️ Personalizar Cabeçalho, Cidade e Assinaturas (Padrão da sua Seção)", expanded=pre_cadastro_pendente):
-                    st.info("Preencha estes dados uma única vez. Eles ficarão salvos no banco de dados e padronizarão automaticamente todas as requisições emitidas por esta Seção.")
+                    st.info("Preencha estes dados uma única vez para padronizar as requisições impressas.")
                     with st.form("form_config_req"):
                         c1, c2 = st.columns(2)
                         with c1:
@@ -822,18 +1169,13 @@ with menu_visualizacao:
                         
                         if st.form_submit_button("💾 Salvar Novo Padrão da Seção", type="primary"):
                             banco_dados["CONFIG_REQUISICAO"] = {
-                                "cabecalho_om": cfg_om,
-                                "indicativo_diex": cfg_ind,
-                                "remetente_do": cfg_remetente,
-                                "cidade_om": cfg_cidade,
-                                "assinatura_nome": cfg_ass_nome,
-                                "assinatura_funcao": cfg_ass_func,
-                                "od_nome": cfg_od_nome,
-                                "od_funcao": cfg_od_func
+                                "cabecalho_om": cfg_om, "indicativo_diex": cfg_ind, "remetente_do": cfg_remetente,
+                                "cidade_om": cfg_cidade, "assinatura_nome": cfg_ass_nome, "assinatura_funcao": cfg_ass_func,
+                                "od_nome": cfg_od_nome, "od_funcao": cfg_od_func
                             }
                             salvar_dados(banco_dados)
                             st.session_state.banco = banco_dados
-                            st.success("Configuração padrão da seção atualizada com sucesso!")
+                            st.success("Configuração atualizada com sucesso!")
                             st.rerun()
                 
                 def format_html_var(val, default):
@@ -847,7 +1189,6 @@ with menu_visualizacao:
                 html_ass_func = format_html_var(config_req.get("assinatura_funcao"), "Função do Remetente")
                 html_od_nome = format_html_var(config_req.get("od_nome"), "NOME DO OD - Posto")
                 html_od_func = format_html_var(config_req.get("od_funcao"), "Ordenador de Despesas da OM")
-                # -------------------------------------------------------------
 
                 if not df_base_mestre.empty:
                     lista_fornecedores = sorted(df_base_mestre["Fornecedor"].unique())
@@ -855,7 +1196,6 @@ with menu_visualizacao:
                     df_atualizado_acumulado = []
                     
                     for i, forn in enumerate(lista_fornecedores):
-                        
                         col_titulo, col_btn_baixa = st.columns([3, 1])
                         with col_titulo:
                             st.markdown(f"### 🏢 Fornecedor: **{forn}**")
@@ -874,15 +1214,10 @@ with menu_visualizacao:
                                     
                         df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
                         
-                        # -------------------------------------------------------------
-                        # GERAR REQUISIÇÃO E CONTROLE DO DEPÓSITO
-                        # -------------------------------------------------------------
                         doc_info = banco_dados[nc_selecionada_vis].get("doc_info", {})
                         info_forn = doc_info.get(forn, {"diex": "", "eb": "", "data": "", "assunto": "", "empenho": ""})
 
                         with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Preencher e Imprimir)", expanded=False):
-                            st.info("💡 Preencha os dados do documento. O número do EB é salvo para este fornecedor e a folha sairá formatada para assinatura.")
-                            
                             with st.form(f"form_req_{forn}_{i}"):
                                 col_req1, col_req2 = st.columns(2)
                                 with col_req1:
@@ -894,7 +1229,6 @@ with menu_visualizacao:
                                 
                                 st.markdown("---")
                                 st.markdown("##### 📦 Controle de Depósito e Almoxarifado (Pós-Empenho)")
-                                st.caption("Preencha a Nota de Empenho aqui para conferência no momento em que a mercadoria for entregue no Depósito:")
                                 empenho_val = st.text_input("Nº da Nota de Empenho (NE):", value=info_forn.get("empenho", ""), key=f"ne_deposito_{forn}_{i}")
                                 
                                 btn_salvar_req = st.form_submit_button("💾 Salvar Dados da Requisição e Depósito", type="primary")
@@ -903,11 +1237,7 @@ with menu_visualizacao:
                                     if "doc_info" not in banco_dados[nc_selecionada_vis]:
                                         banco_dados[nc_selecionada_vis]["doc_info"] = {}
                                     banco_dados[nc_selecionada_vis]["doc_info"][forn] = {
-                                        "diex": diex_val,
-                                        "eb": eb_val,
-                                        "data": data_val,
-                                        "assunto": assunto_val,
-                                        "empenho": empenho_val
+                                        "diex": diex_val, "eb": eb_val, "data": data_val, "assunto": assunto_val, "empenho": empenho_val
                                     }
                                     salvar_dados(banco_dados)
                                     st.session_state.banco = banco_dados
@@ -915,9 +1245,7 @@ with menu_visualizacao:
                                     st.rerun()
                             
                             if info_forn.get("empenho"):
-                                st.success(f"📦 **Depósito Vinculado:** DIEx nº **{info_forn.get('diex', 'S/N')}** &nbsp;➔&nbsp; Nota de Empenho: **{info_forn.get('empenho')}**")
-                            else:
-                                st.info("ℹ️ **Nota de Empenho:** Ainda não lançada para este DIEx no depósito.")
+                                st.success(f"📦 **Depósito Vinculado:** DIEx nº **{info_forn.get('diex', 'S/N')}** ➔ NE: **{info_forn.get('empenho')}**")
 
                             diex_display = info_forn.get("diex", "") if info_forn.get("diex", "") else "______"
                             eb_display = info_forn.get("eb", "") if info_forn.get("eb", "") else "_________________"
@@ -965,40 +1293,28 @@ with menu_visualizacao:
                                 }}
                                 body {{ font-family: 'Times New Roman', Times, serif; color: black; background-color: #f8f9fa; margin: 0; }}
                                 .editable-doc {{
-                                    padding: 40px; 
-                                    background-color: white; 
-                                    max-width: 800px; 
-                                    margin: 20px auto; 
-                                    border: 1px solid #ccc; 
-                                    box-shadow: 2px 2px 10px #aaa;
+                                    padding: 40px; background-color: white; max-width: 800px; margin: 20px auto; 
+                                    border: 1px solid #ccc; box-shadow: 2px 2px 10px #aaa;
                                 }}
                                 table.borda, .borda th, .borda td {{
-                                    border: 1px solid black;
-                                    border-collapse: collapse;
+                                    border: 1px solid black; border-collapse: collapse;
                                 }}
                                 .borda th, .borda td {{ padding: 5px; text-align: center; }}
                                 .separador-tela {{
-                                    border-top: 2px dashed #ccc;
-                                    color: #999;
-                                    text-align: center;
-                                    margin: 40px 0;
-                                    padding-top: 10px;
-                                    font-size: 12px;
-                                    font-family: Arial, sans-serif;
-                                    user-select: none;
+                                    border-top: 2px dashed #ccc; color: #999; text-align: center; margin: 40px 0;
+                                    padding-top: 10px; font-size: 12px; font-family: Arial, sans-serif;
                                 }}
                             </style>
                             </head>
                             <body>
                             <div class="no-print" style="text-align: center; margin-bottom: 20px; padding-top: 20px;">
-                                <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #28a745; color: white; border: none; border-radius: 5px; font-weight: bold; box-shadow: 1px 1px 5px #888;">
+                                <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #28a745; color: white; border: none; border-radius: 5px; font-weight: bold;">
                                     🖨️ Imprimir / Salvar como PDF
                                 </button>
                             </div>
                         
                             <div class="editable-doc">
-                                
-                                <table style="width: 100%; border: none; margin-bottom: 0;">
+                                <table style="width: 100%; border: none;">
                                     <tr style="border: none;">
                                         <td style="width: 30%; border: none;"></td>
                                         <td style="width: 40%; border: none; text-align: center; vertical-align: top;">
@@ -1059,7 +1375,7 @@ with menu_visualizacao:
                                 </div>
                                 
                                 <div class="separador-tela no-print">
-                                    ✂️ --- QUEBRA DE PÁGINA (Na impressão o Despacho do OD sairá em folha exclusiva) --- ✂️
+                                    ✂️ --- QUEBRA DE PÁGINA --- ✂️
                                 </div>
                                 
                                 <div class="quebra-pagina" style="padding-top: 10px; line-height: 1.5; font-size: 14px;">
@@ -1077,7 +1393,6 @@ with menu_visualizacao:
                             </body>
                             </html>
                             """
-                            
                             components.html(html_template, height=800, scrolling=True)
                         
                         cfg_colunas = {
@@ -1134,18 +1449,14 @@ with menu_visualizacao:
          st.info("Nenhuma NC cadastrada para este ano nesta seção.")
 
 # =====================================================================
-# ABA 3: VISÃO GLOBAL ANUAL (COM RELATÓRIO EXCEL EXECUTIVO)
+# ABA 3: VISÃO GLOBAL ANUAL
 # =====================================================================
-with menu_visao_global:
-    
+with tab_visao_global:
     dados_anuais = []
     
     if tipo_perfil == "Fiscal":
         st.subheader(f"🌐 Visão Corporativa da OM ({om_user}) - Todas as Seções")
-        st.markdown("Este gráfico consolida e cruza as planilhas de **todas as seções** do Batalhão de forma automatizada.")
-        
         resp_todas_secoes = supabase.table("dados").select("*").like("id", f"{om_user}_%").execute()
-        
         for linha in resp_todas_secoes.data:
             banco_secao_laco = linha.get("ncs", {})
             for nc in banco_secao_laco.keys():
@@ -1154,28 +1465,18 @@ with menu_visao_global:
                     for item in banco_secao_laco[nc].get("itens", []):
                         valor_total_item = float(item.get("Valor Unitário", 0.0)) * int(item.get("Qtd", 0))
                         dados_anuais.append({
-                            "ND": nd_atual,
-                            "Situação": item.get("Situação", "Situação Indefinida"),
-                            "Valor Total": valor_total_item
+                            "ND": nd_atual, "Situação": item.get("Situação", "Situação Indefinida"), "Valor Total": valor_total_item
                         })
     else:
         st.subheader(f"📊 Resumo Geral de Empenhos e Aquisições - Seção: {secao_ativa}")
-        st.markdown("Este gráfico consolida os valores agrupados por **Natureza de Despesa (ND)** e empilhados pela sua respectiva **Situação Atual**.")
-        
         if ncs_do_ano:
             for nc in ncs_do_ano:
                 nd_atual = banco_dados[nc].get("nd", "Não informada")
                 if not nd_atual.strip(): nd_atual = "Não informada"
-                    
-                itens_da_nc = banco_dados[nc].get("itens", [])
-                for item in itens_da_nc:
+                for item in banco_dados[nc].get("itens", []):
                     valor_total_item = float(item.get("Valor Unitário", 0.0)) * int(item.get("Qtd", 0))
-                    situacao = item.get("Situação", "Situação Indefinida")
-                    
                     dados_anuais.append({
-                        "ND": nd_atual,
-                        "Situação": situacao,
-                        "Valor Total": valor_total_item
+                        "ND": nd_atual, "Situação": item.get("Situação", "Situação Indefinida"), "Valor Total": valor_total_item
                     })
                     
     if dados_anuais:
@@ -1192,47 +1493,195 @@ with menu_visao_global:
         df_anual = pd.DataFrame(dados_anuais)
         df_agrupado = df_anual.groupby(["ND", "Situação"])["Valor Total"].sum().reset_index()
         
-        escala_cores = alt.Scale(
-            domain=["Recebido", "Planejamento", "Aguardando entrega"],
-            range=["#28a745", "#007bff", "#dc3545"]
-        )
-        
+        escala_cores = alt.Scale(domain=["Recebido", "Planejamento", "Aguardando entrega"], range=["#28a745", "#007bff", "#dc3545"])
         grafico_anual = alt.Chart(df_agrupado).mark_bar().encode(
             x=alt.X("ND:N", title="Natureza de Despesa (ND)"),
             y=alt.Y("Valor Total:Q", title="Total (R$)"),
             color=alt.Color("Situação:N", scale=escala_cores, title="Status do Recurso"),
-            tooltip=[
-                alt.Tooltip("ND:N", title="ND"),
-                alt.Tooltip("Situação:N", title="Status"),
-                alt.Tooltip("Valor Total:Q", title="Valor Calculado (R$)", format=",.2f")
-            ]
+            tooltip=[alt.Tooltip("ND:N"), alt.Tooltip("Situação:N"), alt.Tooltip("Valor Total:Q", format=",.2f")]
         ).properties(height=450)
-        
         st.altair_chart(grafico_anual, use_container_width=True)
         
         total_geral_ano = df_agrupado["Valor Total"].sum()
         st.markdown(f"<h3 style='text-align: right;'>Total Geral Cadastrado em {ano_selecionado}: <span style='color: #1E88E5;'>R$ {total_geral_ano:,.2f}</span></h3>", unsafe_allow_html=True)
         
         st.markdown("---")
-        st.markdown("#### Detalhamento de Valores por ND e Status")
-        
         df_pivot = df_agrupado.pivot(index="ND", columns="Situação", values="Valor Total").fillna(0)
         df_pivot["Total Geral por ND"] = df_pivot.sum(axis=1)
-        
         for col in df_pivot.columns:
             df_pivot[col] = df_pivot[col].apply(lambda x: f"R$ {x:,.2f}")
-            
         st.dataframe(df_pivot, use_container_width=True)
-        
     else:
         st.info("Não há itens registrados para exibição no painel global.")
 
 # =====================================================================
-# ABA 4: GERENCIAR ACESSOS E EQUIPE (Com Criptografia de Senha)
+# ABA 4: CONSULTA DE PREGÕES & IMPORTAÇÃO DIRETA PARA NOTA DE CRÉDITO
 # =====================================================================
-with menu_acessos:
+with tab_consulta_pregoes:
+    st.subheader("🔎 Consulta de Pregões no SIASGnet e Contratos.gov.br")
+    st.caption("Consulte os pregões da UASG, veja saldos reais de empenho e **importe itens diretamente para suas Notas de Crédito** em 1 clique!")
+
+    col_u1, col_u2, col_u3 = st.columns([2, 3, 2])
+    with col_u1:
+        uasg_busca = st.text_input("Código da UASG:", value="160440", max_chars=6, key="input_uasg_pregoes")
+    with col_u2:
+        ano_now = datetime.datetime.now().year
+        lista_exercicios = [str(ano_now + 1)] + [str(ano_now - i) for i in range(6)]
+        anos_pregoes = st.multiselect(
+            "Exercícios (Anos):",
+            options=lista_exercicios,
+            default=[str(ano_now), str(ano_now - 1)],
+            key="multisel_anos_pregoes"
+        )
+    with col_u3:
+        st.write("")
+        st.write("")
+        btn_rodar_busca = st.button("🔍 Buscar Pregões da UASG", type="primary", use_container_width=True)
+
+    if 'df_pregoes_busca' not in st.session_state:
+        st.session_state['df_pregoes_busca'] = pd.DataFrame()
+    if 'itens_carregados_pregoes' not in st.session_state:
+        st.session_state['itens_carregados_pregoes'] = {}
+
+    if btn_rodar_busca:
+        with st.spinner(f"Consultando SIASGnet para a UASG {uasg_busca}..."):
+            df_pregoes_res, err_msg = extrair_pregoes_siasg(uasg_busca, anos_pregoes)
+            if err_msg:
+                st.error(err_msg)
+            elif df_pregoes_res.empty:
+                st.warning(f"Nenhum pregão encontrado para a UASG {uasg_busca}.")
+                st.session_state['df_pregoes_busca'] = pd.DataFrame()
+            else:
+                st.session_state['df_pregoes_busca'] = df_pregoes_res
+                st.session_state['itens_carregados_pregoes'] = {}
+                st.session_state['uasg_pesquisada'] = uasg_busca
+
+    df_pregoes_atual = st.session_state.get('df_pregoes_busca', pd.DataFrame())
+
+    if not df_pregoes_atual.empty:
+        st.success(f"Foram encontrados **{len(df_pregoes_atual)} pregões** para a UASG **{st.session_state.get('uasg_pesquisada', uasg_busca)}**.")
+
+        for idx_p, row_p in df_pregoes_atual.iterrows():
+            chave_p = f"{row_p['UASG']}_{row_p['Nº da Licitação']}"
+            with st.expander(f"📦 Pregão {row_p['Nº da Licitação']} ({row_p['Ano']}) — {row_p['Objeto'][:100]}..."):
+                st.write(f"**Objeto Completo:** {row_p['Objeto']}")
+                
+                c_p1, c_p2 = st.columns([3, 4])
+                with c_p1:
+                    btn_itens_p = st.button("🔍 Carregar Itens e Saldos Reais", key=f"btn_it_{chave_p}", type="primary")
+                with c_p2:
+                    st.markdown(f"[📋 Acessar no Contratos.gov.br]({row_p['Link Contratos']})")
+
+                if btn_itens_p:
+                    with st.spinner("Varrendo itens e apurando saldos no Contratos.gov.br..."):
+                        itens_det = buscar_itens_com_saldo_real(st.session_state.get('uasg_pesquisada', uasg_busca), row_p['Nº Compra'], row_p['Ano Compra'])
+                        st.session_state['itens_carregados_pregoes'][chave_p] = itens_det
+
+                if chave_p in st.session_state['itens_carregados_pregoes']:
+                    itens_pr = st.session_state['itens_carregados_pregoes'][chave_p]
+                    if itens_pr:
+                        st.markdown("---")
+                        st.markdown("#### 📊 Itens Disponíveis e Saldos Reais da UASG")
+                        df_it_view = pd.DataFrame(itens_pr)
+                        
+                        cols_v = ["Item", "Descrição", "Unidade", "Qtd Registrada", "Qtd Empenhada", "Saldo p/ Empenho", "Ata Vinculada", "Fornecedor", "PDF da Ata"]
+                        st.dataframe(
+                            df_it_view[[c for c in cols_v if c in df_it_view.columns]],
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "PDF da Ata": st.column_config.LinkColumn(
+                                    "Ata Oficial (PDF)",
+                                    display_text="📥 Abrir Ata (PDF)"
+                                )
+                            }
+                        )
+
+                        st.markdown("---")
+                        st.markdown("### 📥 Importar Item Selecionado Diretamente para uma Nota de Crédito")
+                        
+                        opcoes_import = [f"Item {it['Item']} - {it['Descrição'][:50]}... (Saldo: {it['Saldo p/ Empenho']})" for it in itens_pr]
+                        it_escolhido_str = st.selectbox("Selecione o Item para Puxar para a NC:", opcoes_import, key=f"sel_import_{chave_p}")
+                        
+                        if it_escolhido_str:
+                            idx_it_sel = opcoes_import.index(it_escolhido_str)
+                            item_alvo = itens_pr[idx_it_sel]
+
+                            ncs_disponiveis = [k for k in banco_dados.keys() if k != "CONFIG_REQUISICAO"]
+                            
+                            if not ncs_disponiveis:
+                                st.warning("⚠️ Você ainda não tem nenhuma Nota de Crédito cadastrada. Cadastre uma NC na aba '1. Cadastrar e Lançar Compras' antes de importar itens.")
+                            else:
+                                with st.form(f"form_importar_item_{chave_p}_{item_alvo['Item']}"):
+                                    st.markdown(f"**Item Selecionado:** `{item_alvo['Item']}` - {item_alvo['Descrição']}")
+                                    st.markdown(f"• **Fornecedor Identificado:** `{item_alvo['Fornecedor']}`")
+                                    st.markdown(f"• **Ata Vinculada:** `{item_alvo['Ata Vinculada']}` | **Pregão:** `{row_p['Nº da Licitação']}`")
+
+                                    c_imp1, c_imp2, c_imp3 = st.columns(3)
+                                    with c_imp1:
+                                        nc_destino = st.selectbox("Vincular à Nota de Crédito (NC):", ncs_disponiveis)
+                                    with c_imp2:
+                                        saldo_num = 1
+                                        try:
+                                            saldo_num = max(1, int(re.sub(r"\D", "", item_alvo["Saldo p/ Empenho"])))
+                                        except Exception:
+                                            saldo_num = 1
+                                        qtd_para_importar = st.number_input("Quantidade a Empenhar / Comprar:", min_value=1, value=saldo_num, step=1)
+                                    with c_imp3:
+                                        v_sug = float(item_alvo.get("Valor Unitario Sugerido", 0.0))
+                                        valor_unit_imp = st.number_input("Valor Unitário (R$):", min_value=0.0, value=v_sug, step=0.01)
+
+                                    c_imp4, c_imp5 = st.columns(2)
+                                    with c_imp4:
+                                        sit_imp = st.selectbox("Situação Inicial:", ["Planejamento", "Aguardando entrega", "Recebido"])
+                                    with c_imp5:
+                                        pdf_link = item_alvo.get("PDF da Ata")
+                                        if pdf_link:
+                                            st.markdown(f"[📥 Visualizar Ata Original (PDF)]({pdf_link})")
+
+                                    btn_confirmar_import = st.form_submit_button("🚀 Confirmar Importação deste Item para a NC", type="primary", use_container_width=True)
+
+                                    if btn_confirmar_import:
+                                        if tipo_perfil == "Fiscal":
+                                            st.error("O perfil de Fiscal não possui permissão para incluir itens.")
+                                        else:
+                                            cnpj_puro = item_alvo.get("CNPJ Puro", "")
+                                            forn_puro = item_alvo.get("Fornecedor Puro", "")
+                                            
+                                            if not forn_puro:
+                                                forn_puro = item_alvo.get("Fornecedor", "NÃO INFORMADO")
+
+                                            novo_item_nc = {
+                                                "Item": int(item_alvo["Item"]) if str(item_alvo["Item"]).isdigit() else 1,
+                                                "Nome": item_alvo["Descrição"].strip(),
+                                                "Valor Unitário": float(valor_unit_imp),
+                                                "Qtd": int(qtd_para_importar),
+                                                "Total": float(valor_unit_imp * qtd_para_importar),
+                                                "UASG": str(row_p["UASG"]),
+                                                "Pregão": str(row_p["Nº da Licitação"]),
+                                                "Ata": str(item_alvo["Ata Vinculada"]),
+                                                "Fornecedor": forn_puro.strip().upper(),
+                                                "CNPJ": formatar_cnpj(cnpj_puro),
+                                                "Situação": sit_imp
+                                            }
+
+                                            if nc_destino not in banco_dados:
+                                                st.error("Nota de Crédito não encontrada.")
+                                            else:
+                                                banco_dados[nc_destino]["itens"].append(novo_item_nc)
+                                                salvar_dados(banco_dados)
+                                                st.session_state.banco = banco_dados
+                                                st.success(f"🎉 Item nº {item_alvo['Item']} importado com sucesso para a NC **{nc_destino}**!")
+                                                st.toast(f"Item {item_alvo['Item']} adicionado à NC {nc_destino}!")
+                    else:
+                        st.warning("Nenhum item localizado no pregão.")
+
+# =====================================================================
+# ABA 5: GERENCIAR ACESSOS E EQUIPE
+# =====================================================================
+with tab_acessos:
     if tipo_perfil == "Operador":
-        st.warning("⚠️ **Acesso Restrito:** O seu perfil de Operador não tem permissão para cadastrar novos usuários. Solicite ao Chefe da sua Seção.")
+        st.warning("⚠️ **Acesso Restrito:** O seu perfil de Operador não tem permissão para cadastrar novos usuários.")
     else:
         st.subheader("👥 Painel de Controle de Usuários")
         if tipo_perfil == "Chefe":
