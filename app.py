@@ -81,9 +81,37 @@ def formatar_cnpj(cnpj_raw: str) -> str:
     return cnpj_raw.strip().upper()
 
 def extrair_ano(nc_nome: str) -> str:
+    """Extrai os 4 dígitos iniciais se forem ano, senão agrupa de forma segura para o Excel."""
     if len(nc_nome) >= 4 and nc_nome[:4].isdigit():
         return nc_nome[:4]
-    return "Outros/Sem Ano"
+    return "Sem Ano"
+
+def limpar_nome_aba(nome: str) -> str:
+    """Remove caracteres proibidos pelo Excel em títulos de abas e limita a 30 caracteres."""
+    if not nome:
+        return "Resumo"
+    nome_limpo = re.sub(r"[\/\\:\?\*\[\]]", "-", str(nome)).strip()
+    return nome_limpo[:30]
+
+def converter_para_float(val_str: str) -> float:
+    """Converte valores numéricos em formatos variados (brasileiro ou americano) para float."""
+    if not val_str:
+        return 0.0
+    s = str(val_str).strip()
+    s = re.sub(r"[^\d,\.]", "", s)
+    if not s:
+        return 0.0
+    if "," in s and "." in s:
+        if s.find(".") < s.find(","):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
 
 # =====================================================================
 # 4. MÓDULO HTTP & RASTREAMENTO SIASG / CONTRATOS.GOV.BR
@@ -284,6 +312,7 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
         "fornecedor_puro": "",
         "cnpj_puro": "",
         "valor_unitario_sugerido": 0.0,
+        "descricao_detalhada_ata": "",
         "empenhos_resumo": "Nenhum",
         "empenhos_lista": [],
         "numero_ata": target_ata["numeroAta"] if target_ata else "",
@@ -301,6 +330,16 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
 
         soup = BeautifulSoup(res.text, 'html.parser')
 
+        # 1. Varredura da Descrição Detalhada da Ata (termo de referência)
+        for bloco in soup.find_all(['div', 'p', 'span']):
+            t_bloco = bloco.get_text(strip=True)
+            if any(chave in t_bloco.lower() for chave in ['especificação:', 'descrição detalhada:', 'descrição do item:']):
+                partes = re.split(r"especificação:|descrição detalhada:|descrição do item:", t_bloco, flags=re.IGNORECASE)
+                if len(partes) > 1 and len(partes[1].strip()) > 5:
+                    resultado["descricao_detalhada_ata"] = partes[1].strip()
+                    break
+
+        # 2. Varredura do Fornecedor e Valor Unitário
         for tr in soup.find_all('tr'):
             tds = tr.find_all('td')
             if len(tds) >= 5:
@@ -312,15 +351,10 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
                     resultado["fornecedor"] = f"{razao} ({cnpj_m.group(0)}) - {v_unit_txt}"
                     resultado["fornecedor_puro"] = razao
                     resultado["cnpj_puro"] = cnpj_m.group(0)
-                    
-                    # Converte valor unitário para float
-                    v_limpo = re.sub(r"[^\d,\.]", "", v_unit_txt).replace(".", "").replace(",", ".")
-                    try:
-                        resultado["valor_unitario_sugerido"] = float(v_limpo)
-                    except Exception:
-                        resultado["valor_unitario_sugerido"] = 0.0
+                    resultado["valor_unitario_sugerido"] = converter_para_float(v_unit_txt)
                     break
 
+        # 3. Varredura de Saldos da UASG
         uasg_clean = uasg.strip()
         for tr in soup.find_all('tr'):
             tds = tr.find_all('td')
@@ -338,6 +372,17 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
                     if uasg_clean in u_txt:
                         break
 
+        # 4. Ajuste Inteligente de Saldo Real:
+        # Se Qtd Empenhada for 0 ou se Saldo for 0 e Empenho for 0, o saldo real é a Qtd Registrada!
+        f_reg = converter_para_float(resultado["qtd_registrada"])
+        f_emp = converter_para_float(resultado["qtd_empenhada"])
+        f_sal = converter_para_float(resultado["saldo_empenho"])
+
+        if f_reg > 0:
+            if f_emp == 0 or (f_sal == 0 and f_emp == 0):
+                resultado["saldo_empenho"] = resultado["qtd_registrada"]
+
+        # 5. Varredura das Notas de Empenho
         empenhos_list = []
         for tr in soup.find_all('tr'):
             tds = tr.find_all('td')
@@ -521,16 +566,23 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
 
             qtd_registrada_final = saldo_info["qtd_registrada"] if saldo_info["qtd_registrada"] != "0" else it["Qtd SIASG"]
 
+            # Tratamento de item sem fornecedor: "Deserto / Fracassado" em vez de "N/D"
+            fornecedor_display = saldo_info["fornecedor"].strip() if saldo_info["fornecedor"] else "Deserto / Fracassado"
+            
+            # Descrição mais precisa: se achou na ata, usa a descrição detalhada; senão, usa a do SIASG
+            desc_final = saldo_info["descricao_detalhada_ata"] if saldo_info["descricao_detalhada_ata"] else it["Descrição"]
+
             dados_finais.append({
                 "Item": it["Item"],
                 "Tipo": it["Tipo"],
-                "Descrição": it["Descrição"],
+                "Descrição": desc_final,
+                "Descrição Curta SIASG": it["Descrição"],
                 "Unidade": it["Unidade"],
                 "Qtd Registrada": qtd_registrada_final,
                 "Qtd Empenhada": saldo_info["qtd_empenhada"],
                 "Saldo p/ Empenho": saldo_info["saldo_empenho"],
                 "Ata Vinculada": saldo_info["numero_ata"] or "Não identificada",
-                "Fornecedor": saldo_info["fornecedor"] or "N/D",
+                "Fornecedor": fornecedor_display,
                 "Fornecedor Puro": saldo_info["fornecedor_puro"],
                 "CNPJ Puro": saldo_info["cnpj_puro"],
                 "Valor Unitario Sugerido": saldo_info["valor_unitario_sugerido"],
@@ -549,18 +601,18 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
         return []
 
 # =====================================================================
-# 5. GERADORES DE PLANILHAS (BLINDADOS)
+# 5. GERADORES DE PLANILHAS (BLINDADOS CONTRA CRASHES)
 # =====================================================================
 def gerar_planilha_nc_completa(nc_nome: str, dados_nc: dict, om_nome: str, secao_nome: str):
     itens = dados_nc.get("itens", [])
     try:
         import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.styles import Font, PatternFill, Alignment
         from openpyxl.utils import get_column_letter
 
         wb = openpyxl.Workbook()
         ws_resumo = wb.active
-        ws_resumo.title = "Resumo Executivo"
+        ws_resumo.title = limpar_nome_aba("Resumo Executivo")
         ws_resumo.views.sheetView[0].showGridLines = True
         
         ws_resumo.merge_cells("A1:F1")
@@ -570,7 +622,7 @@ def gerar_planilha_nc_completa(nc_nome: str, dados_nc: dict, om_nome: str, secao
         ws_resumo["A1"].alignment = Alignment(horizontal="center", vertical="center")
         ws_resumo.row_dimensions[1].height = 35
 
-        ws_itens = wb.create_sheet(title="Itens Detalhados")
+        ws_itens = wb.create_sheet(title=limpar_nome_aba("Itens Detalhados"))
         ws_itens.views.sheetView[0].showGridLines = True
         cab_it = ["Item", "Material", "Qtd", "Valor Unitário", "Valor Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
         for c_idx, h in enumerate(cab_it, 1):
@@ -603,7 +655,7 @@ def gerar_planilha_nc_completa(nc_nome: str, dados_nc: dict, om_nome: str, secao
         wb.save(buf)
         return buf.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
 
-    except ImportError:
+    except Exception:
         df_exp = pd.DataFrame(itens)
         csv_str = df_exp.to_csv(index=False, sep=";", decimal=",", encoding="utf-8-sig")
         return csv_str.encode("utf-8-sig"), "text/csv", "csv"
@@ -617,7 +669,7 @@ def gerar_planilha_global_ano_completa(ano: str, banco_dados: dict, om_nome: str
 
         wb = openpyxl.Workbook()
         ws_resumo = wb.active
-        ws_resumo.title = f"Consolidado {ano}"
+        ws_resumo.title = limpar_nome_aba(f"Consolidado {ano}")
         ws_resumo.views.sheetView[0].showGridLines = True
         
         ws_resumo.merge_cells("A1:G1")
@@ -627,7 +679,7 @@ def gerar_planilha_global_ano_completa(ano: str, banco_dados: dict, om_nome: str
         ws_resumo["A1"].alignment = Alignment(horizontal="center", vertical="center")
         ws_resumo.row_dimensions[1].height = 35
 
-        ws_it_ano = wb.create_sheet(title=f"Itens {ano}")
+        ws_it_ano = wb.create_sheet(title=limpar_nome_aba(f"Itens {ano}"))
         ws_it_ano.views.sheetView[0].showGridLines = True
         cab_todos = ["NC de Origem", "PI", "ND", "Item", "Nomenclatura", "Qtd", "Valor Unitário", "Valor Total", "Situação", "Fornecedor", "CNPJ", "Pregão"]
         for c_i, h in enumerate(cab_todos, 1):
@@ -664,7 +716,7 @@ def gerar_planilha_global_ano_completa(ano: str, banco_dados: dict, om_nome: str
         wb.save(buf)
         return buf.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
 
-    except ImportError:
+    except Exception:
         todos_itens = []
         for nc in ncs_do_ano:
             for it in banco_dados[nc].get("itens", []):
@@ -1106,15 +1158,18 @@ with tab_visualizacao:
                     st.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
                 
                 st.write("")
-                excel_nc_bytes, mime_nc, ext_nc = gerar_planilha_nc_completa(nc_selecionada_vis, dados_nc, om_user, secao_ativa)
-                st.download_button(
-                    label=f"📥 Baixar Planilha Executiva da NC {nc_selecionada_vis} ({ext_nc.upper()})",
-                    data=excel_nc_bytes,
-                    file_name=f"Relatorio_NC_{nc_selecionada_vis}_{om_user}.{ext_nc}",
-                    mime=mime_nc,
-                    use_container_width=False,
-                    type="secondary"
-                )
+                try:
+                    excel_nc_bytes, mime_nc, ext_nc = gerar_planilha_nc_completa(nc_selecionada_vis, dados_nc, om_user, secao_ativa)
+                    st.download_button(
+                        label=f"📥 Baixar Planilha Executiva da NC {nc_selecionada_vis} ({ext_nc.upper()})",
+                        data=excel_nc_bytes,
+                        file_name=f"Relatorio_NC_{nc_selecionada_vis}_{om_user}.{ext_nc}",
+                        mime=mime_nc,
+                        use_container_width=False,
+                        type="secondary"
+                    )
+                except Exception as e_nc_plan:
+                    st.caption(f"Aviso de download: {e_nc_plan}")
 
                 if not df_base_mestre.empty:
                     st.markdown("---")
@@ -1480,14 +1535,18 @@ with tab_visao_global:
                     })
                     
     if dados_anuais:
-        planilha_anual_bytes, mime_anual, ext_anual = gerar_planilha_global_ano_completa(ano_selecionado, banco_dados, om_user, secao_ativa)
-        st.download_button(
-            label=f"📥 Baixar Relatório Anual Consolidado do Ano {ano_selecionado} ({ext_anual.upper()})",
-            data=planilha_anual_bytes,
-            file_name=f"Relatorio_Anual_Geral_{ano_selecionado}_{om_user}.{ext_anual}",
-            mime=mime_anual,
-            type="primary"
-        )
+        try:
+            planilha_anual_bytes, mime_anual, ext_anual = gerar_planilha_global_ano_completa(ano_selecionado, banco_dados, om_user, secao_ativa)
+            st.download_button(
+                label=f"📥 Baixar Relatório Anual Consolidado do Ano {ano_selecionado} ({ext_anual.upper()})",
+                data=planilha_anual_bytes,
+                file_name=f"Relatorio_Anual_Geral_{limpar_nome_aba(ano_selecionado)}_{om_user}.{ext_anual}",
+                mime=mime_anual,
+                type="primary"
+            )
+        except Exception as e_glob_plan:
+            st.caption(f"Aviso de download: {e_glob_plan}")
+
         st.write("")
 
         df_anual = pd.DataFrame(dados_anuais)
@@ -1621,13 +1680,15 @@ with tab_consulta_pregoes:
                                     with c_imp1:
                                         nc_destino = st.selectbox("Vincular à Nota de Crédito (NC):", ncs_disponiveis)
                                     with c_imp2:
-                                        saldo_num = 1
-                                        try:
-                                            saldo_num = max(1, int(re.sub(r"\D", "", item_alvo["Saldo p/ Empenho"])))
-                                        except Exception:
+                                        # Puxa o saldo real corrigido como valor sugerido para compra
+                                        saldo_num = int(converter_para_float(item_alvo.get("Saldo p/ Empenho", "1")))
+                                        if saldo_num <= 0:
+                                            saldo_num = int(converter_para_float(item_alvo.get("Qtd Registrada", "1")))
+                                        if saldo_num <= 0:
                                             saldo_num = 1
                                         qtd_para_importar = st.number_input("Quantidade a Empenhar / Comprar:", min_value=1, value=saldo_num, step=1)
                                     with c_imp3:
+                                        # Puxa o Valor Unitário real sugerido
                                         v_sug = float(item_alvo.get("Valor Unitario Sugerido", 0.0))
                                         valor_unit_imp = st.number_input("Valor Unitário (R$):", min_value=0.0, value=v_sug, step=0.01)
 
@@ -1671,7 +1732,7 @@ with tab_consulta_pregoes:
                                                 banco_dados[nc_destino]["itens"].append(novo_item_nc)
                                                 salvar_dados(banco_dados)
                                                 st.session_state.banco = banco_dados
-                                                st.success(f"🎉 Item nº {item_alvo['Item']} importado com sucesso para a NC **{nc_destino}**!")
+                                                st.success(f"🎉 Item nº {item_alvo['Item']} importado com sucesso para a NC **{nc_destino}** com valor de R$ {valor_unit_imp:,.2f}!")
                                                 st.toast(f"Item {item_alvo['Item']} adicionado à NC {nc_destino}!")
                     else:
                         st.warning("Nenhum item localizado no pregão.")
@@ -1725,7 +1786,7 @@ with tab_acessos:
                         supabase.table("usuarios").insert({
                             "id": novo_int_user, 
                             "senha": hash_senha(novo_int_senha), 
-                            "nome": novo_int_nome,
+                            "nome": novo_int_nome, 
                             "om": om_user, 
                             "secao": secao_final, 
                             "perfil": novo_int_perfil
