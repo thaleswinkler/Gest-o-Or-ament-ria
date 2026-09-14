@@ -552,23 +552,33 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
             if m_val:
                 resultado["valor_unitario_sugerido"] = converter_para_float(m_val.group(1))
 
-        # 3. Varredura da Tabela de Saldos da UASG (Imunização Total contra Códigos de UASG e Nomes de OM)
+        # 3. Varredura Oficial de Saldos da UASG (Unidades e Empenhos sob o "Olhinho")
         uasg_clean = uasg.strip()
         reg_encontrada = ""
         emp_encontrada = ""
         sal_encontrada = ""
 
+        # A) Captura prévia de rótulos oficiais explícitos da página
+        texto_pagina = soup.get_text(separator=' ', strip=True)
+        m_sal_lbl = re.search(r"Saldo para Empenho:\s*(?:</strong>)?\s*([0-9]+(?:[.,][0-9]+)?)", texto_pagina, re.IGNORECASE)
+        lbl_sal = m_sal_lbl.group(1).replace(",", ".") if m_sal_lbl else ""
+        m_reg_lbl = re.search(r"Quantidade Registrada/Autorizada:\s*(?:</strong>)?\s*([0-9]+(?:[.,][0-9]+)?)", texto_pagina, re.IGNORECASE)
+        lbl_reg = m_reg_lbl.group(1).replace(",", ".") if m_reg_lbl else ""
+
+        # B) Varredura rigorosa das Tabelas Oficiais de Unidades e Empenhos
         for tbl in soup.find_all('table'):
             tbl_txt = tbl.get_text(" ", strip=True).lower()
             if "cnpj" in tbl_txt and "fornecedor" in tbl_txt:
                 continue
-            if "nota de empenho" in tbl_txt or "número ne" in tbl_txt or "data emissão" in tbl_txt:
+            # Ignora a tabela de NEs individuais nesta etapa de saldos da unidade
+            if "nota de empenho" in tbl_txt or "número de empenho" in tbl_txt or "número ne" in tbl_txt or "data do empenho" in tbl_txt:
                 continue
 
             # Mapeamento de colunas por cabeçalho
             idx_reg = -1
             idx_emp = -1
             idx_sal = -1
+            idx_und = -1
             
             hdr_tr = tbl.find('thead')
             if not hdr_tr:
@@ -576,12 +586,14 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
             if hdr_tr:
                 th_list = [th.get_text(" ", strip=True).lower() for th in hdr_tr.find_all(['th', 'td'])]
                 for i_col, col_name in enumerate(th_list):
-                    if any(k in col_name for k in ['registrad', 'homologad', 'solicitad', 'autorizad']) and not any(s in col_name for s in ['saldo', 'empenh']) and idx_reg == -1:
-                        idx_reg = i_col
-                    elif any(k in col_name for k in ['empenhad', 'empenho', 'atendid', 'consumid', 'utilizad']) and not any(s in col_name for s in ['saldo', 'remanescente']) and idx_emp == -1:
-                        idx_emp = i_col
-                    elif any(k in col_name for k in ['saldo', 'remanescente', 'disponív', 'disponiv']) and idx_sal == -1:
-                        idx_sal = i_col
+                    if any(k in col_name for k in ['registrad', 'homologad', 'solicitad', 'autorizad']) and not any(s in col_name for s in ['saldo', 'empenh']):
+                        if idx_reg == -1: idx_reg = i_col
+                    elif any(k in col_name for k in ['empenhad', 'empenho', 'atendid', 'consumid', 'utilizad']) and not any(s in col_name for s in ['saldo', 'remanescente']):
+                        if idx_emp == -1: idx_emp = i_col
+                    elif any(k in col_name for k in ['saldo', 'remanescente', 'disponív', 'disponiv', 'remanejamento']):
+                        if idx_sal == -1: idx_sal = i_col
+                    elif any(k in col_name for k in ['unidade', 'código', 'codigo']):
+                        if idx_und == -1: idx_und = i_col
 
             for tr in tbl.find_all('tr'):
                 if tr.find('th') and not tr.find('td'):
@@ -602,131 +614,168 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
                     c_reg = tds_leaf[idx_reg]
                     if re.match(r"^\d+(?:[.,]\d+)?$", c_reg) and c_reg != uasg_clean:
                         reg_encontrada = c_reg
-                        if idx_emp != -1 and idx_emp < len(tds_leaf):
-                            c_emp = tds_leaf[idx_emp]
-                            if re.match(r"^\d+(?:[.,]\d+)?$", c_emp) and c_emp != uasg_clean:
-                                emp_encontrada = c_emp
-                        if idx_sal != -1 and idx_sal < len(tds_leaf):
-                            c_sal = tds_leaf[idx_sal]
-                            if re.match(r"^\d+(?:[.,]\d+)?$", c_sal) and c_sal != uasg_clean:
-                                sal_encontrada = c_sal
-                        
-                        if reg_encontrada and (emp_encontrada or sal_encontrada):
-                            if eh_nossa_uasg:
-                                break
+                if idx_emp != -1 and idx_emp < len(tds_leaf):
+                    c_emp = tds_leaf[idx_emp]
+                    if re.match(r"^\d+(?:[.,]\d+)?$", c_emp) and c_emp != uasg_clean:
+                        emp_encontrada = c_emp
+                if idx_sal != -1 and idx_sal < len(tds_leaf):
+                    c_sal = tds_leaf[idx_sal]
+                    if re.match(r"^\d+(?:[.,]\d+)?$", c_sal) and c_sal != uasg_clean:
+                        sal_encontrada = c_sal
+
+                # Cálculo de integridade caso tenhamos Registrada e Saldo (comum na tabela 'Unidades do item')
+                if reg_encontrada and sal_encontrada and not emp_encontrada:
+                    f_r = converter_para_float(reg_encontrada)
+                    f_s = converter_para_float(sal_encontrada)
+                    diff_e = max(0.0, f_r - f_s)
+                    emp_encontrada = f"{diff_e:.5f}" if "." in reg_encontrada else f"{diff_e:g}"
+
+                if reg_encontrada and emp_encontrada and not sal_encontrada:
+                    f_r = converter_para_float(reg_encontrada)
+                    f_e = converter_para_float(emp_encontrada)
+                    diff_s = max(0.0, f_r - f_e)
+                    sal_encontrada = f"{diff_s:.5f}" if "." in reg_encontrada else f"{diff_s:g}"
+
+                if eh_nossa_uasg and reg_encontrada and (emp_encontrada or sal_encontrada):
+                    break
 
                 # 2ª Tentativa: extração das células puramente numéricas candidatas a quantidade
-                qtd_candidatos = []
-                for cell in tds_leaf:
-                    c_val = cell.strip()
-                    # Rejeita texto/letras (ex: '23 B I', 'Gerenciadora', 'Infantaria')
-                    if any(ch.isalpha() for ch in c_val):
-                        continue
-                    # Rejeita o próprio código da UASG (ex: '160440')
-                    if c_val == uasg_clean:
-                        continue
-                    # Rejeita datas ou CNPJs
-                    if "/" in c_val or "-" in c_val:
-                        continue
-                    # Aceita números decimais ou inteiros
-                    if re.match(r"^\d+(?:[.,]\d+)?$", c_val):
-                        qtd_candidatos.append(c_val)
+                if not reg_encontrada or (not emp_encontrada and not sal_encontrada):
+                    qtd_candidatos = []
+                    for cell in tds_leaf:
+                        c_val = cell.strip()
+                        if any(ch.isalpha() for ch in c_val) or c_val == uasg_clean or "/" in c_val or "-" in c_val:
+                            continue
+                        if re.match(r"^\d+(?:[.,]\d+)?$", c_val):
+                            qtd_candidatos.append(c_val)
 
-                if len(qtd_candidatos) >= 3:
-                    c0_f = converter_para_float(qtd_candidatos[0])
-                    c1_f = converter_para_float(qtd_candidatos[1])
-                    c2_f = converter_para_float(qtd_candidatos[2])
-                    # Verifica matematicamente a relação: Registrada - Empenhada = Saldo
-                    if abs((c0_f - c1_f) - c2_f) < 0.001:
+                    if len(qtd_candidatos) >= 3:
+                        c0_f = converter_para_float(qtd_candidatos[0])
+                        c1_f = converter_para_float(qtd_candidatos[1])
+                        c2_f = converter_para_float(qtd_candidatos[2])
+                        if abs((c0_f - c1_f) - c2_f) < 0.001:
+                            reg_encontrada = qtd_candidatos[0]
+                            emp_encontrada = qtd_candidatos[1]
+                            sal_encontrada = qtd_candidatos[2]
+                        elif abs((c0_f - c2_f) - c1_f) < 0.001:
+                            reg_encontrada = qtd_candidatos[0]
+                            sal_encontrada = qtd_candidatos[1]
+                            emp_encontrada = qtd_candidatos[2]
+                        else:
+                            reg_encontrada = qtd_candidatos[0]
+                            emp_encontrada = qtd_candidatos[1]
+                            sal_encontrada = qtd_candidatos[2]
+                        if eh_nossa_uasg:
+                            break
+                    elif len(qtd_candidatos) == 2:
+                        c0_f = converter_para_float(qtd_candidatos[0])
+                        c1_f = converter_para_float(qtd_candidatos[1])
                         reg_encontrada = qtd_candidatos[0]
-                        emp_encontrada = qtd_candidatos[1]
-                        sal_encontrada = qtd_candidatos[2]
-                    elif abs((c0_f - c2_f) - c1_f) < 0.001:
-                        reg_encontrada = qtd_candidatos[0]
-                        sal_encontrada = qtd_candidatos[1]
-                        emp_encontrada = qtd_candidatos[2]
-                    else:
-                        reg_encontrada = qtd_candidatos[0]
-                        emp_encontrada = qtd_candidatos[1]
-                        sal_encontrada = qtd_candidatos[2]
-                    if eh_nossa_uasg:
-                        break
-                elif len(qtd_candidatos) == 2:
-                    c0_f = converter_para_float(qtd_candidatos[0])
-                    c1_f = converter_para_float(qtd_candidatos[1])
-                    reg_encontrada = qtd_candidatos[0]
-                    # No Contratos.gov.br a tabela padrão de participantes traz Registrada e Saldo para Empenho!
-                    # Se idx_sal aponta para a 2ª coluna numérica ou não há coluna explícita de empenho:
-                    if idx_sal != -1 or (idx_emp == -1 and c1_f <= c0_f):
-                        sal_encontrada = qtd_candidatos[1]
-                        diff_emp = max(0.0, c0_f - c1_f)
-                        emp_encontrada = f"{diff_emp:.5f}" if "." in qtd_candidatos[0] else f"{diff_emp:g}"
-                    else:
-                        emp_encontrada = qtd_candidatos[1]
-                        diff_sal = max(0.0, c0_f - c1_f)
-                        sal_encontrada = f"{diff_sal:.5f}" if "." in qtd_candidatos[0] else f"{diff_sal:g}"
-                    if eh_nossa_uasg:
-                        break
-                elif len(qtd_candidatos) == 1:
-                    reg_encontrada = qtd_candidatos[0]
-                    emp_encontrada = "0"
-                    sal_encontrada = qtd_candidatos[0]
-                    if eh_nossa_uasg:
-                        break
+                        if idx_sal != -1 or (idx_emp == -1 and c1_f <= c0_f):
+                            sal_encontrada = qtd_candidatos[1]
+                            diff_emp = max(0.0, c0_f - c1_f)
+                            emp_encontrada = f"{diff_emp:.5f}" if "." in qtd_candidatos[0] else f"{diff_emp:g}"
+                        else:
+                            emp_encontrada = qtd_candidatos[1]
+                            diff_sal = max(0.0, c0_f - c1_f)
+                            sal_encontrada = f"{diff_sal:.5f}" if "." in qtd_candidatos[0] else f"{diff_sal:g}"
+                        if eh_nossa_uasg:
+                            break
 
-            if reg_encontrada:
-                resultado["qtd_registrada"] = reg_encontrada
-                resultado["qtd_empenhada"] = emp_encontrada or "0"
-                resultado["saldo_empenho"] = sal_encontrada or reg_encontrada
+            if eh_nossa_uasg and reg_encontrada and (emp_encontrada or sal_encontrada):
                 break
 
-        # 4. Varredura de Todas as Notas de Empenho (NE) Cadastradas e Soma Total Empenhada
-        soma_empenhos_ne = 0.0
+        # C) Complementação com rótulos oficiais da página caso a tabela não tenha trazido
+        if not sal_encontrada and lbl_sal:
+            sal_encontrada = lbl_sal
+        if not reg_encontrada and lbl_reg:
+            reg_encontrada = lbl_reg
+        if reg_encontrada and sal_encontrada and not emp_encontrada:
+            f_r = converter_para_float(reg_encontrada)
+            f_s = converter_para_float(sal_encontrada)
+            diff_e = max(0.0, f_r - f_s)
+            emp_encontrada = f"{diff_e:.5f}" if "." in reg_encontrada else f"{diff_e:g}"
+
+        # 4. Varredura da Tabela de Notas de Empenho (NE) EXCLUSIVAMENTE para Histórico e Resumo
         empenhos_list = []
-        for tr in soup.find_all('tr'):
-            tds = tr.find_all('td')
-            if not tds:
+        for tbl in soup.find_all('table'):
+            tbl_txt = tbl.get_text(" ", strip=True).lower()
+            if not ("nota de empenho" in tbl_txt or "número de empenho" in tbl_txt or "número ne" in tbl_txt or "data do empenho" in tbl_txt):
                 continue
-            linha_tr_txt = " ".join(td.get_text(" ", strip=True) for td in tds)
-            m_ne = re.search(r"\b(\d{4}NE\d{4,6})\b", linha_tr_txt, re.IGNORECASE)
-            if m_ne:
+
+            # Mapeia colunas da tabela de empenhos
+            hdr = tbl.find('thead') or tbl.find('tr')
+            idx_ne_col = -1
+            idx_data_col = -1
+            idx_qtd_col = -1
+            idx_val_col = -1
+            if hdr:
+                th_list = [th.get_text(" ", strip=True).lower() for th in hdr.find_all(['th', 'td'])]
+                for i_c, c_name in enumerate(th_list):
+                    if "empenho" in c_name and idx_ne_col == -1: idx_ne_col = i_c
+                    elif "data" in c_name and idx_data_col == -1: idx_data_col = i_c
+                    elif "quantidade empenhada" in c_name: idx_qtd_col = i_c
+                    elif "valor" in c_name: idx_val_col = i_c
+
+            for tr in tbl.find_all('tr'):
+                tds = tr.find_all('td')
+                if not tds:
+                    continue
+                linha_tr_txt = " ".join(td.get_text(" ", strip=True) for td in tds)
+                m_ne = re.search(r"\b(\d{4}NE\d{4,6})\b", linha_tr_txt, re.IGNORECASE)
+                if not m_ne:
+                    continue
+
                 ne_num = m_ne.group(1).upper()
                 d_ne = ""
-                q_ne_val = 0.0
+                q_ne_str = ""
                 v_ne_str = ""
-                for td in tds:
-                    c_txt = td.get_text(strip=True)
-                    if re.match(r"^\d{2}/\d{2}/\d{4}$", c_txt):
-                        d_ne = c_txt
-                    elif re.match(r"^\d+(?:[.,]\d+)?$", c_txt) and c_txt != uasg_clean and not re.match(r"^\d{4}$", c_txt):
-                        q_cand = converter_para_float(c_txt)
-                        if q_cand > 0 and q_cand < 10000000:
-                            q_ne_val = q_cand
-                    elif "r$" in c_txt.lower() or re.match(r"^\d{1,3}(?:\.\d{3})*,\d{2}$", c_txt):
-                        v_ne_str = c_txt
 
-                if q_ne_val > 0:
-                    soma_empenhos_ne += q_ne_val
+                # Extrai dados pelas colunas mapeadas se disponíveis
+                if idx_data_col != -1 and idx_data_col < len(tds):
+                    d_ne = tds[idx_data_col].get_text(strip=True)
+                if idx_qtd_col != -1 and idx_qtd_col < len(tds):
+                    q_ne_str = tds[idx_qtd_col].get_text(strip=True)
+                if idx_val_col != -1 and idx_val_col < len(tds):
+                    v_ne_str = tds[idx_val_col].get_text(strip=True)
+
+                # Fallback seguro para células individuais caso o cabeçalho não esteja padrão
+                if not d_ne or not q_ne_str or not v_ne_str:
+                    for td in tds:
+                        c_txt = td.get_text(strip=True)
+                        if not d_ne and re.match(r"^\d{2}/\d{2}/\d{4}$", c_txt):
+                            d_ne = c_txt
+                        elif not v_ne_str and ("r$" in c_txt.lower() or re.search(r"\b\d{1,3}(?:\.\d{3})*,\d{2}\b", c_txt)):
+                            v_ne_str = c_txt
 
                 emp_str = ne_num
                 if d_ne: emp_str += f" ({d_ne})"
-                if q_ne_val > 0: emp_str += f": Qtd {q_ne_val:g}"
+                if q_ne_str: emp_str += f": Qtd {q_ne_str}"
                 if v_ne_str: emp_str += f" [{v_ne_str}]"
                 if emp_str not in empenhos_list:
                     empenhos_list.append(emp_str)
 
-        if empenhos_list:
-            resultado["empenhos_resumo"] = " | ".join(empenhos_list)
-            resultado["empenhos_lista"] = empenhos_list
-            f_emp_ant = converter_para_float(resultado["qtd_empenhada"])
-            if soma_empenhos_ne > f_emp_ant:
-                resultado["qtd_empenhada"] = f"{soma_empenhos_ne:.5f}" if "." in str(resultado["qtd_registrada"]) else f"{soma_empenhos_ne:g}"
+        resultado["empenhos_resumo"] = " | ".join(empenhos_list) if empenhos_list else "Nenhum"
+        resultado["empenhos_lista"] = empenhos_list
 
-        # 5. REGRA DEFINITIVA DE SALDO DO USUÁRIO: SALDO = REGISTRADA - EMPENHADA
-        f_reg = converter_para_float(resultado["qtd_registrada"])
-        f_emp = converter_para_float(resultado["qtd_empenhada"])
-        diff_final = max(0.0, f_reg - f_emp)
-        if "." in str(resultado["qtd_registrada"]):
+        # 5. REGRA DEFINITIVA: SALDO = REGISTRADA - EMPENHADA (OU SALDO OFICIAL DA UNIDADE)
+        reg_val = reg_encontrada or "0"
+        emp_val = emp_encontrada or "0"
+        f_reg = converter_para_float(reg_val)
+        f_emp = converter_para_float(emp_val)
+
+        if sal_encontrada and sal_encontrada != uasg_clean and not any(c.isalpha() for c in sal_encontrada):
+            f_sal = converter_para_float(sal_encontrada)
+            if f_emp == 0 and f_reg > f_sal:
+                f_emp = max(0.0, f_reg - f_sal)
+                emp_val = f"{f_emp:.5f}" if "." in reg_val else f"{f_emp:g}"
+            diff_final = f_sal
+        else:
+            diff_final = max(0.0, f_reg - f_emp)
+
+        resultado["qtd_registrada"] = reg_val
+        resultado["qtd_empenhada"] = emp_val
+        if "." in reg_val:
             resultado["saldo_empenho"] = f"{diff_final:.5f}"
         else:
             resultado["saldo_empenho"] = f"{diff_final:g}"
@@ -911,7 +960,18 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
             # Aplicação direta da regra solicitada: Saldo = Registrada - Empenhada
             f_reg = converter_para_float(qtd_registrada_final)
             f_emp = converter_para_float(qtd_empenhada_final)
-            diff_saldo = max(0.0, f_reg - f_emp)
+            raw_sal = str(saldo_info.get("saldo_empenho", "")).strip()
+
+            # Se o saldo para empenho oficial foi capturado do sistema (olhinho em Unidades/Empenhos)
+            if raw_sal and raw_sal != uasg.strip() and not any(c.isalpha() for c in raw_sal):
+                f_sal = converter_para_float(raw_sal)
+                diff_saldo = f_sal
+                if f_emp == 0 and f_reg > f_sal:
+                    diff_emp = max(0.0, f_reg - f_sal)
+                    qtd_empenhada_final = f"{diff_emp:.5f}" if "." in str(qtd_registrada_final) else f"{diff_emp:g}"
+            else:
+                diff_saldo = max(0.0, f_reg - f_emp)
+
             if "." in str(qtd_registrada_final):
                 saldo_empenho_calc = f"{diff_saldo:.5f}"
             else:
