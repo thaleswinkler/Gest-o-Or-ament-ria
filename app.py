@@ -313,8 +313,7 @@ def buscar_atas_contratos(session: requests.Session, uasg: str, num_compra: str,
     arp_ids: List[str] = []
     
     page = 1
-    has_more = True
-    while has_more and page <= 5:
+    while page <= 10:
         url = f"{BASE_CONTRATOS}/transparencia/arp?situacao=vigente&numeroCompra={num_compra}&anoCompra={ano_compra}"
         if id_unidade:
             url += f"&unidadesGerenciadoras[]={id_unidade}"
@@ -336,11 +335,9 @@ def buscar_atas_contratos(session: requests.Session, uasg: str, num_compra: str,
                         arp_ids.append(arp_id)
                         novos += 1
 
-            proxima_pag = soup.find('a', href=re.compile(rf"page={page + 1}"))
-            if novos == 0 or not proxima_pag:
-                has_more = False
-            else:
-                page += 1
+            if novos == 0:
+                break
+            page += 1
         except Exception:
             break
 
@@ -386,18 +383,14 @@ def buscar_atas_contratos(session: requests.Session, uasg: str, num_compra: str,
                         break
             
             itens_olho = {}
-            for tbl in s_arp.find_all('table'):
-                ths = [th.get_text(strip=True) for th in tbl.find_all('th')]
-                if any('Item' in h or 'Número' in h for h in ths):
-                    for tr in tbl.find_all('tr'):
-                        tds = tr.find_all('td')
-                        if len(tds) >= 2:
-                            raw_num = tds[0].get_text(strip=True)
-                            a_eye = tr.find('a', href=re.compile(r"/arpshow/itens/"))
-                            if raw_num and a_eye:
-                                link_eye = a_eye['href'].strip()
-                                link_eye = link_eye if link_eye.startswith('http') else f"{BASE_CONTRATOS}{link_eye}"
-                                itens_olho[raw_num] = link_eye
+            for a_eye in s_arp.find_all('a', href=True):
+                h = a_eye['href'].strip()
+                m_it = re.search(r"/transparencia/arpshow/itens/(\d+)/", h)
+                if m_it:
+                    it_num_int = str(int(m_it.group(1)))
+                    link_eye = h if h.startswith('http') else f"{BASE_CONTRATOS}{h}"
+                    itens_olho[it_num_int] = link_eye
+                    itens_olho[m_it.group(1)] = link_eye
 
             atas_detalhadas.append({
                 "arpId": arp_id,
@@ -415,25 +408,41 @@ def buscar_atas_contratos(session: requests.Session, uasg: str, num_compra: str,
 def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra: str, ano_compra: str, num_item: str) -> Dict:
     from bs4 import BeautifulSoup
     atas = buscar_atas_contratos(session, uasg, num_compra, ano_compra)
-    num_int = int(num_item) if num_item.isdigit() else 0
+    num_int = int(num_item) if str(num_item).isdigit() else 0
+    num_str = str(num_int)
     num_5 = str(num_int).zfill(5)
 
     target_eye_url = ""
     target_ata = None
 
     for ata in atas:
-        for it_key, eye_url in ata.get("itensOlho", {}).items():
-            clean_it_key = re.sub(r"\D", "", it_key)
-            if clean_it_key and int(clean_it_key) == num_int:
-                target_eye_url = re.sub(r"/itens/\d+/", f"/itens/{num_5}/", eye_url.strip())
-                target_ata = ata
-                break
-        if target_eye_url:
+        itens_map = ata.get("itensOlho", {})
+        if num_str in itens_map:
+            target_eye_url = itens_map[num_str]
+            target_ata = ata
+            break
+        elif num_5 in itens_map:
+            target_eye_url = itens_map[num_5]
+            target_ata = ata
             break
 
-    if not target_eye_url and atas:
-        target_ata = atas[0]
-        target_eye_url = f"{BASE_CONTRATOS}/transparencia/arpshow/itens/{num_5}/{target_ata['arpId']}/show"
+    # Se o item NÃO existe em nenhuma ARP homologada: é Deserto, Fracassado ou Cancelado
+    if not target_eye_url or not target_ata:
+        return {
+            "qtd_registrada": "0",
+            "qtd_empenhada": "0",
+            "saldo_empenho": "0",
+            "fornecedor": "Deserto / Fracassado",
+            "fornecedor_puro": "Deserto / Fracassado",
+            "cnpj_puro": "",
+            "valor_unitario_sugerido": 0.0,
+            "descricao_detalhada_ata": "",
+            "empenhos_resumo": "Nenhum (Item Deserto)",
+            "empenhos_lista": [],
+            "numero_ata": "-",
+            "pdf_ata": "",
+            "deserto": True
+        }
 
     resultado = {
         "qtd_registrada": "0",
@@ -446,21 +455,22 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
         "descricao_detalhada_ata": "",
         "empenhos_resumo": "Nenhum",
         "empenhos_lista": [],
-        "numero_ata": target_ata["numeroAta"] if target_ata else "",
-        "pdf_ata": target_ata["pdfUrl"] if target_ata else ""
+        "numero_ata": target_ata["numeroAta"] if target_ata else "-",
+        "pdf_ata": target_ata["pdfUrl"] if target_ata else "",
+        "deserto": False
     }
-
-    if not target_eye_url:
-        return resultado
 
     try:
         res = session.get(target_eye_url.strip(), headers=HEADERS_HTTP, timeout=15)
-        if not res.ok:
+        if not res.ok or "não encontrada" in res.text.lower() or "erro interno" in res.text.lower():
+            resultado["deserto"] = True
+            resultado["fornecedor"] = "Deserto / Fracassado"
+            resultado["fornecedor_puro"] = "Deserto / Fracassado"
             return resultado
 
         soup = BeautifulSoup(res.text, 'html.parser')
 
-        # 1. Extração Limpa e Específica da Descrição Técnica / Especificação
+        # 1. Extração da Descrição Técnica / Especificação
         for tag in soup.find_all(['div', 'p', 'span', 'td', 'dd', 'li']):
             txt_linhas = tag.get_text(separator='\n', strip=True).split('\n')
             for i_l, linha in enumerate(txt_linhas):
@@ -491,294 +501,178 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
                             resultado["descricao_detalhada_ata"] = desc_limpa
                             break
 
-        # 2. Extração do Fornecedor, CNPJ e Valor Unitário Real
+        # 2. Fornecedor, CNPJ e Valor Unitário
+        found_cnpj = ""
+        candidato_nome = ""
+        vlr_unit = 0.0
+
         for tbl in soup.find_all('table'):
-            tbl_txt = tbl.get_text(" ", strip=True).lower()
-            if re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", tbl_txt) or "fornecedor" in tbl_txt or "classificação" in tbl_txt:
+            txt_tbl = tbl.get_text(" ", strip=True)
+            m_cnpj = re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", txt_tbl)
+            if m_cnpj:
+                found_cnpj = m_cnpj.group(0)
                 for tr in tbl.find_all('tr'):
-                    if tr.find('th') and not tr.find('td'):
-                        continue
-                    
-                    tds_leaf = [td for td in tr.find_all('td') if not td.find('table')]
-                    if not tds_leaf:
-                        continue
-                    
-                    linha_txt = " ".join(td.get_text(" ", strip=True) for td in tds_leaf)
-                    cnpj_m = re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", linha_txt)
-                    if cnpj_m:
-                        found_cnpj = cnpj_m.group(0)
-                        resultado["cnpj_puro"] = found_cnpj
-                        
-                        candidato_nome = ""
-                        for td in tds_leaf:
-                            t_c = td.get_text(" ", strip=True)
-                            # Remove o CNPJ da célula se presente, para ver se há o nome junto
-                            t_sem_cnpj = re.sub(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", "", t_c).strip()
-                            if any(k in t_sem_cnpj.lower() for k in ['classifica', 'quantidade', 'valor unit', 'total', 'vlr', 'item']):
-                                continue
-                            if re.search(r"[A-Za-zÀ-ÿ]{3,}", t_sem_cnpj) and not re.match(r"^R?\$?\s*\d+", t_sem_cnpj):
-                                candidato_nome = t_sem_cnpj
+                    if found_cnpj in tr.get_text():
+                        tds = [td.get_text(" ", strip=True) for td in tr.find_all('td')]
+                        for c in tds:
+                            c_sem = re.sub(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", "", c).strip()
+                            if re.search(r"[A-Za-zÀ-ÿ]{3,}", c_sem) and not any(k in c_sem.lower() for k in ['classifica', 'quantidade', 'valor unit', 'total', 'vlr', 'r$']):
+                                candidato_nome = c_sem
                                 break
-                        
-                        if not candidato_nome:
-                            candidato_nome = linha_txt
-                        
-                        nome_forn_limpo = limpar_nome_fornecedor(candidato_nome, found_cnpj)
-                        # Se o nome capturado for vazio, igual ao CNPJ ou não tiver letras, resolve na base oficial
-                        if not nome_forn_limpo or nome_forn_limpo == found_cnpj or len(re.findall(r"[A-Za-zÀ-ÿ]{3,}", nome_forn_limpo)) == 0:
-                            nome_auto = consultar_razao_social_cnpj(found_cnpj)
-                            if nome_auto:
-                                nome_forn_limpo = nome_auto
-
-                        resultado["fornecedor_puro"] = nome_forn_limpo or found_cnpj
-                        if nome_forn_limpo and nome_forn_limpo != found_cnpj:
-                            resultado["fornecedor"] = f"{nome_forn_limpo} ({found_cnpj})"
-                        else:
-                            resultado["fornecedor"] = found_cnpj
-                        
-                        # Extrai o valor unitário da linha da classificação
-                        valores_linha = re.findall(r"(\d{1,3}(?:\.\d{3})*,\d{2,4})", linha_txt)
-                        if valores_linha:
-                            resultado["valor_unitario_sugerido"] = converter_para_float(valores_linha[-1])
-                        
+                        for c in reversed(tds):
+                            if "r$" in c.lower() or re.search(r"\d+,\d{2,4}", c):
+                                vlr_unit = converter_para_float(c)
+                                break
                         break
-            if resultado["cnpj_puro"]:
-                break
-
-        # Fallback de valor unitário pelo texto geral se necessário
-        if resultado["valor_unitario_sugerido"] == 0.0:
-            texto_pagina = soup.get_text(separator=' ', strip=True)
-            m_val = re.search(r"valor\s*unit[áa]rio[^\d]*(\d{1,3}(?:\.\d{3})*,\d{2,4})", texto_pagina, re.IGNORECASE)
-            if m_val:
-                resultado["valor_unitario_sugerido"] = converter_para_float(m_val.group(1))
-
-        # 3. Varredura Oficial de Saldos da UASG (Unidades e Empenhos sob o "Olhinho")
-        uasg_clean = uasg.strip()
-        reg_encontrada = ""
-        emp_encontrada = ""
-        sal_encontrada = ""
-
-        # A) Captura prévia de rótulos oficiais explícitos da página
-        texto_pagina = soup.get_text(separator=' ', strip=True)
-        m_sal_lbl = re.search(r"Saldo para Empenho:\s*(?:</strong>)?\s*([0-9]+(?:[.,][0-9]+)?)", texto_pagina, re.IGNORECASE)
-        lbl_sal = m_sal_lbl.group(1).replace(",", ".") if m_sal_lbl else ""
-        m_reg_lbl = re.search(r"Quantidade Registrada/Autorizada:\s*(?:</strong>)?\s*([0-9]+(?:[.,][0-9]+)?)", texto_pagina, re.IGNORECASE)
-        lbl_reg = m_reg_lbl.group(1).replace(",", ".") if m_reg_lbl else ""
-
-        # B) Varredura rigorosa das Tabelas Oficiais de Unidades e Empenhos
-        for tbl in soup.find_all('table'):
-            tbl_txt = tbl.get_text(" ", strip=True).lower()
-            if "cnpj" in tbl_txt and "fornecedor" in tbl_txt:
-                continue
-            # Ignora a tabela de NEs individuais nesta etapa de saldos da unidade
-            if "nota de empenho" in tbl_txt or "número de empenho" in tbl_txt or "número ne" in tbl_txt or "data do empenho" in tbl_txt:
-                continue
-
-            # Mapeamento de colunas por cabeçalho
-            idx_reg = -1
-            idx_emp = -1
-            idx_sal = -1
-            idx_und = -1
-            
-            hdr_tr = tbl.find('thead')
-            if not hdr_tr:
-                hdr_tr = tbl.find('tr')
-            if hdr_tr:
-                th_list = [th.get_text(" ", strip=True).lower() for th in hdr_tr.find_all(['th', 'td'])]
-                for i_col, col_name in enumerate(th_list):
-                    if any(k in col_name for k in ['registrad', 'homologad', 'solicitad', 'autorizad']) and not any(s in col_name for s in ['saldo', 'empenh']):
-                        if idx_reg == -1: idx_reg = i_col
-                    elif any(k in col_name for k in ['empenhad', 'empenho', 'atendid', 'consumid', 'utilizad']) and not any(s in col_name for s in ['saldo', 'remanescente']):
-                        if idx_emp == -1: idx_emp = i_col
-                    elif any(k in col_name for k in ['saldo', 'remanescente', 'disponív', 'disponiv', 'remanejamento']):
-                        if idx_sal == -1: idx_sal = i_col
-                    elif any(k in col_name for k in ['unidade', 'código', 'codigo']):
-                        if idx_und == -1: idx_und = i_col
-
-            for tr in tbl.find_all('tr'):
-                if tr.find('th') and not tr.find('td'):
-                    continue
-                tds_leaf = [td.get_text(" ", strip=True) for td in tr.find_all('td') if not td.find('table')]
-                if len(tds_leaf) < 2:
-                    continue
-
-                linha_txt = " ".join(tds_leaf).lower()
-                eh_nossa_uasg = uasg_clean in linha_txt
-                eh_gerenciadora = "gerenciadora" in linha_txt and not "não" in linha_txt
-
-                if not (eh_nossa_uasg or eh_gerenciadora):
-                    continue
-
-                # 1ª Tentativa: usar os índices mapeados pelos cabeçalhos com checagem estrita
-                if idx_reg != -1 and idx_reg < len(tds_leaf):
-                    c_reg = tds_leaf[idx_reg]
-                    if re.match(r"^\d+(?:[.,]\d+)?$", c_reg) and c_reg != uasg_clean:
-                        reg_encontrada = c_reg
-                if idx_emp != -1 and idx_emp < len(tds_leaf):
-                    c_emp = tds_leaf[idx_emp]
-                    if re.match(r"^\d+(?:[.,]\d+)?$", c_emp) and c_emp != uasg_clean:
-                        emp_encontrada = c_emp
-                if idx_sal != -1 and idx_sal < len(tds_leaf):
-                    c_sal = tds_leaf[idx_sal]
-                    if re.match(r"^\d+(?:[.,]\d+)?$", c_sal) and c_sal != uasg_clean:
-                        sal_encontrada = c_sal
-
-                # Cálculo de integridade caso tenhamos Registrada e Saldo (comum na tabela 'Unidades do item')
-                if reg_encontrada and sal_encontrada and not emp_encontrada:
-                    f_r = converter_para_float(reg_encontrada)
-                    f_s = converter_para_float(sal_encontrada)
-                    diff_e = max(0.0, f_r - f_s)
-                    emp_encontrada = f"{diff_e:.5f}" if "." in reg_encontrada else f"{diff_e:g}"
-
-                if reg_encontrada and emp_encontrada and not sal_encontrada:
-                    f_r = converter_para_float(reg_encontrada)
-                    f_e = converter_para_float(emp_encontrada)
-                    diff_s = max(0.0, f_r - f_e)
-                    sal_encontrada = f"{diff_s:.5f}" if "." in reg_encontrada else f"{diff_s:g}"
-
-                if eh_nossa_uasg and reg_encontrada and (emp_encontrada or sal_encontrada):
+                if found_cnpj:
                     break
 
-                # 2ª Tentativa: extração das células puramente numéricas candidatas a quantidade
-                if not reg_encontrada or (not emp_encontrada and not sal_encontrada):
-                    qtd_candidatos = []
-                    for cell in tds_leaf:
-                        c_val = cell.strip()
-                        if any(ch.isalpha() for ch in c_val) or c_val == uasg_clean or "/" in c_val or "-" in c_val:
-                            continue
-                        if re.match(r"^\d+(?:[.,]\d+)?$", c_val):
-                            qtd_candidatos.append(c_val)
+        nome_forn_limpo = limpar_nome_fornecedor(candidato_nome, found_cnpj)
+        if not nome_forn_limpo or nome_forn_limpo == found_cnpj or len(re.findall(r"[A-Za-zÀ-ÿ]{3,}", nome_forn_limpo)) == 0:
+            if found_cnpj:
+                nome_auto = consultar_razao_social_cnpj(found_cnpj)
+                if nome_auto:
+                    nome_forn_limpo = nome_auto
 
-                    if len(qtd_candidatos) >= 3:
-                        c0_f = converter_para_float(qtd_candidatos[0])
-                        c1_f = converter_para_float(qtd_candidatos[1])
-                        c2_f = converter_para_float(qtd_candidatos[2])
-                        if abs((c0_f - c1_f) - c2_f) < 0.001:
-                            reg_encontrada = qtd_candidatos[0]
-                            emp_encontrada = qtd_candidatos[1]
-                            sal_encontrada = qtd_candidatos[2]
-                        elif abs((c0_f - c2_f) - c1_f) < 0.001:
-                            reg_encontrada = qtd_candidatos[0]
-                            sal_encontrada = qtd_candidatos[1]
-                            emp_encontrada = qtd_candidatos[2]
-                        else:
-                            reg_encontrada = qtd_candidatos[0]
-                            emp_encontrada = qtd_candidatos[1]
-                            sal_encontrada = qtd_candidatos[2]
-                        if eh_nossa_uasg:
-                            break
-                    elif len(qtd_candidatos) == 2:
-                        c0_f = converter_para_float(qtd_candidatos[0])
-                        c1_f = converter_para_float(qtd_candidatos[1])
-                        reg_encontrada = qtd_candidatos[0]
-                        if idx_sal != -1 or (idx_emp == -1 and c1_f <= c0_f):
-                            sal_encontrada = qtd_candidatos[1]
-                            diff_emp = max(0.0, c0_f - c1_f)
-                            emp_encontrada = f"{diff_emp:.5f}" if "." in qtd_candidatos[0] else f"{diff_emp:g}"
-                        else:
-                            emp_encontrada = qtd_candidatos[1]
-                            diff_sal = max(0.0, c0_f - c1_f)
-                            sal_encontrada = f"{diff_sal:.5f}" if "." in qtd_candidatos[0] else f"{diff_sal:g}"
-                        if eh_nossa_uasg:
-                            break
+        fornecedor_puro = nome_forn_limpo or found_cnpj
+        if nome_forn_limpo and found_cnpj and nome_forn_limpo != found_cnpj:
+            fornecedor_display = f"{nome_forn_limpo} ({found_cnpj})"
+        else:
+            fornecedor_display = fornecedor_puro or found_cnpj or "Não informado"
 
-            if eh_nossa_uasg and reg_encontrada and (emp_encontrada or sal_encontrada):
-                break
+        resultado["cnpj_puro"] = found_cnpj
+        resultado["fornecedor_puro"] = fornecedor_puro
+        resultado["fornecedor"] = fornecedor_display
+        resultado["valor_unitario_sugerido"] = vlr_unit
 
-        # C) Complementação com rótulos oficiais da página caso a tabela não tenha trazido
-        if not sal_encontrada and lbl_sal:
-            sal_encontrada = lbl_sal
-        if not reg_encontrada and lbl_reg:
-            reg_encontrada = lbl_reg
-        if reg_encontrada and sal_encontrada and not emp_encontrada:
-            f_r = converter_para_float(reg_encontrada)
-            f_s = converter_para_float(sal_encontrada)
-            diff_e = max(0.0, f_r - f_s)
-            emp_encontrada = f"{diff_e:.5f}" if "." in reg_encontrada else f"{diff_e:g}"
+        # 3. Varredura Oficial de Saldos da UASG
+        uasg_clean = uasg.strip()
 
-        # 4. Varredura da Tabela de Notas de Empenho (NE) EXCLUSIVAMENTE para Histórico e Resumo
+        # A) Notas de Empenho (NE) emitidas para esta UASG
+        soma_empenhos_nes = 0.0
         empenhos_list = []
+        tem_ne_uasg = False
+
         for tbl in soup.find_all('table'):
             tbl_txt = tbl.get_text(" ", strip=True).lower()
-            if not ("nota de empenho" in tbl_txt or "número de empenho" in tbl_txt or "número ne" in tbl_txt or "data do empenho" in tbl_txt):
-                continue
+            if any(k in tbl_txt for k in ["número de empenho", "numero de empenho", "nota de empenho", "data do empenho"]):
+                hdr = tbl.find('thead') or tbl.find('tr')
+                idx_ne_col = -1
+                idx_data_col = -1
+                idx_qtd_col = -1
+                idx_val_col = -1
+                if hdr:
+                    th_list = [th.get_text(" ", strip=True).lower() for th in hdr.find_all(['th', 'td'])]
+                    for i_c, c_name in enumerate(th_list):
+                        if ("número" in c_name or "numero" in c_name or "empenho" in c_name) and idx_ne_col == -1: idx_ne_col = i_c
+                        elif "data" in c_name and idx_data_col == -1: idx_data_col = i_c
+                        elif "quantidade empenhada" in c_name or ("quantidade" in c_name and "empenh" in c_name): idx_qtd_col = i_c
+                        elif "valor" in c_name and idx_val_col == -1: idx_val_col = i_c
 
-            # Mapeia colunas da tabela de empenhos
+                for tr in tbl.find_all('tr'):
+                    tds = [td.get_text(" ", strip=True) for td in tr.find_all('td')]
+                    if not tds:
+                        continue
+                    linha_tr_txt = " ".join(tds).lower()
+                    if uasg_clean in linha_tr_txt or ("gerenciadora" in linha_tr_txt and not "não" in linha_tr_txt):
+                        m_ne = re.search(r"\b(\d{4}NE\d{4,6})\b", linha_tr_txt, re.IGNORECASE)
+                        ne_num = m_ne.group(1).upper() if m_ne else (tds[idx_ne_col] if idx_ne_col != -1 and idx_ne_col < len(tds) else "")
+                        d_ne = tds[idx_data_col] if idx_data_col != -1 and idx_data_col < len(tds) else ""
+                        q_str = tds[idx_qtd_col] if idx_qtd_col != -1 and idx_qtd_col < len(tds) else "0"
+                        v_str = tds[idx_val_col] if idx_val_col != -1 and idx_val_col < len(tds) else ""
+
+                        q_f = converter_para_float(q_str)
+                        if q_f > 0:
+                            tem_ne_uasg = True
+                            soma_empenhos_nes += q_f
+
+                        emp_entry = ne_num or "NE"
+                        if d_ne: emp_entry += f" ({d_ne})"
+                        if q_str: emp_entry += f": Qtd {q_str}"
+                        if v_str: emp_entry += f" [R$ {v_str}]"
+                        if emp_entry not in empenhos_list:
+                            empenhos_list.append(emp_entry)
+
+        # B) Tabela 3: Empenhos da Unidade (Unidade, Tipo, Qtd Registrada, Qtd Empenhada, Saldo p/ Empenho)
+        reg_t3 = None
+        emp_t3 = None
+        sal_t3 = None
+        for tbl in soup.find_all('table'):
             hdr = tbl.find('thead') or tbl.find('tr')
-            idx_ne_col = -1
-            idx_data_col = -1
-            idx_qtd_col = -1
-            idx_val_col = -1
-            if hdr:
-                th_list = [th.get_text(" ", strip=True).lower() for th in hdr.find_all(['th', 'td'])]
+            if not hdr: continue
+            th_list = [th.get_text(" ", strip=True).lower() for th in hdr.find_all(['th', 'td'])]
+            if any("quantidade empenhada" in c for c in th_list) and any("saldo" in c for c in th_list):
+                idx_r = -1
+                idx_e = -1
+                idx_s = -1
                 for i_c, c_name in enumerate(th_list):
-                    if "empenho" in c_name and idx_ne_col == -1: idx_ne_col = i_c
-                    elif "data" in c_name and idx_data_col == -1: idx_data_col = i_c
-                    elif "quantidade empenhada" in c_name: idx_qtd_col = i_c
-                    elif "valor" in c_name: idx_val_col = i_c
+                    if "registrada" in c_name or "homologada" in c_name: idx_r = i_c
+                    elif "empenhada" in c_name and not any(s in c_name for s in ["saldo", "dispon"]): idx_e = i_c
+                    elif "saldo" in c_name: idx_s = i_c
+                for tr in tbl.find_all('tr'):
+                    tds = [td.get_text(" ", strip=True) for td in tr.find_all('td')]
+                    r_txt = " ".join(tds).lower()
+                    if uasg_clean in r_txt or ("gerenciadora" in r_txt and not "não" in r_txt):
+                        if len(tds) > max(idx_r, idx_e, idx_s):
+                            reg_t3 = converter_para_float(tds[idx_r])
+                            emp_t3 = converter_para_float(tds[idx_e])
+                            sal_t3 = converter_para_float(tds[idx_s])
+                            break
+            if reg_t3 is not None:
+                break
 
-            for tr in tbl.find_all('tr'):
-                tds = tr.find_all('td')
-                if not tds:
-                    continue
-                linha_tr_txt = " ".join(td.get_text(" ", strip=True) for td in tds)
-                m_ne = re.search(r"\b(\d{4}NE\d{4,6})\b", linha_tr_txt, re.IGNORECASE)
-                if not m_ne:
-                    continue
+        # C) Tabela 1: Unidades do Item (Código, Unidade, Tipo, Qtd Registrada, Qtd Disponível para remanejamento/empenho)
+        reg_t1 = None
+        disp_t1 = None
+        for tbl in soup.find_all('table'):
+            hdr = tbl.find('thead') or tbl.find('tr')
+            if not hdr: continue
+            th_list = [th.get_text(" ", strip=True).lower() for th in hdr.find_all(['th', 'td'])]
+            if any("remanejamento" in c or "disponível" in c or "disponiv" in c for c in th_list):
+                idx_r = -1
+                idx_disp = -1
+                for i_c, c_name in enumerate(th_list):
+                    if "registrada" in c_name or "homologada" in c_name: idx_r = i_c
+                    elif "disponível" in c_name or "disponiv" in c_name or "remanejamento" in c_name: idx_disp = i_c
+                for tr in tbl.find_all('tr'):
+                    tds = [td.get_text(" ", strip=True) for td in tr.find_all('td')]
+                    r_txt = " ".join(tds).lower()
+                    if uasg_clean in r_txt or ("gerenciadora" in r_txt and not "não" in r_txt):
+                        if len(tds) > max(idx_r, idx_disp):
+                            reg_t1 = converter_para_float(tds[idx_r])
+                            disp_t1 = converter_para_float(tds[idx_disp])
+                            break
+            if reg_t1 is not None:
+                break
 
-                ne_num = m_ne.group(1).upper()
-                d_ne = ""
-                q_ne_str = ""
-                v_ne_str = ""
+        # D) Consolidação Matemática das Quantidades: Saldo = Registrada - Empenhada
+        if tem_ne_uasg and soma_empenhos_nes > 0:
+            final_emp = soma_empenhos_nes
+            final_reg = reg_t3 if reg_t3 is not None else (reg_t1 if reg_t1 is not None else final_emp)
+            final_sal = max(0.0, final_reg - final_emp)
+        elif reg_t3 is not None and emp_t3 is not None:
+            final_reg = reg_t3
+            final_emp = emp_t3
+            final_sal = sal_t3 if sal_t3 is not None else max(0.0, final_reg - final_emp)
+        elif reg_t1 is not None and disp_t1 is not None:
+            final_reg = reg_t1
+            final_sal = disp_t1
+            final_emp = max(0.0, final_reg - final_sal)
+        else:
+            final_reg = 0.0
+            final_emp = 0.0
+            final_sal = 0.0
 
-                # Extrai dados pelas colunas mapeadas se disponíveis
-                if idx_data_col != -1 and idx_data_col < len(tds):
-                    d_ne = tds[idx_data_col].get_text(strip=True)
-                if idx_qtd_col != -1 and idx_qtd_col < len(tds):
-                    q_ne_str = tds[idx_qtd_col].get_text(strip=True)
-                if idx_val_col != -1 and idx_val_col < len(tds):
-                    v_ne_str = tds[idx_val_col].get_text(strip=True)
+        def fmt_qtd(val: float) -> str:
+            if val == int(val):
+                return str(int(val))
+            return f"{val:g}"
 
-                # Fallback seguro para células individuais caso o cabeçalho não esteja padrão
-                if not d_ne or not q_ne_str or not v_ne_str:
-                    for td in tds:
-                        c_txt = td.get_text(strip=True)
-                        if not d_ne and re.match(r"^\d{2}/\d{2}/\d{4}$", c_txt):
-                            d_ne = c_txt
-                        elif not v_ne_str and ("r$" in c_txt.lower() or re.search(r"\b\d{1,3}(?:\.\d{3})*,\d{2}\b", c_txt)):
-                            v_ne_str = c_txt
-
-                emp_str = ne_num
-                if d_ne: emp_str += f" ({d_ne})"
-                if q_ne_str: emp_str += f": Qtd {q_ne_str}"
-                if v_ne_str: emp_str += f" [{v_ne_str}]"
-                if emp_str not in empenhos_list:
-                    empenhos_list.append(emp_str)
-
+        resultado["qtd_registrada"] = fmt_qtd(final_reg)
+        resultado["qtd_empenhada"] = fmt_qtd(final_emp)
+        resultado["saldo_empenho"] = fmt_qtd(final_sal)
         resultado["empenhos_resumo"] = " | ".join(empenhos_list) if empenhos_list else "Nenhum"
         resultado["empenhos_lista"] = empenhos_list
-
-        # 5. REGRA DEFINITIVA: SALDO = REGISTRADA - EMPENHADA (OU SALDO OFICIAL DA UNIDADE)
-        reg_val = reg_encontrada or "0"
-        emp_val = emp_encontrada or "0"
-        f_reg = converter_para_float(reg_val)
-        f_emp = converter_para_float(emp_val)
-
-        if sal_encontrada and sal_encontrada != uasg_clean and not any(c.isalpha() for c in sal_encontrada):
-            f_sal = converter_para_float(sal_encontrada)
-            if f_emp == 0 and f_reg > f_sal:
-                f_emp = max(0.0, f_reg - f_sal)
-                emp_val = f"{f_emp:.5f}" if "." in reg_val else f"{f_emp:g}"
-            diff_final = f_sal
-        else:
-            diff_final = max(0.0, f_reg - f_emp)
-
-        resultado["qtd_registrada"] = reg_val
-        resultado["qtd_empenhada"] = emp_val
-        if "." in reg_val:
-            resultado["saldo_empenho"] = f"{diff_final:.5f}"
-        else:
-            resultado["saldo_empenho"] = f"{diff_final:g}"
 
     except Exception:
         pass
@@ -944,62 +838,62 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
             status_txt.text(f"Consultando Contratos.gov.br: Item {it['Item']} de {len(itens_detectados)}...")
             saldo_info = obter_saldo_item_contratos(session, uasg, num_compra, ano_compra, it["Item"])
 
-            # Validação rigorosa das quantidades
-            raw_reg = str(saldo_info.get("qtd_registrada", "0")).strip()
-            if raw_reg == uasg.strip() or any(c.isalpha() for c in raw_reg) or raw_reg == "0":
-                qtd_registrada_final = it["Qtd SIASG"]
-            else:
-                qtd_registrada_final = raw_reg
-
-            raw_emp = str(saldo_info.get("qtd_empenhada", "0")).strip()
-            if raw_emp == uasg.strip() or any(c.isalpha() for c in raw_emp):
+            # Se o item é deserto/fracassado:
+            if saldo_info.get("deserto", False):
+                qtd_registrada_final = "0"
                 qtd_empenhada_final = "0"
-            else:
-                qtd_empenhada_final = raw_emp
-
-            # Aplicação direta da regra solicitada: Saldo = Registrada - Empenhada
-            f_reg = converter_para_float(qtd_registrada_final)
-            f_emp = converter_para_float(qtd_empenhada_final)
-            raw_sal = str(saldo_info.get("saldo_empenho", "")).strip()
-
-            # Se o saldo para empenho oficial foi capturado do sistema (olhinho em Unidades/Empenhos)
-            if raw_sal and raw_sal != uasg.strip() and not any(c.isalpha() for c in raw_sal):
-                f_sal = converter_para_float(raw_sal)
-                diff_saldo = f_sal
-                if f_emp == 0 and f_reg > f_sal:
-                    diff_emp = max(0.0, f_reg - f_sal)
-                    qtd_empenhada_final = f"{diff_emp:.5f}" if "." in str(qtd_registrada_final) else f"{diff_emp:g}"
-            else:
-                diff_saldo = max(0.0, f_reg - f_emp)
-
-            if "." in str(qtd_registrada_final):
-                saldo_empenho_calc = f"{diff_saldo:.5f}"
-            else:
-                saldo_empenho_calc = f"{diff_saldo:g}"
-
-            # Resolução garantida do Nome do Fornecedor e CNPJ
-            cnpj_puro = str(saldo_info.get("cnpj_puro", "")).strip()
-            forn_puro = str(saldo_info.get("fornecedor_puro", "")).strip()
-
-            # Se temos CNPJ mas o nome está vazio, igual ao CNPJ ou sem letras
-            if cnpj_puro and (not forn_puro or forn_puro == cnpj_puro or len(re.findall(r"[A-Za-zÀ-ÿ]{3,}", forn_puro)) == 0):
-                nome_api = consultar_razao_social_cnpj(cnpj_puro)
-                if nome_api:
-                    forn_puro = nome_api
-                    saldo_info["fornecedor_puro"] = forn_puro
-
-            # Montagem do fornecedor_display (Nome do Fornecedor e CNPJ)
-            if forn_puro and cnpj_puro and forn_puro != cnpj_puro:
-                fornecedor_display = f"{forn_puro} ({cnpj_puro})"
-            elif forn_puro and not cnpj_puro:
-                fornecedor_display = forn_puro
-            elif cnpj_puro and not forn_puro:
-                fornecedor_display = cnpj_puro
-            else:
+                saldo_empenho_calc = "0"
                 fornecedor_display = "Deserto / Fracassado"
+                ata_vinculada = "-"
+                pdf_ata = ""
+            else:
+                raw_reg = str(saldo_info.get("qtd_registrada", "0")).strip()
+                if raw_reg == "0" or raw_reg == uasg.strip() or any(c.isalpha() for c in raw_reg):
+                    qtd_registrada_final = it["Qtd SIASG"]
+                else:
+                    qtd_registrada_final = raw_reg
+
+                qtd_empenhada_final = str(saldo_info.get("qtd_empenhada", "0")).strip()
+                saldo_empenho_calc = str(saldo_info.get("saldo_empenho", "0")).strip()
+
+                # Aplicação rigorosa da fórmula oficial: Saldo = Registrada - Empenhada
+                f_reg = converter_para_float(qtd_registrada_final)
+                f_emp = converter_para_float(qtd_empenhada_final)
+                f_sal = converter_para_float(saldo_empenho_calc)
+
+                # Se saldo oficial da unidade foi capturado e empenho direto estava 0
+                if f_sal > 0 and f_emp == 0 and f_reg > f_sal:
+                    f_emp = max(0.0, f_reg - f_sal)
+                    qtd_empenhada_final = f"{f_emp:g}"
+                else:
+                    # Garantia da fórmula simples: Saldo = Registrada - Empenhada
+                    f_sal = max(0.0, f_reg - f_emp)
+                    saldo_empenho_calc = f"{f_sal:g}"
+
+                # Resolução garantida do Nome do Fornecedor e CNPJ
+                cnpj_puro = str(saldo_info.get("cnpj_puro", "")).strip()
+                forn_puro = str(saldo_info.get("fornecedor_puro", "")).strip()
+
+                if cnpj_puro and (not forn_puro or forn_puro == cnpj_puro or len(re.findall(r"[A-Za-zÀ-ÿ]{3,}", forn_puro)) == 0):
+                    nome_api = consultar_razao_social_cnpj(cnpj_puro)
+                    if nome_api:
+                        forn_puro = nome_api
+                        saldo_info["fornecedor_puro"] = forn_puro
+
+                if forn_puro and cnpj_puro and forn_puro != cnpj_puro:
+                    fornecedor_display = f"{forn_puro} ({cnpj_puro})"
+                elif forn_puro and not cnpj_puro:
+                    fornecedor_display = forn_puro
+                elif cnpj_puro and not forn_puro:
+                    fornecedor_display = cnpj_puro
+                else:
+                    fornecedor_display = saldo_info.get("fornecedor") or "Deserto / Fracassado"
+
+                ata_vinculada = saldo_info.get("numero_ata") or "Não identificada"
+                pdf_ata = saldo_info.get("pdf_ata", "")
 
             # Descrição limpa da ata
-            desc_final = saldo_info["descricao_detalhada_ata"] if saldo_info["descricao_detalhada_ata"] else it["Descrição"]
+            desc_final = saldo_info["descricao_detalhada_ata"] if saldo_info.get("descricao_detalhada_ata") else it["Descrição"]
             desc_final = limpar_descricao_ata(desc_final)
 
             dados_finais.append({
@@ -1011,12 +905,12 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
                 "Qtd Registrada": qtd_registrada_final,
                 "Qtd Empenhada": qtd_empenhada_final,
                 "Saldo p/ Empenho": saldo_empenho_calc,
-                "Ata Vinculada": saldo_info["numero_ata"] or "Não identificada",
+                "Ata Vinculada": ata_vinculada,
                 "Fornecedor": fornecedor_display,
                 "Fornecedor Puro": saldo_info["fornecedor_puro"],
                 "CNPJ Puro": saldo_info["cnpj_puro"],
                 "Valor Unitario Sugerido": saldo_info["valor_unitario_sugerido"],
-                "PDF da Ata": saldo_info["pdf_ata"],
+                "PDF da Ata": pdf_ata,
                 "Empenhos": saldo_info["empenhos_resumo"],
                 "empenhos_lista": saldo_info.get("empenhos_lista", [])
             })
