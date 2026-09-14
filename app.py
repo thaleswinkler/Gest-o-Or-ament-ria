@@ -33,7 +33,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(
     page_title="Gerenciador de Recursos & Pregões",
     page_icon="💰",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # =====================================================================
@@ -58,13 +59,13 @@ HEADERS_HTTP = {
 # 3. FUNÇÕES UTILITÁRIAS DO SISTEMA
 # =====================================================================
 def hash_senha(senha: str) -> str:
-    """Gera hash seguro SHA-256 para senhas."""
+    """Gera hash criptográfico SHA-256 para senhas."""
     if not senha:
         return ""
     return hashlib.sha256(senha.encode("utf-8")).hexdigest()
 
 def checar_senha(senha_digitada: str, senha_db: str) -> bool:
-    """Valida senha suportando hash SHA-256 e texto simples antigo."""
+    """Valida senha suportando hash seguro SHA-256 e texto simples antigo."""
     if not senha_db:
         return False
     if senha_db == senha_digitada:
@@ -81,7 +82,7 @@ def formatar_cnpj(cnpj_raw: str) -> str:
     return cnpj_raw.strip().upper()
 
 def extrair_ano(nc_nome: str) -> str:
-    """Extrai os 4 dígitos iniciais se forem ano, senão agrupa de forma segura para o Excel."""
+    """Extrai os 4 dígitos iniciais se forem ano, senão agrupa como 'Sem Ano' para segurança de abas Excel."""
     if len(nc_nome) >= 4 and nc_nome[:4].isdigit():
         return nc_nome[:4]
     return "Sem Ano"
@@ -94,7 +95,7 @@ def limpar_nome_aba(nome: str) -> str:
     return nome_limpo[:30]
 
 def converter_para_float(val_str: str) -> float:
-    """Converte valores numéricos em formatos variados (brasileiro ou americano) para float."""
+    """Converte valores em formatos numéricos variados para float com segurança."""
     if not val_str:
         return 0.0
     s = str(val_str).strip()
@@ -113,8 +114,27 @@ def converter_para_float(val_str: str) -> float:
     except Exception:
         return 0.0
 
+def limpar_descricao_ata(texto: str) -> str:
+    """Extrai estritamente a especificação do material, removendo metadados de tabelas e cabeçalhos."""
+    if not texto:
+        return ""
+    
+    t = texto.replace("\xa0", " ").strip()
+    
+    # Corta nos divisores de campos de sistema do Contratos.gov.br
+    padrao_corte = re.split(
+        r"(Código do item:|Tipo do item:|Vigência inicial|Vigência final|Quantidade homologada:|Classificação CNPJ|Valor unitário|Quantidade registrada|Saldo para Empenho|Unidade Tipo Quantidade|Item do TR|Item:\s*\d+)",
+        t, flags=re.IGNORECASE
+    )
+    if padrao_corte:
+        t = padrao_corte[0].strip()
+
+    # Remove termos de início como 'Especificação:'
+    t = re.sub(r"^(especificação|especificacao|descrição detalhada|descrição do item|descrição|descricao)\s*:\s*", "", t, flags=re.IGNORECASE).strip()
+    return t
+
 # =====================================================================
-# 4. MÓDULO HTTP & RASTREAMENTO SIASG / CONTRATOS.GOV.BR
+# 4. MÓDULO DE RASTREAMENTO E INTEGRAÇÃO SIASG / CONTRATOS.GOV.BR
 # =====================================================================
 @st.cache_resource
 def get_http_session() -> requests.Session:
@@ -129,19 +149,6 @@ def get_http_session() -> requests.Session:
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
-
-@st.cache_data(show_spinner=False)
-def baixar_arquivo_pdf(pdf_url: str) -> Optional[bytes]:
-    if not pdf_url:
-        return None
-    session = get_http_session()
-    try:
-        r = session.get(pdf_url.strip(), headers=HEADERS_HTTP, timeout=25)
-        if r.ok and len(r.content) > 1000:
-            return r.content
-    except Exception:
-        pass
-    return None
 
 def iniciar_sessao_siasg(session: requests.Session) -> None:
     try:
@@ -316,8 +323,7 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
         "empenhos_resumo": "Nenhum",
         "empenhos_lista": [],
         "numero_ata": target_ata["numeroAta"] if target_ata else "",
-        "pdf_ata": target_ata["pdfUrl"] if target_ata else "",
-        "link_olho": target_eye_url
+        "pdf_ata": target_ata["pdfUrl"] if target_ata else ""
     }
 
     if not target_eye_url:
@@ -330,35 +336,58 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
 
         soup = BeautifulSoup(res.text, 'html.parser')
 
-        # 1. Varredura da Descrição Detalhada da Ata (termo de referência)
-        for bloco in soup.find_all(['div', 'p', 'span']):
-            t_bloco = bloco.get_text(strip=True)
-            if any(chave in t_bloco.lower() for chave in ['especificação:', 'descrição detalhada:', 'descrição do item:']):
-                partes = re.split(r"especificação:|descrição detalhada:|descrição do item:", t_bloco, flags=re.IGNORECASE)
-                if len(partes) > 1 and len(partes[1].strip()) > 5:
-                    resultado["descricao_detalhada_ata"] = partes[1].strip()
-                    break
+        # 1. Extração Limpa e Específica da Descrição Técnica
+        for tag in soup.find_all(['div', 'p', 'span', 'td']):
+            txt_tag = tag.get_text(separator=' ', strip=True)
+            if re.search(r"(especificação|descrição detalhada)\s*:", txt_tag, re.IGNORECASE):
+                m_esp = re.search(r"(?:especificação|descrição detalhada)\s*:\s*([^<\n\r]+)", txt_tag, re.IGNORECASE)
+                if m_esp:
+                    desc_limpa = limpar_descricao_ata(m_esp.group(1))
+                    if len(desc_limpa) > 5:
+                        resultado["descricao_detalhada_ata"] = desc_limpa
+                        break
 
-        # 2. Varredura do Fornecedor e Valor Unitário
+        if not resultado["descricao_detalhada_ata"]:
+            for strong in soup.find_all(['strong', 'b']):
+                if "especificação" in strong.get_text().lower():
+                    pai = strong.parent
+                    if pai:
+                        desc_limpa = limpar_descricao_ata(pai.get_text(separator=' ', strip=True))
+                        if len(desc_limpa) > 5:
+                            resultado["descricao_detalhada_ata"] = desc_limpa
+                            break
+
+        # 2. Extração do Fornecedor e do Valor Unitário Real
+        texto_pagina = soup.get_text(separator=' ', strip=True)
+        m_val = re.search(r"valor\s*unit[áa]rio[^\d]*(\d{1,3}(?:\.\d{3})*,\d{2,4})", texto_pagina, re.IGNORECASE)
+        if m_val:
+            resultado["valor_unitario_sugerido"] = converter_para_float(m_val.group(1))
+
         for tr in soup.find_all('tr'):
             tds = tr.find_all('td')
-            if len(tds) >= 5:
-                cnpj_txt = tds[1].get_text(strip=True)
-                cnpj_m = re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", cnpj_txt)
+            if len(tds) >= 4:
+                linha_txt = tr.get_text(separator=' ', strip=True)
+                cnpj_m = re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", linha_txt)
                 if cnpj_m:
-                    razao = tds[2].get_text(strip=True)
-                    v_unit_txt = tds[4].get_text(strip=True)
-                    resultado["fornecedor"] = f"{razao} ({cnpj_m.group(0)}) - {v_unit_txt}"
-                    resultado["fornecedor_puro"] = razao
                     resultado["cnpj_puro"] = cnpj_m.group(0)
-                    resultado["valor_unitario_sugerido"] = converter_para_float(v_unit_txt)
+                    for td in tds:
+                        td_val = td.get_text(strip=True)
+                        if any(c.isalpha() for c in td_val) and ("ltda" in td_val.lower() or "me" in td_val.lower() or "epp" in td_val.lower() or "s/a" in td_val.lower() or "comercio" in td_val.lower()):
+                            resultado["fornecedor_puro"] = td_val
+                            break
+
+                    valores_linha = re.findall(r"(\d{1,3}(?:\.\d{3})*,\d{2,4})", linha_txt)
+                    if valores_linha and resultado["valor_unitario_sugerido"] == 0.0:
+                        resultado["valor_unitario_sugerido"] = converter_para_float(valores_linha[-1])
+
+                    resultado["fornecedor"] = f"{resultado['fornecedor_puro']} ({resultado['cnpj_puro']})"
                     break
 
-        # 3. Varredura de Saldos da UASG
+        # 3. Varredura da Tabela de Saldos da UASG
         uasg_clean = uasg.strip()
         for tr in soup.find_all('tr'):
             tds = tr.find_all('td')
-            if len(tds) == 5:
+            if len(tds) >= 5:
                 u_txt = tds[0].get_text(strip=True)
                 tipo_txt = tds[1].get_text(strip=True)
                 reg_txt = tds[2].get_text(strip=True)
@@ -372,17 +401,16 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
                     if uasg_clean in u_txt:
                         break
 
-        # 4. Ajuste Inteligente de Saldo Real:
-        # Se Qtd Empenhada for 0 ou se Saldo for 0 e Empenho for 0, o saldo real é a Qtd Registrada!
+        # 4. REGRA DE SALDO: Se Qtd Empenhada for 0, o Saldo para Empenho assume a Qtd Registrada
         f_reg = converter_para_float(resultado["qtd_registrada"])
         f_emp = converter_para_float(resultado["qtd_empenhada"])
         f_sal = converter_para_float(resultado["saldo_empenho"])
 
         if f_reg > 0:
-            if f_emp == 0 or (f_sal == 0 and f_emp == 0):
+            if f_emp == 0 or f_sal == 0:
                 resultado["saldo_empenho"] = resultado["qtd_registrada"]
 
-        # 5. Varredura das Notas de Empenho
+        # 5. Varredura das Notas de Empenho Cadastradas
         empenhos_list = []
         for tr in soup.find_all('tr'):
             tds = tr.find_all('td')
@@ -566,11 +594,19 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
 
             qtd_registrada_final = saldo_info["qtd_registrada"] if saldo_info["qtd_registrada"] != "0" else it["Qtd SIASG"]
 
-            # Tratamento de item sem fornecedor: "Deserto / Fracassado" em vez de "N/D"
+            # Regra de Saldo Real
+            saldo_empenho_calc = saldo_info["saldo_empenho"]
+            f_reg = converter_para_float(qtd_registrada_final)
+            f_emp = converter_para_float(saldo_info["qtd_empenhada"])
+            if f_emp == 0 and f_reg > 0:
+                saldo_empenho_calc = qtd_registrada_final
+
+            # Fornecedor com identificação de Deserto
             fornecedor_display = saldo_info["fornecedor"].strip() if saldo_info["fornecedor"] else "Deserto / Fracassado"
             
-            # Descrição mais precisa: se achou na ata, usa a descrição detalhada; senão, usa a do SIASG
+            # Descrição limpa da ata
             desc_final = saldo_info["descricao_detalhada_ata"] if saldo_info["descricao_detalhada_ata"] else it["Descrição"]
+            desc_final = limpar_descricao_ata(desc_final)
 
             dados_finais.append({
                 "Item": it["Item"],
@@ -580,7 +616,7 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
                 "Unidade": it["Unidade"],
                 "Qtd Registrada": qtd_registrada_final,
                 "Qtd Empenhada": saldo_info["qtd_empenhada"],
-                "Saldo p/ Empenho": saldo_info["saldo_empenho"],
+                "Saldo p/ Empenho": saldo_empenho_calc,
                 "Ata Vinculada": saldo_info["numero_ata"] or "Não identificada",
                 "Fornecedor": fornecedor_display,
                 "Fornecedor Puro": saldo_info["fornecedor_puro"],
@@ -601,16 +637,18 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
         return []
 
 # =====================================================================
-# 5. GERADORES DE PLANILHAS (BLINDADOS CONTRA CRASHES)
+# 5. GERADORES DE PLANILHAS COMPLETAS (OPENPYXL COM FORMATAÇÃO COMPLETA)
 # =====================================================================
 def gerar_planilha_nc_completa(nc_nome: str, dados_nc: dict, om_nome: str, secao_nome: str):
     itens = dados_nc.get("itens", [])
     try:
         import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
         from openpyxl.utils import get_column_letter
 
         wb = openpyxl.Workbook()
+        
+        # ABA 1: RESUMO EXECUTIVO
         ws_resumo = wb.active
         ws_resumo.title = limpar_nome_aba("Resumo Executivo")
         ws_resumo.views.sheetView[0].showGridLines = True
@@ -622,6 +660,26 @@ def gerar_planilha_nc_completa(nc_nome: str, dados_nc: dict, om_nome: str, secao
         ws_resumo["A1"].alignment = Alignment(horizontal="center", vertical="center")
         ws_resumo.row_dimensions[1].height = 35
 
+        ws_resumo["A3"] = "Organização Militar:"; ws_resumo["B3"] = om_nome
+        ws_resumo["A4"] = "Seção Responsável:"; ws_resumo["B4"] = secao_nome
+        ws_resumo["A5"] = "Nota de Crédito:"; ws_resumo["B5"] = nc_nome
+        ws_resumo["A6"] = "Plano Interno (PI):"; ws_resumo["B6"] = dados_nc.get("pi", "Não informado")
+        ws_resumo["A7"] = "Natureza Despesa (ND):"; ws_resumo["B7"] = dados_nc.get("nd", "Não informada")
+        
+        v_rec = float(dados_nc.get("valor_recebido", 0.0))
+        v_gasto = sum(float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0)) for it in itens)
+        v_saldo = v_rec - v_gasto
+        
+        ws_resumo["D3"] = "Valor Total Recebido:"; ws_resumo["E3"] = v_rec; ws_resumo["E3"].number_format = "R$ #,##0.00"
+        ws_resumo["D4"] = "Total Comprometido:"; ws_resumo["E4"] = v_gasto; ws_resumo["E4"].number_format = "R$ #,##0.00"
+        ws_resumo["D5"] = "Saldo Disponível:"; ws_resumo["E5"] = v_saldo; ws_resumo["E5"].number_format = "R$ #,##0.00"
+        
+        for row in range(3, 8):
+            ws_resumo[f"A{row}"].font = Font(bold=True)
+        for row in range(3, 6):
+            ws_resumo[f"D{row}"].font = Font(bold=True)
+
+        # ABA 2: ITENS DETALHADOS
         ws_itens = wb.create_sheet(title=limpar_nome_aba("Itens Detalhados"))
         ws_itens.views.sheetView[0].showGridLines = True
         cab_it = ["Item", "Material", "Qtd", "Valor Unitário", "Valor Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
@@ -629,27 +687,43 @@ def gerar_planilha_nc_completa(nc_nome: str, dados_nc: dict, om_nome: str, secao
             cell = ws_itens.cell(row=1, column=c_idx, value=h)
             cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-            cell.alignment = Alignment(horizontal="center")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws_itens.row_dimensions[1].height = 25
+
+        thin = Side(border_style="thin", color="D3D3D3")
+        borda = Border(left=thin, right=thin, top=thin, bottom=thin)
 
         for r_idx, it in enumerate(itens, start=2):
             q = int(it.get("Qtd", 0))
             vu = float(it.get("Valor Unitário", 0.0))
+            vt = q * vu
+            
             ws_itens.cell(row=r_idx, column=1, value=it.get("Item")).alignment = Alignment(horizontal="center")
             ws_itens.cell(row=r_idx, column=2, value=it.get("Nome"))
             ws_itens.cell(row=r_idx, column=3, value=q).alignment = Alignment(horizontal="center")
-            c_u = ws_itens.cell(row=r_idx, column=4, value=vu); c_u.number_format = "R$ #,##0.00"
-            c_t = ws_itens.cell(row=r_idx, column=5, value=q * vu); c_t.number_format = "R$ #,##0.00"
+            
+            c_u = ws_itens.cell(row=r_idx, column=4, value=vu)
+            c_u.number_format = "R$ #,##0.00"
+            c_u.alignment = Alignment(horizontal="right")
+            
+            c_t = ws_itens.cell(row=r_idx, column=5, value=vt)
+            c_t.number_format = "R$ #,##0.00"
+            c_t.alignment = Alignment(horizontal="right")
+            
             ws_itens.cell(row=r_idx, column=6, value=it.get("Situação")).alignment = Alignment(horizontal="center")
             ws_itens.cell(row=r_idx, column=7, value=it.get("Fornecedor"))
             ws_itens.cell(row=r_idx, column=8, value=formatar_cnpj(it.get("CNPJ", ""))).alignment = Alignment(horizontal="center")
             ws_itens.cell(row=r_idx, column=9, value=it.get("Pregão")).alignment = Alignment(horizontal="center")
             ws_itens.cell(row=r_idx, column=10, value=it.get("Ata")).alignment = Alignment(horizontal="center")
             ws_itens.cell(row=r_idx, column=11, value=it.get("UASG")).alignment = Alignment(horizontal="center")
+            
+            for col_idx in range(1, 12):
+                ws_itens.cell(row=r_idx, column=col_idx).border = borda
 
         for ws in [ws_resumo, ws_itens]:
             for col in ws.columns:
-                m_l = max(len(str(c.value or "")) for c in col)
-                ws.column_dimensions[get_column_letter(col[0].column)].width = max(m_l + 3, 12)
+                max_len = max(len(str(c.value or "")) for c in col)
+                ws.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 3, 12)
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -664,7 +738,7 @@ def gerar_planilha_global_ano_completa(ano: str, banco_dados: dict, om_nome: str
     ncs_do_ano = [nc for nc in banco_dados.keys() if nc != "CONFIG_REQUISICAO" and extrair_ano(nc) == ano]
     try:
         import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
         from openpyxl.utils import get_column_letter
 
         wb = openpyxl.Workbook()
@@ -686,31 +760,48 @@ def gerar_planilha_global_ano_completa(ano: str, banco_dados: dict, om_nome: str
             cell = ws_it_ano.cell(row=1, column=c_i, value=h)
             cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-            cell.alignment = Alignment(horizontal="center")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws_it_ano.row_dimensions[1].height = 25
+
+        thin = Side(border_style="thin", color="D3D3D3")
+        borda = Border(left=thin, right=thin, top=thin, bottom=thin)
 
         row_it = 2
         for nc in ncs_do_ano:
             d_nc = banco_dados[nc]
             for it in d_nc.get("itens", []):
-                q = int(it.get("Qtd", 0)); vu = float(it.get("Valor Unitário", 0.0))
+                q = int(it.get("Qtd", 0))
+                vu = float(it.get("Valor Unitário", 0.0))
+                vt = q * vu
+                
                 ws_it_ano.cell(row=row_it, column=1, value=nc).alignment = Alignment(horizontal="center")
                 ws_it_ano.cell(row=row_it, column=2, value=d_nc.get("pi", "")).alignment = Alignment(horizontal="center")
                 ws_it_ano.cell(row=row_it, column=3, value=d_nc.get("nd", "")).alignment = Alignment(horizontal="center")
                 ws_it_ano.cell(row=row_it, column=4, value=it.get("Item")).alignment = Alignment(horizontal="center")
                 ws_it_ano.cell(row=row_it, column=5, value=it.get("Nome"))
                 ws_it_ano.cell(row=row_it, column=6, value=q).alignment = Alignment(horizontal="center")
-                c_u = ws_it_ano.cell(row=row_it, column=7, value=vu); c_u.number_format = "R$ #,##0.00"
-                c_t = ws_it_ano.cell(row=row_it, column=8, value=q * vu); c_t.number_format = "R$ #,##0.00"
+                
+                c_u = ws_it_ano.cell(row=row_it, column=7, value=vu)
+                c_u.number_format = "R$ #,##0.00"
+                c_u.alignment = Alignment(horizontal="right")
+                
+                c_t = ws_it_ano.cell(row=row_it, column=8, value=vt)
+                c_t.number_format = "R$ #,##0.00"
+                c_t.alignment = Alignment(horizontal="right")
+                
                 ws_it_ano.cell(row=row_it, column=9, value=it.get("Situação")).alignment = Alignment(horizontal="center")
                 ws_it_ano.cell(row=row_it, column=10, value=it.get("Fornecedor"))
                 ws_it_ano.cell(row=row_it, column=11, value=formatar_cnpj(it.get("CNPJ", ""))).alignment = Alignment(horizontal="center")
                 ws_it_ano.cell(row=row_it, column=12, value=it.get("Pregão")).alignment = Alignment(horizontal="center")
+                
+                for col_idx in range(1, 13):
+                    ws_it_ano.cell(row=row_it, column=col_idx).border = borda
                 row_it += 1
 
         for ws in [ws_resumo, ws_it_ano]:
             for col in ws.columns:
-                m_l = max(len(str(c.value or "")) for c in col)
-                ws.column_dimensions[get_column_letter(col[0].column)].width = max(m_l + 3, 12)
+                max_len = max(len(str(c.value or "")) for c in col)
+                ws.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 3, 12)
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -1659,7 +1750,7 @@ with tab_consulta_pregoes:
                         st.markdown("---")
                         st.markdown("### 📥 Importar Item Selecionado Diretamente para uma Nota de Crédito")
                         
-                        opcoes_import = [f"Item {it['Item']} - {it['Descrição'][:50]}... (Saldo: {it['Saldo p/ Empenho']})" for it in itens_pr]
+                        opcoes_import = [f"Item {it['Item']} - {it['Descrição'][:65]}... (Saldo: {it['Saldo p/ Empenho']})" for it in itens_pr]
                         it_escolhido_str = st.selectbox("Selecione o Item para Puxar para a NC:", opcoes_import, key=f"sel_import_{chave_p}")
                         
                         if it_escolhido_str:
@@ -1680,7 +1771,7 @@ with tab_consulta_pregoes:
                                     with c_imp1:
                                         nc_destino = st.selectbox("Vincular à Nota de Crédito (NC):", ncs_disponiveis)
                                     with c_imp2:
-                                        # Puxa o saldo real corrigido como valor sugerido para compra
+                                        # Puxa o saldo real garantido
                                         saldo_num = int(converter_para_float(item_alvo.get("Saldo p/ Empenho", "1")))
                                         if saldo_num <= 0:
                                             saldo_num = int(converter_para_float(item_alvo.get("Qtd Registrada", "1")))
@@ -1688,7 +1779,7 @@ with tab_consulta_pregoes:
                                             saldo_num = 1
                                         qtd_para_importar = st.number_input("Quantidade a Empenhar / Comprar:", min_value=1, value=saldo_num, step=1)
                                     with c_imp3:
-                                        # Puxa o Valor Unitário real sugerido
+                                        # Puxa o Valor Unitário real sugerido já preenchido
                                         v_sug = float(item_alvo.get("Valor Unitario Sugerido", 0.0))
                                         valor_unit_imp = st.number_input("Valor Unitário (R$):", min_value=0.0, value=v_sug, step=0.01)
 
