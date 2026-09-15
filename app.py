@@ -545,36 +545,63 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
         resultado["fornecedor"] = fornecedor_display
         resultado["valor_unitario_sugerido"] = vlr_unit
 
-        # 3. Varredura Oficial de Saldos da UASG
+        # 3. Varredura Oficial de Saldos da UASG no Detalhamento do Item
         uasg_clean = uasg.strip()
+
+        # Isolar tabelas folha (que não contêm <table> interno) para evitar interferência de tabelas aninhadas
+        all_soup_tables = soup.find_all('table')
+        leaf_tables = [t for t in all_soup_tables if not t.find('table')]
+        if not leaf_tables:
+            leaf_tables = all_soup_tables
 
         # A) Notas de Empenho (NE) emitidas para esta UASG
         soma_empenhos_nes = 0.0
         empenhos_list = []
         tem_ne_uasg = False
 
-        for tbl in soup.find_all('table'):
-            tbl_txt = tbl.get_text(" ", strip=True).lower()
-            if any(k in tbl_txt for k in ["número de empenho", "numero de empenho", "nota de empenho", "data do empenho"]):
-                hdr = tbl.find('thead') or tbl.find('tr')
+        for tbl in leaf_tables:
+            hdr_ths = []
+            thead = tbl.find('thead')
+            if thead:
+                hdr_ths = [th.get_text(" ", strip=True).lower() for th in thead.find_all(['th', 'td'])]
+            if not hdr_ths:
+                first_tr = tbl.find('tr')
+                if first_tr:
+                    hdr_ths = [th.get_text(" ", strip=True).lower() for th in first_tr.find_all(['th', 'td'])]
+
+            if any("número de empenho" in h or "numero de empenho" in h or "nota de empenho" in h for h in hdr_ths):
                 idx_ne_col = -1
+                idx_u_col = -1
                 idx_data_col = -1
                 idx_qtd_col = -1
                 idx_val_col = -1
-                if hdr:
-                    th_list = [th.get_text(" ", strip=True).lower() for th in hdr.find_all(['th', 'td'])]
-                    for i_c, c_name in enumerate(th_list):
-                        if ("número" in c_name or "numero" in c_name or "empenho" in c_name) and idx_ne_col == -1: idx_ne_col = i_c
-                        elif "data" in c_name and idx_data_col == -1: idx_data_col = i_c
-                        elif "quantidade empenhada" in c_name or ("quantidade" in c_name and "empenh" in c_name): idx_qtd_col = i_c
-                        elif "valor" in c_name and idx_val_col == -1: idx_val_col = i_c
+                for i_c, c_name in enumerate(hdr_ths):
+                    if ("número" in c_name or "numero" in c_name or "empenho" in c_name) and "quantidade" not in c_name and "data" not in c_name and idx_ne_col == -1:
+                        idx_ne_col = i_c
+                    elif "unidade" in c_name and idx_u_col == -1:
+                        idx_u_col = i_c
+                    elif "data" in c_name and idx_data_col == -1:
+                        idx_data_col = i_c
+                    elif ("quantidade empenhada" in c_name) or ("quantidade" in c_name and "empenh" in c_name):
+                        idx_qtd_col = i_c
+                    elif "valor" in c_name and idx_val_col == -1:
+                        idx_val_col = i_c
 
                 for tr in tbl.find_all('tr'):
-                    tds = [td.get_text(" ", strip=True) for td in tr.find_all('td')]
-                    if not tds:
+                    tds = [td.get_text(" ", strip=True) for td in tr.find_all(['td', 'th'], recursive=False)]
+                    if len(tds) < 5:
                         continue
+                    if any("número de empenho" in td.lower() for td in tds):
+                        continue
+
+                    col_u = tds[idx_u_col].lower() if idx_u_col != -1 and idx_u_col < len(tds) else ""
                     linha_tr_txt = " ".join(tds).lower()
-                    if uasg_clean in linha_tr_txt or ("gerenciadora" in linha_tr_txt and not "não" in linha_tr_txt):
+
+                    is_match_ne = (uasg_clean in col_u) or (uasg_clean in linha_tr_txt) or (
+                        ("gerenciadora" in col_u or "gerenciadora" in linha_tr_txt) and ("não" not in col_u and "nao" not in col_u)
+                    )
+
+                    if is_match_ne:
                         m_ne = re.search(r"\b(\d{4}NE\d{4,6})\b", linha_tr_txt, re.IGNORECASE)
                         ne_num = m_ne.group(1).upper() if m_ne else (tds[idx_ne_col] if idx_ne_col != -1 and idx_ne_col < len(tds) else "")
                         d_ne = tds[idx_data_col] if idx_data_col != -1 and idx_data_col < len(tds) else ""
@@ -593,67 +620,117 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
                         if emp_entry not in empenhos_list:
                             empenhos_list.append(emp_entry)
 
-        # B) Tabela 3: Empenhos da Unidade (Unidade, Tipo, Qtd Registrada, Qtd Empenhada, Saldo p/ Empenho)
+        # B) Tabela de Saldos por Unidade no Item (Unidade, Tipo, Qtd Registrada, Qtd Empenhada, Saldo p/ Empenho)
         reg_t3 = None
         emp_t3 = None
         sal_t3 = None
-        for tbl in soup.find_all('table'):
-            hdr = tbl.find('thead') or tbl.find('tr')
-            if not hdr: continue
-            th_list = [th.get_text(" ", strip=True).lower() for th in hdr.find_all(['th', 'td'])]
-            if any("quantidade empenhada" in c for c in th_list) and any("saldo" in c for c in th_list):
+
+        for tbl in leaf_tables:
+            hdr_ths = []
+            thead = tbl.find('thead')
+            if thead:
+                hdr_ths = [th.get_text(" ", strip=True).lower() for th in thead.find_all(['th', 'td'])]
+            if not hdr_ths:
+                first_tr = tbl.find('tr')
+                if first_tr:
+                    hdr_ths = [th.get_text(" ", strip=True).lower() for th in first_tr.find_all(['th', 'td'])]
+
+            if any("quantidade empenhada" in h for h in hdr_ths) and any("saldo" in h for h in hdr_ths) and any("unidade" in h for h in hdr_ths):
+                idx_u = -1
+                idx_tipo = -1
                 idx_r = -1
                 idx_e = -1
                 idx_s = -1
-                for i_c, c_name in enumerate(th_list):
-                    if "registrada" in c_name or "homologada" in c_name: idx_r = i_c
-                    elif "empenhada" in c_name and not any(s in c_name for s in ["saldo", "dispon"]): idx_e = i_c
-                    elif "saldo" in c_name: idx_s = i_c
-                for tr in tbl.find_all('tr'):
-                    tds = [td.get_text(" ", strip=True) for td in tr.find_all('td')]
-                    r_txt = " ".join(tds).lower()
-                    if uasg_clean in r_txt or ("gerenciadora" in r_txt and not "não" in r_txt):
-                        if len(tds) > max(idx_r, idx_e, idx_s):
-                            reg_t3 = converter_para_float(tds[idx_r])
-                            emp_t3 = converter_para_float(tds[idx_e])
-                            sal_t3 = converter_para_float(tds[idx_s])
-                            break
-            if reg_t3 is not None:
-                break
+                for i_c, c_name in enumerate(hdr_ths):
+                    if "unidade" in c_name and idx_u == -1:
+                        idx_u = i_c
+                    elif "tipo" in c_name and idx_tipo == -1:
+                        idx_tipo = i_c
+                    elif ("registrada" in c_name or "homologada" in c_name or "autorizada" in c_name) and idx_r == -1:
+                        idx_r = i_c
+                    elif "empenhada" in c_name and not any(k in c_name for k in ["saldo", "dispon", "reforço", "anulação"]) and idx_e == -1:
+                        idx_e = i_c
+                    elif "saldo" in c_name and idx_s == -1:
+                        idx_s = i_c
 
-        # C) Tabela 1: Unidades do Item (Código, Unidade, Tipo, Qtd Registrada, Qtd Disponível para remanejamento/empenho)
+                for tr in tbl.find_all('tr'):
+                    tds = [td.get_text(" ", strip=True) for td in tr.find_all(['td', 'th'], recursive=False)]
+                    if len(tds) < 4:
+                        continue
+                    if any("quantidade registrada" in td.lower() for td in tds):
+                        continue
+
+                    col_u = tds[idx_u].lower() if idx_u != -1 and idx_u < len(tds) else ""
+                    col_tipo = tds[idx_tipo].lower() if idx_tipo != -1 and idx_tipo < len(tds) else ""
+                    linha_txt = " ".join(tds).lower()
+
+                    is_uasg = (uasg_clean in col_u) or (uasg_clean in linha_txt)
+                    is_gerenciadora = ("gerenciadora" in col_tipo or "gerenciadora" in col_u or "gerenciadora" in linha_txt) and ("não" not in col_tipo and "nao" not in col_tipo)
+
+                    if is_uasg or is_gerenciadora:
+                        if idx_r != -1 and idx_r < len(tds):
+                            reg_t3 = converter_para_float(tds[idx_r])
+                        if idx_e != -1 and idx_e < len(tds):
+                            emp_t3 = converter_para_float(tds[idx_e])
+                        if idx_s != -1 and idx_s < len(tds):
+                            sal_t3 = converter_para_float(tds[idx_s])
+
+                        if is_uasg:
+                            break
+
+                if reg_t3 is not None and emp_t3 is not None:
+                    break
+
+        # C) Tabela de Unidades do Item (Código, Unidade, Tipo da unidade, Qtd Registrada, Qtd Disponível para remanejamento/empenho)
         reg_t1 = None
         disp_t1 = None
-        for tbl in soup.find_all('table'):
-            hdr = tbl.find('thead') or tbl.find('tr')
-            if not hdr: continue
-            th_list = [th.get_text(" ", strip=True).lower() for th in hdr.find_all(['th', 'td'])]
-            if any("remanejamento" in c or "disponível" in c or "disponiv" in c for c in th_list):
+        for tbl in leaf_tables:
+            hdr_ths = []
+            thead = tbl.find('thead')
+            if thead:
+                hdr_ths = [th.get_text(" ", strip=True).lower() for th in thead.find_all(['th', 'td'])]
+            if not hdr_ths:
+                first_tr = tbl.find('tr')
+                if first_tr:
+                    hdr_ths = [th.get_text(" ", strip=True).lower() for th in first_tr.find_all(['th', 'td'])]
+
+            if any("remanejamento" in c or "disponível" in c or "disponiv" in c for c in hdr_ths):
                 idx_r = -1
                 idx_disp = -1
-                for i_c, c_name in enumerate(th_list):
-                    if "registrada" in c_name or "homologada" in c_name: idx_r = i_c
-                    elif "disponível" in c_name or "disponiv" in c_name or "remanejamento" in c_name: idx_disp = i_c
+                for i_c, c_name in enumerate(hdr_ths):
+                    if ("registrada" in c_name or "homologada" in c_name) and idx_r == -1:
+                        idx_r = i_c
+                    elif ("disponível" in c_name or "disponiv" in c_name or "remanejamento" in c_name) and idx_disp == -1:
+                        idx_disp = i_c
+
                 for tr in tbl.find_all('tr'):
-                    tds = [td.get_text(" ", strip=True) for td in tr.find_all('td')]
+                    tds = [td.get_text(" ", strip=True) for td in tr.find_all(['td', 'th'], recursive=False)]
+                    if len(tds) < 3:
+                        continue
+                    if any("quantidade registrada" in td.lower() for td in tds):
+                        continue
+
                     r_txt = " ".join(tds).lower()
-                    if uasg_clean in r_txt or ("gerenciadora" in r_txt and not "não" in r_txt):
-                        if len(tds) > max(idx_r, idx_disp):
+                    if uasg_clean in r_txt or ("gerenciadora" in r_txt and "não" not in r_txt and "nao" not in r_txt):
+                        if idx_r != -1 and idx_r < len(tds):
                             reg_t1 = converter_para_float(tds[idx_r])
+                        if idx_disp != -1 and idx_disp < len(tds):
                             disp_t1 = converter_para_float(tds[idx_disp])
-                            break
+                        break
+
             if reg_t1 is not None:
                 break
 
         # D) Consolidação Matemática das Quantidades: Saldo = Registrada - Empenhada
-        if tem_ne_uasg and soma_empenhos_nes > 0:
-            final_emp = soma_empenhos_nes
-            final_reg = reg_t3 if reg_t3 is not None else (reg_t1 if reg_t1 is not None else final_emp)
-            final_sal = max(0.0, final_reg - final_emp)
-        elif reg_t3 is not None and emp_t3 is not None:
-            final_reg = reg_t3
+        # Prioridade máxima para os dados da tabela da Unidade e Empenhos do item da ARP
+        if emp_t3 is not None and emp_t3 >= 0:
             final_emp = emp_t3
+            final_reg = reg_t3 if (reg_t3 is not None and reg_t3 > 0) else (reg_t1 if (reg_t1 is not None and reg_t1 > 0) else final_emp)
             final_sal = sal_t3 if sal_t3 is not None else max(0.0, final_reg - final_emp)
+        elif tem_ne_uasg and soma_empenhos_nes > 0:
+            final_emp = soma_empenhos_nes
+            final_reg = reg_t3 if (reg_t3 is not None and reg_t3 > 0) else (reg_t1 if (reg_t1 is not None and reg_t1 > 0) else final_emp)
+            final_sal = max(0.0, final_reg - final_emp)
         elif reg_t1 is not None and disp_t1 is not None:
             final_reg = reg_t1
             final_sal = disp_t1
@@ -662,6 +739,12 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
             final_reg = 0.0
             final_emp = 0.0
             final_sal = 0.0
+
+        # Garantia matemática estrita: Quantidade empenhada não pode ultrapassar a registrada
+        if final_reg > 0 and final_emp > final_reg:
+            final_emp = final_reg
+        if final_reg > 0:
+            final_sal = max(0.0, final_reg - final_emp)
 
         def fmt_qtd(val: float) -> str:
             if val == int(val):
@@ -860,6 +943,11 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
                 f_reg = converter_para_float(qtd_registrada_final)
                 f_emp = converter_para_float(qtd_empenhada_final)
                 f_sal = converter_para_float(saldo_empenho_calc)
+
+                # Se a quantidade empenhada exceder a registrada (anomalia de scraping), limita ao teto registrado
+                if f_reg > 0 and f_emp > f_reg:
+                    f_emp = f_reg
+                    qtd_empenhada_final = f"{f_emp:g}"
 
                 # Se saldo oficial da unidade foi capturado e empenho direto estava 0
                 if f_sal > 0 and f_emp == 0 and f_reg > f_sal:
