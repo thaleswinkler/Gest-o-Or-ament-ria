@@ -25,7 +25,992 @@ from urllib3.util.retry import Retry
 from typing import Tuple, Optional, List, Dict
 import concurrent.futures
 import urllib3
-from nd_subitens import determinar_subitem, listar_subitens_por_nd, obter_nome_subitem
+# =====================================================================
+# BANCO DE DADOS E LÓGICA DE SUBITENS DA NATUREZA DE DESPESA (ND)
+# =====================================================================
+# -*- coding: utf-8 -*-
+"""
+Catálogo Oficial de Subitens da Natureza de Despesa (ND)
+Baseado no Manual SIAFI / Legislação Orçamentária Federal para:
+- ND 339030: Material de Consumo
+- ND 449052: Equipamentos e Material Permanente
+- ND 339039: Outros Serviços de Terceiros - Pessoa Jurídica
+
+O subitem corresponde aos dois últimos dígitos da ND de 8 dígitos.
+"""
+import re
+import unicodedata
+from typing import Dict, List, Tuple, Optional
+
+def _normalizar_texto(texto: str) -> str:
+    if not texto:
+        return ""
+    # Remove acentos e converte para minúsculas
+    nfkd = unicodedata.normalize('NFKD', str(texto))
+    sem_acento = "".join([c for c in nfkd if not unicodedata.combining(c)])
+    # Mantém apenas letras, números e espaços
+    limpo = re.sub(r'[^a-zA-Z0-9\s]', ' ', sem_acento.lower())
+    return " ".join(limpo.split())
+
+# =====================================================================
+# BANCO DE DADOS OFICIAL DE SUBITENS COM PALAVRAS-CHAVE E EMENTAS
+# =====================================================================
+CATALOGO_SUBITENS: Dict[str, List[Dict]] = {
+    # -------------------------------------------------------------
+    # 339030 - MATERIAL DE CONSUMO
+    # -------------------------------------------------------------
+    "339030": [
+        {
+            "subitem": "01",
+            "nd_completa": "33903001",
+            "nome": "COMBUSTIVEIS E LUBRIFICANTES AUTOMOTIVOS",
+            "keywords": [
+                "combustivel", "gasolina", "diesel", "oleo diesel", "alcool hidratado", "etanol",
+                "lubrificante", "oleo lubrificante", "graxa", "fluido freio", "oleo carter",
+                "fluido transmissao", "fluido amortecedor", "aditivo radiador", "aditivo"
+            ]
+        },
+        {
+            "subitem": "02",
+            "nd_completa": "33903002",
+            "nome": "COMBUSTIVEIS E LUBRIFICANTES DE AVIACAO",
+            "keywords": [
+                "aviacao", "aeronave", "querosene aviacao", "gasolina aviacao", "oleo aviacao"
+            ]
+        },
+        {
+            "subitem": "03",
+            "nd_completa": "33903003",
+            "nome": "COMBUSTIVEIS E LUBRIF. P/ OUTRAS FINALIDADES",
+            "keywords": [
+                "carbureto", "carvao mineral", "carvao vegetal", "lenha", "querosene comum", "ferroviario"
+            ]
+        },
+        {
+            "subitem": "04",
+            "nd_completa": "33903004",
+            "nome": "GAS E OUTROS MATERIAIS ENGARRAFADOS",
+            "keywords": [
+                "gas", "glp", "gas liquefeito", "botijao", "gas de cozinha", "acetileno",
+                "oxigenio", "nitrogenio", "helio", "argon", "freon", "gas carbico",
+                "extintor", "recarga extintor", "po quimico"
+            ]
+        },
+        {
+            "subitem": "05",
+            "nd_completa": "33903005",
+            "nome": "EXPLOSIVOS E MUNICOES",
+            "keywords": [
+                "municao", "bala", "projetil", "capsula", "estopim", "espoleta",
+                "explosivo", "dinamite", "granada", "polvora", "fogos artificio", "artigo pirotecnico"
+            ]
+        },
+        {
+            "subitem": "06",
+            "nd_completa": "33903006",
+            "nome": "ALIMENTOS PARA ANIMAIS",
+            "keywords": [
+                "racao", "racao canina", "racao equina", "alfafa", "alpiste", "capim", "farelo",
+                "fuba", "milho grao", "sal mineral", "suplemento animal", "alimento animal"
+            ]
+        },
+        {
+            "subitem": "07",
+            "nd_completa": "33903007",
+            "nome": "GENEROS DE ALIMENTACAO",
+            "keywords": [
+                "acucar", "adocante", "agua mineral", "cafe", "carne", "frango", "bovino", "suino",
+                "peixe", "cereal", "arroz", "feijao", "cha", "condimento", "fruta", "gelo", "legume",
+                "refrigerante", "suco", "tempero", "verdura", "leite", "pao", "queijo", "manteiga",
+                "biscoito", "bolacha", "farinha", "macarrao", "massa", "oleo soja", "vinagre", "sal",
+                "molho", "achocolatado", "iogurte", "generos alimenticios", "alimento"
+            ]
+        },
+        {
+            "subitem": "08",
+            "nd_completa": "33903008",
+            "nome": "ANIMAIS PARA PESQUISA E ABATE",
+            "keywords": [
+                "cobaia", "camundongo", "rato", "peixe vivo", "abelha", "boi abate"
+            ]
+        },
+        {
+            "subitem": "09",
+            "nd_completa": "33903009",
+            "nome": "MATERIAL FARMACOLOGICO",
+            "keywords": [
+                "medicamento", "remedio", "droga", "soro fisiologico", "vacina", "farmaco",
+                "antibiotico", "analgesico", "antiinflamatorio", "antisseptico", "pomada"
+            ]
+        },
+        {
+            "subitem": "10",
+            "nd_completa": "33903010",
+            "nome": "MATERIAL ODONTOLOGICO",
+            "keywords": [
+                "odontologico", "dente", "dentista", "amalgama", "anestesico dental", "broca dental",
+                "cimento odontologico", "espatula odontologica", "filme raio x dental", "sugador cirurgico"
+            ]
+        },
+        {
+            "subitem": "11",
+            "nd_completa": "33903011",
+            "nome": "MATERIAL QUIMICO",
+            "keywords": [
+                "quimico", "acido", "inseticida", "reagente quimico", "solvente", "sulfato",
+                "cloreto", "hidroxido", "formol", "formicida", "raticida"
+            ]
+        },
+        {
+            "subitem": "12",
+            "nd_completa": "33903012",
+            "nome": "MATERIAL DE COUDELARIA OU DE USO ZOOTECNICO",
+            "keywords": [
+                "coudelaria", "arreameto", "cabresto", "ferradura", "estribo", "bridao",
+                "espora", "manta cavalo", "cincha", "adestramento", "coleira cao"
+            ]
+        },
+        {
+            "subitem": "13",
+            "nd_completa": "33903013",
+            "nome": "MATERIAL DE CACA E PESCA",
+            "keywords": [
+                "pesca", "anzol", "rede pesca", "isca", "linha nylon pesca", "molinete", "vara pesca", "mergulho"
+            ]
+        },
+        {
+            "subitem": "14",
+            "nd_completa": "33903014",
+            "nome": "MATERIAL EDUCATIVO E ESPORTIVO",
+            "keywords": [
+                "esportivo", "educativo", "bola", "bola futebol", "bola volei", "bola basquete",
+                "apito", "chuteira", "tenis esporte", "quimono", "rede volei", "rede futebol",
+                "raquete", "patins", "joelheira", "caneleira", "esteira yoga", "bone esporte",
+                "trofeu", "medalha", "jogo educativo", "brinquedo", "tatame"
+            ]
+        },
+        {
+            "subitem": "15",
+            "nd_completa": "33903015",
+            "nome": "MATERIAL P/ FESTIVIDADES E HOMENAGENS",
+            "keywords": [
+                "festividade", "homenagem", "arranjo flores", "coroa flores", "buffet", "doces festa",
+                "salgados festa", "placa comemorativa", "decoracao evento"
+            ]
+        },
+        {
+            "subitem": "16",
+            "nd_completa": "33903016",
+            "nome": "MATERIAL DE EXPEDIENTE",
+            "keywords": [
+                "expediente", "papel", "papel a4", "sulfite", "resma", "caneta", "lapis", "borracha",
+                "apontador", "caderno", "bloco", "bloco rascunho", "pasta", "pasta a-z", "pasta suspensa",
+                "pasta aba", "pasta canaleta", "pasta plastico", "envelope", "clipe", "grampo", "grampeador",
+                "extrator grampo", "perfurador", "fita adesiva", "durex", "fita crepe", "fita dupla face",
+                "corretivo", "tesoura", "estilete", "regua", "carimbo", "almofada carimbo", "tinta carimbo",
+                "cola bastao", "cola branca", "grafite", "lapiseira", "porta lapis", "organizador mesa",
+                "envelope pardo", "etiqueta", "etiqueta adesiva", "marcador texto", "pincel atomico",
+                "quadro branco", "apagador quadro", "post-it", "bloco adesivo"
+            ]
+        },
+        {
+            "subitem": "17",
+            "nd_completa": "33903017",
+            "nome": "MATERIAL DE TIC - MATERIAL DE CONSUMO",
+            "keywords": [
+                "toner", "cartucho", "cartucho tinta", "tinta impressora", "fita impressora",
+                "mouse", "mouse pad", "teclado", "pendrive", "pen drive", "cabo rede", "cabo patch",
+                "rj45", "conector rj", "filtro linha", "cd", "dvd", "midia", "pilha recarregavel"
+            ]
+        },
+        {
+            "subitem": "18",
+            "nd_completa": "33903018",
+            "nome": "MATERIAIS E MEDICAMENTOS P/ USO VETERINARIO",
+            "keywords": [
+                "veterinario", "medicamento veterinario", "vacina veterinaria", "vermifugo", "antiparasitario"
+            ]
+        },
+        {
+            "subitem": "19",
+            "nd_completa": "33903019",
+            "nome": "MATERIAL DE ACONDICIONAMENTO E EMBALAGEM",
+            "keywords": [
+                "embalagem", "acondicionamento", "caixa papelao", "caixa plastica", "isopor", "caixa isopor",
+                "papel bolha", "plastico bolha", "filme stretch", "fitilho", "fita gomada", "arame",
+                "barbante", "saco plastico", "sacola", "corda amarracao"
+            ]
+        },
+        {
+            "subitem": "20",
+            "nd_completa": "33903020",
+            "nome": "MATERIAL DE CAMA, MESA E BANHO",
+            "keywords": [
+                "cama", "mesa e banho", "lencol", "fronha", "cobertor", "colcha", "travesseiro",
+                "toalha banho", "toalha rosto", "toalha mesa", "guardanapo tecido", "capa colchao"
+            ]
+        },
+        {
+            "subitem": "21",
+            "nd_completa": "33903021",
+            "nome": "MATERIAL DE COPA E COZINHA",
+            "keywords": [
+                "copa", "cozinha", "copo", "copo descartavel", "prato", "prato descartavel", "talher",
+                "garfo", "faca", "colher", "xicara", "pires", "garrafa termica", "bule", "panela",
+                "frigideira", "assadeira", "bandeja", "filme aluminio", "papel aluminio", "filme pvc",
+                "coador cafe", "filtro cafe", "pano prato", "pano copa", "tigela", "refratario",
+                "abridor lata", "concha cozinha", "escumadeira"
+            ]
+        },
+        {
+            "subitem": "22",
+            "nd_completa": "33903022",
+            "nome": "MATERIAL DE LIMPEZA E PROD. DE HIGIENIZACAO",
+            "keywords": [
+                "limpeza", "higienizacao", "sabao", "sabao po", "sabao barra", "sabonete", "sabonete liquido",
+                "detergente", "desinfetante", "agua sanitaria", "cloro", "alcool", "alcool 70", "alcool em gel",
+                "vassoura", "rodo", "pa lixo", "saco lixo", "saco para lixo", "palha aco", "bombril", "esponja",
+                "esponja dupla face", "pano chao", "pano limpeza", "flanela", "papel higienico", "papel toalha",
+                "toalha papel", "creme dental", "pasta dente", "escova dente", "lustra moveis", "multiuso",
+                "limpa vidro", "cera", "desodorizador", "aromatizador", "odorizador", "soda caustica"
+            ]
+        },
+        {
+            "subitem": "23",
+            "nd_completa": "33903023",
+            "nome": "UNIFORMES, TECIDOS E AVIAMENTOS",
+            "keywords": [
+                "uniforme", "farda", "fardamento", "gandola", "camuflado", "tecido", "costura",
+                "linha costura", "ziper", "botao", "cadarco", "elastico", "camisa", "camiseta",
+                "calca", "agasalho", "avental", "chapeu", "bone farda", "boina", "cinto", "gavata",
+                "meia", "coturno", "bota militar", "sapato militar"
+            ]
+        },
+        {
+            "subitem": "24",
+            "nd_completa": "33903024",
+            "nome": "MATERIAL P/ MANUT.DE BENS IMOVEIS/INSTALACOES",
+            "keywords": [
+                "manutencao imovel", "construcao", "cimento", "areia", "brita", "cal", "tijolo", "telha",
+                "tinta", "tinta acrilica", "tinta latex", "esmalte sintetico", "verniz", "massa corrida",
+                "selador", "trincha", "pincel", "rolo la", "rolo pintura", "lixa massa", "lixa ferro",
+                "tubo pvc", "cano pvc", "conexao pvc", "joelho pvc", "curva pvc", "luva pvc", "registro",
+                "valvula descarga", "sifao", "torneira", "piso", "ceramica", "azulejo", "argamassa",
+                "rejunte", "porta", "fechadura", "dobradica", "parafuso", "bucha", "prego", "arame liso",
+                "arame farpado", "impermeabilizante", "vidro", "silicone"
+            ]
+        },
+        {
+            "subitem": "25",
+            "nd_completa": "33903025",
+            "nome": "MATERIAL P/ MANUTENCAO DE BENS MOVEIS",
+            "keywords": [
+                "peca reposicao movel", "cilindro maquina", "peca compressor", "mola movel", "rodizio cadeira"
+            ]
+        },
+        {
+            "subitem": "26",
+            "nd_completa": "33903026",
+            "nome": "MATERIAL ELETRICO E ELETRONICO",
+            "keywords": [
+                "eletrico", "lampada", "lampada led", "luminaria", "painel led", "refletor led", "disjuntor",
+                "fio", "fio eletrico", "cabo flexivel", "cabo eletrico", "tomada", "interruptor", "espelho tomada",
+                "placa cega", "fita isolante", "reator", "sensor presenca", "canaleta", "fusivel", "benjamim",
+                "adaptador tomada", "bocal", "soquete", "calha eletrica", "chave teste", "conector eletrico"
+            ]
+        },
+        {
+            "subitem": "27",
+            "nd_completa": "33903027",
+            "nome": "MATERIAL DE MANOBRA E PATRULHAMENTO",
+            "keywords": [
+                "manobra", "patrulhamento", "binoculo", "cantil", "marmita militar", "lanterna militar",
+                "mochila militar", "saco dormir", "flamula", "piquete", "carta nautica"
+            ]
+        },
+        {
+            "subitem": "28",
+            "nd_completa": "33903028",
+            "nome": "MATERIAL DE PROTECAO E SEGURANCA",
+            "keywords": [
+                "epi", "protecao", "seguranca", "capacete", "oculos protecao", "luva protecao",
+                "luva vaqueta", "luva pigmentada", "bota borracha", "bota pvc", "mascara protecao",
+                "protetor auricular", "abafador", "cinto seguranca", "trava quedas", "cadeado",
+                "lona", "capa chuva", "colete reflexivo"
+            ]
+        },
+        {
+            "subitem": "29",
+            "nd_completa": "33903029",
+            "nome": "MATERIAL P/ AUDIO, VIDEO E FOTO",
+            "keywords": [
+                "audio", "video", "foto", "filme foto", "papel fotografico", "pilha audio", "moldura"
+            ]
+        },
+        {
+            "subitem": "30",
+            "nd_completa": "33903030",
+            "nome": "MATERIAL PARA COMUNICACOES",
+            "keywords": [
+                "comunicacao", "antena radio", "conector bnc", "circuito impresso", "fio telefonico"
+            ]
+        },
+        {
+            "subitem": "31",
+            "nd_completa": "33903031",
+            "nome": "SEMENTES, MUDAS DE PLANTAS E INSUMOS",
+            "keywords": [
+                "semente", "muda", "planta", "adubo", "fertilizante", "terra vegetal", "substrato", "jardinagem"
+            ]
+        },
+        {
+            "subitem": "35",
+            "nd_completa": "33903035",
+            "nome": "MATERIAL LABORATORIAL",
+            "keywords": [
+                "laboratorio", "laboratorial", "tubo ensaio", "bequer", "pipeta", "proveta",
+                "lamina microscopio", "placa petri", "vidraria laboratorio"
+            ]
+        },
+        {
+            "subitem": "36",
+            "nd_completa": "33903036",
+            "nome": "MATERIAL HOSPITALAR",
+            "keywords": [
+                "hospitalar", "saude", "agulha", "seringa", "gaze", "compressa", "esparadrapo",
+                "algodao", "fio sutura", "cateter", "luva procedimento", "luva cirurgica",
+                "lamina bisturi", "termometro clinico", "mascara descartavel"
+            ]
+        },
+        {
+            "subitem": "37",
+            "nd_completa": "33903037",
+            "nome": "SOBRESSALENTES DE ARMAMENTO",
+            "keywords": [
+                "sobressalente armamento", "peca fuzil", "peca pistola", "carregador fuzil", "mola armamento"
+            ]
+        },
+        {
+            "subitem": "39",
+            "nd_completa": "33903039",
+            "nome": "MATERIAL P/ MANUTENCAO DE VEICULOS",
+            "keywords": [
+                "veiculo", "viatura", "automotivo", "pneu", "camara ar", "bateria veiculo", "bateria automotiva",
+                "amortecedor", "pastilha freio", "disco freio", "filtro oleo", "filtro ar", "filtro combustivel",
+                "palheta parabrisa", "vela ignicao", "correia dentada", "lampada automotiva", "farol veiculo"
+            ]
+        },
+        {
+            "subitem": "42",
+            "nd_completa": "33903042",
+            "nome": "FERRAMENTAS",
+            "keywords": [
+                "ferramenta", "alicate", "chave fenda", "chave philips", "chave combinada", "chave biela",
+                "chave inglesa", "martelo", "marreta", "serrote", "arco serra", "lamina serra", "trena",
+                "nivel", "lima", "torques", "pa", "enxada", "picareta", "machado", "foice", "ferro solda"
+            ]
+        },
+        {
+            "subitem": "44",
+            "nd_completa": "33903044",
+            "nome": "MATERIAL DE SINALIZACAO VISUAL E OUTROS",
+            "keywords": [
+                "sinalizacao", "placa sinalizacao", "cone transito", "fita zebrada", "cracha", "cordao cracha"
+            ]
+        },
+        {
+            "subitem": "50",
+            "nd_completa": "33903050",
+            "nome": "BANDEIRAS, FLAMULAS E INSIGNIAS",
+            "keywords": [
+                "bandeira", "bandeira brasil", "flamula", "insignia", "brasao"
+            ]
+        },
+        {
+            "subitem": "59",
+            "nd_completa": "33903059",
+            "nome": "MATERIAL PARA DIVULGACAO",
+            "keywords": [
+                "banner", "faixa divulgacao", "cartaz", "painel informativo"
+            ]
+        },
+        {
+            "subitem": "99",
+            "nd_completa": "33903099",
+            "nome": "OUTROS MATERIAIS DE CONSUMO",
+            "keywords": [
+                "outro material consumo", "consumo diverso"
+            ]
+        }
+    ],
+
+    # -------------------------------------------------------------
+    # 449052 - EQUIPAMENTOS E MATERIAL PERMANENTE
+    # -------------------------------------------------------------
+    "449052": [
+        {
+            "subitem": "04",
+            "nd_completa": "44905204",
+            "nome": "APARELHOS DE MEDICAO E ORIENTACAO",
+            "keywords": [
+                "medicao", "balanca", "balanca digital", "bussola", "cronometro", "gps", "navegador gps",
+                "paquimetro digital", "osciloscopio", "multimetro", "amperimetro"
+            ]
+        },
+        {
+            "subitem": "06",
+            "nd_completa": "44905206",
+            "nome": "APARELHOS E EQUIPAMENTOS DE COMUNICACAO",
+            "keywords": [
+                "comunicacao", "radio amador", "radio comunicador", "transmissor", "receptor",
+                "pabx", "interfone", "central telefonica"
+            ]
+        },
+        {
+            "subitem": "08",
+            "nd_completa": "44905208",
+            "nome": "APAR.EQUIP.UTENS.MED.,ODONT,LABOR.HOSPIT.",
+            "keywords": [
+                "aparelho medico", "raio x", "cadeira dentista", "maca hospitalar", "autoclave",
+                "estufa hospitalar", "desfibrilador", "microscopio", "esfigmomanometro pedestal"
+            ]
+        },
+        {
+            "subitem": "10",
+            "nd_completa": "44905210",
+            "nome": "APARELHOS E EQUIP. P/ ESPORTES E DIVERSOES",
+            "keywords": [
+                "aparelho esporte", "bicicleta ergometrica", "esteira ergometrica", "mesa tenis",
+                "mesa ping pong", "halteres permanente", "trave futebol", "tabela basquete"
+            ]
+        },
+        {
+            "subitem": "12",
+            "nd_completa": "44905212",
+            "nome": "APARELHOS E UTENSILIOS DOMESTICOS",
+            "keywords": [
+                "eletrodomestico", "ar condicionado", "split", "geladeira", "refrigerador", "freezer",
+                "fogao", "fogao industrial", "forno microondas", "microondas", "lavadora roupa",
+                "maquina lavar", "secadora roupa", "aspirador po", "liquidificador industrial",
+                "batedeira", "cafeteira eletrica", "ventilador", "ventilador parede", "ventilador teto",
+                "circulador ar", "bebedouro", "purificador agua"
+            ]
+        },
+        {
+            "subitem": "14",
+            "nd_completa": "44905214",
+            "nome": "ARMAMENTOS",
+            "keywords": [
+                "arma", "armamento", "fuzil", "pistola", "revolver", "metralhadora"
+            ]
+        },
+        {
+            "subitem": "18",
+            "nd_completa": "44905218",
+            "nome": "COLECOES E MATERIAIS BIBLIOGRAFICOS",
+            "keywords": [
+                "livro permanente", "enciclopedia", "dicionario biblioteca", "colecao bibliografica"
+            ]
+        },
+        {
+            "subitem": "20",
+            "nd_completa": "44905220",
+            "nome": "EMBARCACOES",
+            "keywords": [
+                "embarcacao", "barco", "lancha", "bote", "canoa", "motor popa"
+            ]
+        },
+        {
+            "subitem": "22",
+            "nd_completa": "44905222",
+            "nome": "EQUIPAMENTOS DE MANOBRA E PATRULHAMENTO",
+            "keywords": [
+                "barraca campanha", "cama campanha", "farol busca", "sirene viatura"
+            ]
+        },
+        {
+            "subitem": "24",
+            "nd_completa": "44905224",
+            "nome": "EQUIPAMENTO DE PROTECAO, SEGURANCA E SOCORRO",
+            "keywords": [
+                "cofre", "cofre aco", "extintor permanente", "catraca", "camera seguranca",
+                "cftv", "alarme seguranca", "sistema alarme", "cerca eletrica"
+            ]
+        },
+        {
+            "subitem": "26",
+            "nd_completa": "44905226",
+            "nome": "INSTRUMENTOS MUSICAIS E ARTISTICOS",
+            "keywords": [
+                "instrumento musical", "violao", "guitarra", "teclado musical", "saxofone",
+                "trompete", "bateria musical", "caixa fanfarra", "clarinete"
+            ]
+        },
+        {
+            "subitem": "28",
+            "nd_completa": "44905228",
+            "nome": "MAQUINAS E EQUIPAMENTOS DE NATUREZA INDUSTRIAL",
+            "keywords": [
+                "maquina industrial", "betoneira", "torno mecanico", "prensa industrial"
+            ]
+        },
+        {
+            "subitem": "30",
+            "nd_completa": "44905230",
+            "nome": "MAQUINAS E EQUIPAMENTOS ENERGETICOS",
+            "keywords": [
+                "gerador", "gerador energia", "gerador diesel", "nobreak", "no-break",
+                "transformador", "estabilizador industrial"
+            ]
+        },
+        {
+            "subitem": "32",
+            "nd_completa": "44905232",
+            "nome": "MAQUINAS E EQUIPAMENTOS GRAFICOS",
+            "keywords": [
+                "guilhotina papel", "plastificadora", "encadernadora", "copiadora"
+            ]
+        },
+        {
+            "subitem": "33",
+            "nd_completa": "44905233",
+            "nome": "EQUIPAMENTOS PARA AUDIO, VIDEO E FOTO",
+            "keywords": [
+                "camera", "camera digital", "camera fotografica", "filmadora", "projetor",
+                "projetor multimidia", "datashow", "data show", "tela projecao", "caixa som",
+                "caixa acustica", "amplificador som", "microfone sem fio", "televisor", "tv led",
+                "smart tv", "mesa som"
+            ]
+        },
+        {
+            "subitem": "34",
+            "nd_completa": "44905234",
+            "nome": "MAQUINAS, UTENSILIOS E EQUIPAMENTOS DIVERSOS",
+            "keywords": [
+                "lavadora alta pressao", "vap", "furadeira bancada", "cortador grama", "aparador grama"
+            ]
+        },
+        {
+            "subitem": "35",
+            "nd_completa": "44905235",
+            "nome": "MATERIAL DE TIC (PERMANENTE)",
+            "keywords": [
+                "material tic permanente", "equipamento informatica"
+            ]
+        },
+        {
+            "subitem": "36",
+            "nd_completa": "44905236",
+            "nome": "MAQUINAS, INSTALACOES E UTENS. DE ESCRITORIO",
+            "keywords": [
+                "relogio ponto", "calculadora mesa", "rotulador eletronico", "fragmentadora papel"
+            ]
+        },
+        {
+            "subitem": "37",
+            "nd_completa": "44905237",
+            "nome": "EQUIPAMENTOS DE TIC - ATIVOS DE REDE",
+            "keywords": [
+                "switch", "switch rede", "roteador", "firewall", "access point", "rack servidor"
+            ]
+        },
+        {
+            "subitem": "38",
+            "nd_completa": "44905238",
+            "nome": "MAQ., FERRAMENTAS E UTENSILIOS DE OFICINA",
+            "keywords": [
+                "compressor ar", "compressor", "esmeril", "motoesmeril", "macaco jacare",
+                "elevador veicular", "furadeira impacto", "lixadeira angular", "serra circular",
+                "serra fita", "maquina solda"
+            ]
+        },
+        {
+            "subitem": "39",
+            "nd_completa": "44905239",
+            "nome": "EQUIP. E UTENSILIOS HIDRAULICOS E ELETRICOS",
+            "keywords": [
+                "bomba dagua", "motobomba", "bomba poco", "bomba submersa"
+            ]
+        },
+        {
+            "subitem": "40",
+            "nd_completa": "44905240",
+            "nome": "MAQUINAS E EQUIPAMENTOS AGRIC. E RODOVIARIOS",
+            "keywords": [
+                "trator", "rocadeira", "rocadeira gasolina", "motosserra", "moto serra"
+            ]
+        },
+        {
+            "subitem": "41",
+            "nd_completa": "44905241",
+            "nome": "EQUIPAMENTOS DE TIC - COMPUTADORES",
+            "keywords": [
+                "computador", "desktop", "notebook", "laptop", "monitor", "monitor led", "tablet"
+            ]
+        },
+        {
+            "subitem": "42",
+            "nd_completa": "44905242",
+            "nome": "MOBILIARIO EM GERAL",
+            "keywords": [
+                "mobiliario", "movel", "moveis", "armario", "armario aco", "armario madeira", "arquivo aco",
+                "cadeira", "cadeira giratoria", "cadeira fixa", "cadeira escritorio", "cadeira presidente",
+                "cadeira diretor", "poltrona", "mesa", "mesa escritorio", "mesa reuniao", "mesa l", "mesa computador",
+                "estante", "estante aco", "estante madeira", "gaveteiro", "gaveteiro volante", "sofa",
+                "balcao", "banco", "banqueta", "beliche", "cama", "colchao", "escrivaninha", "roupeiro aco",
+                "vestiario", "prateleira aco", "prancheta desenho", "mapoteca", "criado mudo"
+            ]
+        },
+        {
+            "subitem": "43",
+            "nd_completa": "44905243",
+            "nome": "EQUIPAMENTOS DE TIC - SERVIDORES/STORAGE",
+            "keywords": [
+                "servidor", "servidor rede", "storage", "nas storage"
+            ]
+        },
+        {
+            "subitem": "45",
+            "nd_completa": "44905245",
+            "nome": "EQUIPAMENTOS DE TIC - IMPRESSORAS",
+            "keywords": [
+                "impressora", "multifuncional", "impressora laser", "impressora termica", "scanner", "plotter"
+            ]
+        },
+        {
+            "subitem": "47",
+            "nd_completa": "44905247",
+            "nome": "EQUIPAMENTOS DE TIC - TELEFONIA",
+            "keywords": [
+                "aparelho telefonico", "telefone ip", "terminal telefonico", "videoconferencia"
+            ]
+        },
+        {
+            "subitem": "48",
+            "nd_completa": "44905248",
+            "nome": "VEICULOS DIVERSOS",
+            "keywords": [
+                "bicicleta", "carrinho mao", "empilhadeira", "paleteira"
+            ]
+        },
+        {
+            "subitem": "51",
+            "nd_completa": "44905251",
+            "nome": "PECAS NAO INCORPORAVEIS A IMOVEIS",
+            "keywords": [
+                "persiana", "cortina", "tapete", "toldos", "biombo", "divisoria removivel"
+            ]
+        },
+        {
+            "subitem": "52",
+            "nd_completa": "44905252",
+            "nome": "VEICULOS DE TRACAO MECANICA",
+            "keywords": [
+                "viatura", "automovel", "carro", "caminhao", "onibus", "microonibus", "ambulancia", "camionete", "van"
+            ]
+        },
+        {
+            "subitem": "55",
+            "nd_completa": "44905255",
+            "nome": "AQUISICAO DE SOFTWARE PRONTO",
+            "keywords": [
+                "software", "licenca software", "licenca perpetua", "sistema operacional"
+            ]
+        },
+        {
+            "subitem": "99",
+            "nd_completa": "44905299",
+            "nome": "OUTROS MATERIAIS PERMANENTES",
+            "keywords": [
+                "outro material permanente", "equipamento permanente diverso"
+            ]
+        }
+    ],
+
+    # -------------------------------------------------------------
+    # 339039 - OUTROS SERVICOS DE TERCEIROS - PESSOA JURIDICA
+    # -------------------------------------------------------------
+    "339039": [
+        {
+            "subitem": "01",
+            "nd_completa": "33903901",
+            "nome": "ASSINATURAS DE PERIODICOS E ANUIDADES",
+            "keywords": [
+                "assinatura jornal", "assinatura revista", "tv cabo", "anuidade"
+            ]
+        },
+        {
+            "subitem": "05",
+            "nd_completa": "33903905",
+            "nome": "SERVICOS TECNICOS PROFISSIONAIS",
+            "keywords": [
+                "servico advocacia", "servico engenharia", "servico arquitetura", "servico contabilidade", "laudo pericial"
+            ]
+        },
+        {
+            "subitem": "08",
+            "nd_completa": "33903908",
+            "nome": "MANUTENCAO DE SOFTWARE",
+            "keywords": [
+                "manutencao software", "suporte software", "sustentacao software"
+            ]
+        },
+        {
+            "subitem": "12",
+            "nd_completa": "33903912",
+            "nome": "LOCACAO DE MAQUINAS E EQUIPAMENTOS",
+            "keywords": [
+                "locacao maquina", "aluguel gerador", "aluguel maquina", "aluguel equipamento"
+            ]
+        },
+        {
+            "subitem": "16",
+            "nd_completa": "33903916",
+            "nome": "MANUTENCAO E CONSERV. DE BENS IMOVEIS",
+            "keywords": [
+                "servico reforma", "pintura predial", "servico pedreiro", "manutencao eletrica predial",
+                "manutencao hidraulica predial", "conserto telhado", "limpeza fossa", "manutencao elevador"
+            ]
+        },
+        {
+            "subitem": "17",
+            "nd_completa": "33903917",
+            "nome": "MANUT. E CONSERV. DE MAQUINAS E EQUIPAMENTOS",
+            "keywords": [
+                "conserto maquina", "manutencao ar condicionado", "instalacao ar condicionado",
+                "manutencao gerador", "revisao equipamento", "calibracao balanca"
+            ]
+        },
+        {
+            "subitem": "19",
+            "nd_completa": "33903919",
+            "nome": "MANUTENCAO E CONSERV. DE VEICULOS",
+            "keywords": [
+                "manutencao viatura", "manutencao veiculo", "revisao veicular", "revisao viatura",
+                "funilaria", "lanternagem", "pintura veiculo", "mecanica veiculo", "mecanica viatura",
+                "viatura", "veiculo", "alinhamento balanceamento", "troca pneus servico", "eletrica automotiva"
+            ]
+        },
+        {
+            "subitem": "20",
+            "nd_completa": "33903920",
+            "nome": "MANUT.E CONS.DE B.MOVEIS DE OUTRAS NATUREZAS",
+            "keywords": [
+                "reforma cadeira", "estofamento", "conserto movel", "reforma estofado"
+            ]
+        },
+        {
+            "subitem": "41",
+            "nd_completa": "33903941",
+            "nome": "FORNECIMENTO DE ALIMENTACAO",
+            "keywords": [
+                "fornecimento alimentacao", "refeicao pronta", "buffet", "coffee break", "lanche"
+            ]
+        },
+        {
+            "subitem": "48",
+            "nd_completa": "33903948",
+            "nome": "SERVICO DE SELECAO E TREINAMENTO",
+            "keywords": [
+                "curso", "treinamento", "capacitacao", "palestra", "seminario", "workshop"
+            ]
+        },
+        {
+            "subitem": "58",
+            "nd_completa": "33903958",
+            "nome": "SERVICOS DE TELECOMUNICACOES",
+            "keywords": [
+                "telefonia", "telefonia celular", "telefonia fixa", "link internet"
+            ]
+        },
+        {
+            "subitem": "63",
+            "nd_completa": "33903963",
+            "nome": "SERVICOS GRAFICOS E EDITORIAIS",
+            "keywords": [
+                "servico grafico", "impressao banner", "impressao folder", "encadernacao", "confeccao cracha"
+            ]
+        },
+        {
+            "subitem": "70",
+            "nd_completa": "33903970",
+            "nome": "CONFECCAO DE UNIFORMES, BANDEIRAS E FLAMULAS",
+            "keywords": [
+                "confeccao uniforme", "confeccao farda", "bordado", "confeccao bandeira"
+            ]
+        },
+        {
+            "subitem": "74",
+            "nd_completa": "33903974",
+            "nome": "FRETES E TRANSPORTES DE ENCOMENDAS",
+            "keywords": [
+                "frete", "transporte encomenda", "carreto", "mudanca", "transportadora"
+            ]
+        },
+        {
+            "subitem": "77",
+            "nd_completa": "33903977",
+            "nome": "VIGILANCIA OSTENSIVA/MONITORADA/RASTREAMENTO",
+            "keywords": [
+                "vigilancia", "seguranca armada", "monitoramento alarme", "rastreamento veicular"
+            ]
+        },
+        {
+            "subitem": "78",
+            "nd_completa": "33903978",
+            "nome": "LIMPEZA E CONSERVACAO",
+            "keywords": [
+                "servico limpeza", "asseio e conservacao", "dedetizacao", "desinsetizacao",
+                "desratizacao", "coleta lixo", "lavagem veiculo"
+            ]
+        },
+        {
+            "subitem": "79",
+            "nd_completa": "33903979",
+            "nome": "SERV. DE APOIO ADMIN., TECNICO E OPERACIONAL",
+            "keywords": [
+                "apoio administrativo", "recepcionista", "portaria", "copeiragem", "jardinagem servico", "motorista terceirizado"
+            ]
+        },
+        {
+            "subitem": "80",
+            "nd_completa": "33903980",
+            "nome": "HOSPEDAGENS",
+            "keywords": [
+                "hospedagem", "hotel", "diaria hotel", "pousada"
+            ]
+        },
+        {
+            "subitem": "95",
+            "nd_completa": "33903995",
+            "nome": "MANUT.CONS.EQUIP. DE PROCESSAMENTO DE DADOS",
+            "keywords": [
+                "manutencao computador", "manutencao impressora", "manutencao servidor", "reparo placa mae"
+            ]
+        },
+        {
+            "subitem": "99",
+            "nd_completa": "33903999",
+            "nome": "OUTROS SERVICOS DE TERCEIROS-PESSOA JURIDICA",
+            "keywords": [
+                "outro servico terceiro", "servico pessoa juridica"
+            ]
+        }
+    ]
+}
+
+def identificar_grupo_nd(nd: str) -> Optional[str]:
+    """Identifica se a ND pertence a 339030, 449052 ou 339039."""
+    if not nd:
+        return None
+    nd_limpa = re.sub(r'[^0-9]', '', str(nd))
+    for grupo in ["339030", "449052", "339039"]:
+        if nd_limpa.startswith(grupo):
+            return grupo
+    # Checagem por texto caso venha escrito por extenso
+    nd_txt = _normalizar_texto(nd)
+    if "consumo" in nd_txt or "339030" in nd_txt or "30" == nd_limpa:
+        return "339030"
+    if "permanente" in nd_txt or "449052" in nd_txt or "52" == nd_limpa or "equipamento" in nd_txt:
+        return "449052"
+    if "servico" in nd_txt or "terceiro" in nd_txt or "339039" in nd_txt or "39" == nd_limpa:
+        return "339039"
+    return None
+
+def listar_subitens_por_nd(nd: str) -> List[Tuple[str, str]]:
+    """Retorna lista de tuplas (subitem, nome_formatado) para seleção na interface."""
+    grupo = identificar_grupo_nd(nd)
+    if not grupo or grupo not in CATALOGO_SUBITENS:
+        # Se ND não definida, retorna união ordenada dos mais comuns
+        grupo = "339030"
+    
+    lista = []
+    for item in CATALOGO_SUBITENS[grupo]:
+        sub = item["subitem"]
+        nome = item["nome"]
+        lista.append((sub, f"{sub} - {nome}"))
+    return lista
+
+def determinar_subitem(nd: str, descricao_item: str) -> str:
+    """
+    Determina automaticamente o código do Subitem (2 dígitos) com base na ND
+    e na descrição/nomenclatura do item fornecida.
+    """
+    if not descricao_item:
+        return ""
+
+    # Se a própria string da ND já possuir 8 dígitos válidos (ex: 33903016 ou 44905242)
+    nd_digitos = re.sub(r'[^0-9]', '', str(nd or ""))
+    if len(nd_digitos) == 8 and nd_digitos[:6] in CATALOGO_SUBITENS:
+        sub_direto = nd_digitos[-2:]
+        # Valida se existe no catálogo
+        for item in CATALOGO_SUBITENS[nd_digitos[:6]]:
+            if item["subitem"] == sub_direto:
+                return sub_direto
+
+    grupo = identificar_grupo_nd(nd)
+    if not grupo or grupo not in CATALOGO_SUBITENS:
+        # Se a ND estiver indefinida, tenta inferir se o item é claramente permanente ou consumo
+        desc_norm_init = _normalizar_texto(descricao_item)
+        if any(w in desc_norm_init for w in ["armario", "cadeira", "mesa", "computador", "notebook", "estante"]):
+            grupo = "449052"
+        else:
+            grupo = "339030"
+
+    desc_norm = _normalizar_texto(descricao_item)
+    palavras_desc = set(desc_norm.split())
+
+    melhor_subitem = ""
+    maior_score = 0
+
+    for cand in CATALOGO_SUBITENS[grupo]:
+        score = 0
+        cand_sub = cand["subitem"]
+
+        for kw in cand["keywords"]:
+            kw_norm = _normalizar_texto(kw)
+            # Match exato de frase
+            if kw_norm in desc_norm:
+                score += 5 * len(kw_norm.split())
+            else:
+                # Match por palavra
+                palavras_kw = set(kw_norm.split())
+                comuns = palavras_kw.intersection(palavras_desc)
+                if comuns:
+                    score += len(comuns) * 2
+
+        # Bônus se palavras do próprio nome do subitem estiverem na descrição
+        nome_sub_norm = _normalizar_texto(cand["nome"])
+        for pw in nome_sub_norm.split():
+            if len(pw) > 3 and pw in palavras_desc:
+                score += 3
+
+        if score > maior_score:
+            maior_score = score
+            melhor_subitem = cand_sub
+
+    # Se pontuou com confiança, retorna o subitem identificado
+    if maior_score >= 3 and melhor_subitem:
+        return melhor_subitem
+
+    # Fallback genérico inteligente se não houve match forte:
+    # Para 339030 -> 99 (Outros Materiais de Consumo) ou vazio
+    # Para 449052 -> 42 se parecer móvel, 34/99 outros
+    return melhor_subitem if melhor_subitem else ""
+
+def obter_nome_subitem(nd: str, subitem: str) -> str:
+    """Retorna o nome por extenso do subitem."""
+    if not subitem:
+        return ""
+    grupo = identificar_grupo_nd(nd) or "339030"
+    if grupo in CATALOGO_SUBITENS:
+        for cand in CATALOGO_SUBITENS[grupo]:
+            if cand["subitem"] == str(subitem).strip().zfill(2):
+                return cand["nome"]
+    return ""
+
+# =====================================================================
+
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
