@@ -1635,14 +1635,200 @@ def montar_opcoes_subitem(nd: str, descricao_item: str, subitem_atual: str = "")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =====================================================================
-# 1. CONFIGURAÇÃO DA PÁGINA
+# 1. CONFIGURAÇÃO DA PÁGINA & DESIGN SYSTEM
 # =====================================================================
 st.set_page_config(
-    page_title="Gerenciador de Recursos & Pregões",
-    page_icon="💰",
+    page_title="Sistema Integrado de Gestão Orçamentária & Pregões",
+    page_icon="🇧🇷",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+def injetar_estilos_customizados():
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"], .stMarkdown, p, h1, h2, h3, h4, h5, h6, input, select, textarea, button {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    }
+
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+    }
+
+    /* Botão de abrir/fechar a barra lateral (Sidebar) visível e destacado no desktop e mobile */
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"],
+    button[aria-label*="sidebar" i],
+    button[data-testid="stSidebarCollapseButton"] {
+        visibility: visible !important;
+        display: inline-flex !important;
+        opacity: 1 !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"] {
+        background: #ffffff !important;
+        border: 1px solid #cbd5e1 !important;
+        border-radius: 8px !important;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.08) !important;
+        padding: 4px !important;
+        margin: 6px 0 0 10px !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] svg {
+        fill: #1b4332 !important;
+    }
+    
+    .stApp {
+        background-color: #f8fafc;
+    }
+
+    .block-container {
+        padding-top: 1.25rem !important;
+        padding-bottom: 3rem !important;
+        max-width: 96% !important;
+    }
+
+    /* Sidebar estilizada */
+    section[data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e2e8f0;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.02);
+    }
+    section[data-testid="stSidebar"] .block-container {
+        padding-top: 1.5rem !important;
+    }
+
+    /* Abas Modernas Executivas */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 6px;
+        background-color: #e2e8f0;
+        padding: 5px;
+        border-radius: 12px;
+        border: 1px solid #cbd5e1;
+        margin-bottom: 20px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 42px;
+        padding: 0 18px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 13.5px;
+        color: #475569;
+        border: none !important;
+        background-color: transparent;
+        transition: all 0.2s ease;
+        white-space: nowrap;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        color: #0f172a;
+        background-color: rgba(255, 255, 255, 0.7);
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #ffffff !important;
+        color: #1e3a29 !important;
+        font-weight: 700 !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+        border-bottom: 2px solid #2d6a4f !important;
+    }
+
+    /* Cartões de Métricas */
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 16px 20px;
+        box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 10px -2px rgba(0, 0, 0, 0.08);
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        color: #64748b !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.6px !important;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 24px !important;
+        font-weight: 800 !important;
+        color: #0f172a !important;
+    }
+
+    /* Botões Primários - Verde Exército */
+    .stButton button[kind="primary"], .stButton button[data-testid="baseButton-primary"] {
+        background: linear-gradient(180deg, #2d6a4f 0%, #1b4332 100%) !important;
+        border: 1px solid #143527 !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
+        border-radius: 8px !important;
+        padding: 8px 18px !important;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+        transition: all 0.15s ease !important;
+    }
+    .stButton button[kind="primary"]:hover, .stButton button[data-testid="baseButton-primary"]:hover {
+        background: linear-gradient(180deg, #387c5d 0%, #24553f 100%) !important;
+        box-shadow: 0 4px 8px -1px rgba(27, 67, 50, 0.25) !important;
+        transform: translateY(-1px);
+    }
+
+    /* Botões Secundários */
+    .stButton button[kind="secondary"], .stButton button[data-testid="baseButton-secondary"] {
+        background-color: #ffffff !important;
+        border: 1px solid #cbd5e1 !important;
+        color: #334155 !important;
+        font-weight: 600 !important;
+        border-radius: 8px !important;
+        transition: all 0.15s ease !important;
+    }
+    .stButton button[kind="secondary"]:hover, .stButton button[data-testid="baseButton-secondary"]:hover {
+        background-color: #f1f5f9 !important;
+        border-color: #94a3b8 !important;
+        color: #0f172a !important;
+    }
+
+    /* Formulários e Containers */
+    div[data-testid="stForm"] {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 22px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+
+    /* Inputs e Selects */
+    .stTextInput input, .stNumberInput input, .stSelectbox [data-baseweb="select"] {
+        border-radius: 8px !important;
+        border: 1px solid #cbd5e1 !important;
+        font-size: 14px !important;
+    }
+    .stTextInput input:focus, .stNumberInput input:focus {
+        border-color: #2d6a4f !important;
+        box-shadow: 0 0 0 2px rgba(45, 106, 79, 0.2) !important;
+    }
+
+    /* Expander estilizado */
+    div[data-testid="stExpander"] {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    }
+
+    /* Alertas */
+    div[data-testid="stAlert"] {
+        border-radius: 10px !important;
+        border: none !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+injetar_estilos_customizados()
 
 # =====================================================================
 # 2. CONSTANTES E CONEXÃO SUPABASE
@@ -2859,9 +3045,14 @@ if "usuario_logado" not in st.session_state:
     st.session_state.usuario_logado = None
 
 if st.session_state.usuario_logado is None:
-    st.title("🖥 Sistema Profissional de Controle de Recursos & Pregões")
-    st.markdown("Bem-vindo! Faça login ou registre a conta Matriz (Fiscal) da sua OM.")
-    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; margin-top: 10px; margin-bottom: 24px;">
+        <div style="font-size: 40px; margin-bottom: 6px;">🇧🇷</div>
+        <div style="font-size: 11px; font-weight: 800; letter-spacing: 2px; color: #64748b; text-transform: uppercase;">Exército Brasileiro • Comando Militar</div>
+        <h1 style="font-size: 26px; font-weight: 800; color: #0f172a; margin-top: 4px; margin-bottom: 4px;">Sistema Integrado de Gestão Orçamentária & Pregões</h1>
+        <p style="color: #64748b; font-size: 14.5px; margin: 0;">Controle de Recursos, Notas de Crédito, Aquisições e Atas de Registro de Preços</p>
+    </div>
+    """, unsafe_allow_html=True)
     
     col_login, col_divisor, col_cadastro = st.columns([4, 1, 4])
     
@@ -2943,7 +3134,7 @@ if st.session_state.usuario_logado is None:
     st.markdown(
         "<div style='text-align: center; color: gray; font-size: 14px;'>"
         "Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b><br><br>"
-        "<i>Este sistema está em constante evolução. Para suporte ou envio de sugestões, entre em contato: <a href='mailto:thaleswinkler81@gmail.com'>thaleswinkler81@gmail.com</a></i>"
+        "<i>Este sistema está em constante evolução. Para suporte ou envio de sugestões, entre em contato: <a href='mailto:winkler.thales@eb.mil.br'>winkler.thales@eb.mil.br</a></i>"
         "</div>", 
         unsafe_allow_html=True
     )
@@ -2955,7 +3146,13 @@ if st.session_state.usuario_logado is None:
 usuario_atual = st.session_state.usuario_logado
 
 resp_perfil = supabase.table("usuarios").select("*").eq("id", usuario_atual).execute()
-perfil = resp_perfil.data[0]
+if not resp_perfil.data:
+    st.session_state.usuario_logado = None
+    st.rerun()
+    st.stop()
+    perfil = {}
+else:
+    perfil = resp_perfil.data[0]
 om_user = perfil.get("om", "Não informada")
 secao_user = perfil.get("secao", "Geral")
 tipo_perfil = perfil.get("perfil", "Operador")
@@ -3034,7 +3231,7 @@ st.sidebar.markdown(
     "<div style='text-align: center; color: gray; font-size: 12px;'>"
     "Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b><br><br>"
     "<i>Sistema em constante evolução. Sugestões e suporte:<br>"
-    "<a href='mailto:thaleswinkler81@gmail.com'>thaleswinkler81@gmail.com</a></i>"
+    "<a href='mailto:winkler.thales@eb.mil.br'>winkler.thales@eb.mil.br</a></i>"
     "</div>", 
     unsafe_allow_html=True
 )
@@ -3042,9 +3239,23 @@ st.sidebar.markdown(
 # =====================================================================
 # 9. TÍTULO PRINCIPAL E NAVEGAÇÃO POR ABAS
 # =====================================================================
-st.title(f"🖥 Sistema de Controle de Recursos & Pregões - {om_user}")
-st.markdown(f"**Área de Trabalho Ativa:** {secao_ativa}")
-st.markdown("---")
+st.markdown(f"""
+<div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 16px 22px; border-radius: 12px; color: white; display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); flex-wrap: wrap; gap: 12px;">
+  <div style="display: flex; align-items: center; gap: 14px;">
+    <div style="font-size: 28px;">🇧🇷</div>
+    <div>
+      <div style="font-size: 11px; font-weight: 700; letter-spacing: 1.5px; color: #94a3b8; text-transform: uppercase;">Exército Brasileiro • Gestão Orçamentária</div>
+      <div style="font-size: 20px; font-weight: 800; color: #f8fafc; letter-spacing: -0.3px;">Controle de Recursos, NCs & Pregões</div>
+    </div>
+  </div>
+  <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+    <span style="background: rgba(180, 83, 9, 0.5); color: #fef3c7; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; border: 1px solid rgba(245, 158, 11, 0.3);">ANO: {ano_selecionado}</span>
+    <span style="background: rgba(30, 58, 138, 0.5); color: #bfdbfe; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; border: 1px solid rgba(59, 130, 246, 0.3);">OM: {om_user}</span>
+    <span style="background: rgba(20, 83, 45, 0.5); color: #bbf7d0; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; border: 1px solid rgba(34, 197, 94, 0.3);">SEÇÃO: {secao_ativa}</span>
+    <span style="background: rgba(51, 65, 85, 0.8); color: #e2e8f0; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; border: 1px solid rgba(148, 163, 184, 0.2);">{tipo_perfil.upper()}</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 tab_cadastro, tab_visualizacao, tab_visao_global, tab_consulta_pregoes, tab_acessos = st.tabs([
     "📝 Cadastrar e Lançar Compras",
