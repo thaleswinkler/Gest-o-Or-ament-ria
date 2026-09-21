@@ -1693,9 +1693,9 @@ def injetar_estilos_customizados():
 
     /* Sidebar estilizada */
     section[data-testid="stSidebar"] {
-        background-color: #ffffff;
+        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
         border-right: 1px solid #e2e8f0;
-        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.02);
+        box-shadow: 2px 0 10px rgba(0, 0, 0, 0.03);
     }
     section[data-testid="stSidebar"] .block-container {
         padding-top: 1.5rem !important;
@@ -1704,60 +1704,62 @@ def injetar_estilos_customizados():
     /* Abas Modernas Executivas */
     .stTabs [data-baseweb="tab-list"] {
         gap: 6px;
-        background-color: #e2e8f0;
-        padding: 5px;
+        background-color: #f1f5f9;
+        padding: 6px;
         border-radius: 12px;
-        border: 1px solid #cbd5e1;
-        margin-bottom: 20px;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 22px;
     }
     .stTabs [data-baseweb="tab"] {
-        height: 42px;
+        height: 44px;
         padding: 0 18px;
         border-radius: 8px;
         font-weight: 600;
         font-size: 13.5px;
-        color: #475569;
+        color: #64748b;
         border: none !important;
         background-color: transparent;
-        transition: all 0.2s ease;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         white-space: nowrap;
     }
     .stTabs [data-baseweb="tab"]:hover {
         color: #0f172a;
-        background-color: rgba(255, 255, 255, 0.7);
+        background-color: rgba(255, 255, 255, 0.8);
     }
     .stTabs [aria-selected="true"] {
         background-color: #ffffff !important;
-        color: #1e3a29 !important;
+        color: #1b4332 !important;
         font-weight: 700 !important;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
-        border-bottom: 2px solid #2d6a4f !important;
+        box-shadow: 0 2px 6px -1px rgba(0, 0, 0, 0.07);
+        border-bottom: 2.5px solid #2d6a4f !important;
     }
 
     /* Cartões de Métricas */
     div[data-testid="stMetric"] {
-        background-color: #ffffff;
+        background: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 12px;
-        padding: 16px 20px;
-        box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.04);
-        transition: transform 0.15s ease, box-shadow 0.15s ease;
+        padding: 18px 22px;
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+        transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
     }
     div[data-testid="stMetric"]:hover {
         transform: translateY(-2px);
-        box-shadow: 0 4px 10px -2px rgba(0, 0, 0, 0.08);
+        border-color: #cbd5e1;
+        box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.08);
     }
     div[data-testid="stMetricLabel"] {
-        font-size: 12px !important;
+        font-size: 11.5px !important;
         font-weight: 700 !important;
         color: #64748b !important;
         text-transform: uppercase !important;
-        letter-spacing: 0.6px !important;
+        letter-spacing: 0.8px !important;
     }
     div[data-testid="stMetricValue"] {
-        font-size: 24px !important;
+        font-size: 26px !important;
         font-weight: 800 !important;
         color: #0f172a !important;
+        letter-spacing: -0.5px !important;
     }
 
     /* Botões Primários - Verde Exército */
@@ -1767,13 +1769,14 @@ def injetar_estilos_customizados():
         color: #ffffff !important;
         font-weight: 600 !important;
         border-radius: 8px !important;
-        padding: 8px 18px !important;
+        padding: 9px 20px !important;
+        font-size: 14px !important;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
         transition: all 0.15s ease !important;
     }
     .stButton button[kind="primary"]:hover, .stButton button[data-testid="baseButton-primary"]:hover {
         background: linear-gradient(180deg, #387c5d 0%, #24553f 100%) !important;
-        box-shadow: 0 4px 8px -1px rgba(27, 67, 50, 0.25) !important;
+        box-shadow: 0 4px 12px -1px rgba(27, 67, 50, 0.3) !important;
         transform: translateY(-1px);
     }
 
@@ -1784,12 +1787,16 @@ def injetar_estilos_customizados():
         color: #334155 !important;
         font-weight: 600 !important;
         border-radius: 8px !important;
+        padding: 9px 20px !important;
+        font-size: 14px !important;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03) !important;
         transition: all 0.15s ease !important;
     }
     .stButton button[kind="secondary"]:hover, .stButton button[data-testid="baseButton-secondary"]:hover {
-        background-color: #f1f5f9 !important;
+        background-color: #f8fafc !important;
         border-color: #94a3b8 !important;
         color: #0f172a !important;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.06) !important;
     }
 
     /* Formulários e Containers */
@@ -1797,8 +1804,8 @@ def injetar_estilos_customizados():
         background-color: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 12px;
-        padding: 22px;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+        padding: 24px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
     }
 
     /* Inputs e Selects */
@@ -1806,10 +1813,11 @@ def injetar_estilos_customizados():
         border-radius: 8px !important;
         border: 1px solid #cbd5e1 !important;
         font-size: 14px !important;
+        background-color: #ffffff !important;
     }
     .stTextInput input:focus, .stNumberInput input:focus {
         border-color: #2d6a4f !important;
-        box-shadow: 0 0 0 2px rgba(45, 106, 79, 0.2) !important;
+        box-shadow: 0 0 0 3px rgba(45, 106, 79, 0.15) !important;
     }
 
     /* Expander estilizado */
@@ -1817,13 +1825,27 @@ def injetar_estilos_customizados():
         background-color: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 10px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+        overflow: hidden;
+    }
+    div[data-testid="stExpander"] summary {
+        font-weight: 600 !important;
+        color: #1e293b !important;
+        font-size: 14.5px !important;
     }
 
     /* Alertas */
     div[data-testid="stAlert"] {
         border-radius: 10px !important;
-        border: none !important;
+        border: 1px solid rgba(0, 0, 0, 0.05) !important;
+    }
+
+    /* Tabelas e Dataframes */
+    [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 10px !important;
+        background: #ffffff !important;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02) !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -3046,20 +3068,25 @@ if "usuario_logado" not in st.session_state:
 
 if st.session_state.usuario_logado is None:
     st.markdown("""
-    <div style="text-align: center; margin-top: 10px; margin-bottom: 24px;">
-        <div style="font-size: 40px; margin-bottom: 6px;">🇧🇷</div>
+    <div style="text-align: center; margin-top: 15px; margin-bottom: 30px;">
+        <div style="display: inline-flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 16px; background: linear-gradient(135deg, #1e3a29 0%, #2d6a4f 100%); box-shadow: 0 4px 12px rgba(27, 67, 50, 0.25); font-size: 32px; margin-bottom: 12px;">🇧🇷</div>
         <div style="font-size: 11px; font-weight: 800; letter-spacing: 2px; color: #64748b; text-transform: uppercase;">Exército Brasileiro • Comando Militar</div>
-        <h1 style="font-size: 26px; font-weight: 800; color: #0f172a; margin-top: 4px; margin-bottom: 4px;">Sistema Integrado de Gestão Orçamentária & Pregões</h1>
-        <p style="color: #64748b; font-size: 14.5px; margin: 0;">Controle de Recursos, Notas de Crédito, Aquisições e Atas de Registro de Preços</p>
+        <h1 style="font-size: 28px; font-weight: 800; color: #0f172a; margin-top: 6px; margin-bottom: 6px; letter-spacing: -0.5px;">Sistema Integrado de Gestão Orçamentária & Pregões</h1>
+        <p style="color: #64748b; font-size: 15px; margin: 0; max-width: 600px; margin-left: auto; margin-right: auto;">Controle de Recursos, Notas de Crédito, Aquisições e Atas de Registro de Preços</p>
     </div>
     """, unsafe_allow_html=True)
     
-    col_login, col_divisor, col_cadastro = st.columns([4, 1, 4])
+    col_login, col_divisor, col_cadastro = st.columns([4.2, 0.6, 4.2])
     
     with col_login:
-        st.subheader("🔑 Fazer Login")
+        st.markdown("""
+        <div style="margin-bottom: 12px;">
+            <h3 style="font-size: 18px; font-weight: 700; color: #0f172a; margin: 0;">🔑 Acesso ao Sistema</h3>
+            <p style="font-size: 13px; color: #64748b; margin: 2px 0 0 0;">Informe suas credenciais autorizadas para ingressar</p>
+        </div>
+        """, unsafe_allow_html=True)
         with st.form("form_login"):
-            usuario_login = st.text_input("Usuário:").strip().lower()
+            usuario_login = st.text_input("Usuário de Acesso:").strip().lower()
             senha_login = st.text_input("Senha:", type="password")
             btn_login = st.form_submit_button("Entrar no Sistema", type="primary", use_container_width=True)
             
@@ -3085,13 +3112,18 @@ if st.session_state.usuario_logado is None:
         st.write("")
 
     with col_cadastro:
-        st.subheader("🛡️ Criar Conta Matriz (Apenas Fiscal)")
+        st.markdown("""
+        <div style="margin-bottom: 12px;">
+            <h3 style="font-size: 18px; font-weight: 700; color: #0f172a; margin: 0;">🛡️ Cadastrar Conta Matriz da OM</h3>
+            <p style="font-size: 13px; color: #64748b; margin: 2px 0 0 0;">Apenas para o Fiscal Administrativo da Organização Militar</p>
+        </div>
+        """, unsafe_allow_html=True)
         st.info("⚠️ **Acesso Restrito:** Apenas o **Fiscal Administrativo** pode criar a primeira conta da OM. Contas de **Chefe** e **Operador** devem ser criadas pelo Fiscal internamente.")
         with st.form("form_cadastro"):
             novo_user = st.text_input("Escolha um nome de Usuário:").strip().lower()
             nova_senha = st.text_input("Crie uma Senha:", type="password")
-            novo_nome = st.text_input("Seu Nome/Posto (Ex: Cap Moura):")
-            nova_om = st.text_input("Sua OM (Ex: 23º BI):").strip().upper()
+            novo_nome = st.text_input("Seu Nome/Posto (Ex: Cap Silva):")
+            nova_om = st.text_input("Sua OM (Ex: 1º Btl):").strip().upper()
             
             col_cad1, col_cad2 = st.columns(2)
             with col_cad1:
@@ -3133,8 +3165,8 @@ if st.session_state.usuario_logado is None:
     st.markdown("---")
     st.markdown(
         "<div style='text-align: center; color: gray; font-size: 14px;'>"
-        "Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b><br><br>"
-        "<i>Este sistema está em constante evolução. Para suporte ou envio de sugestões, entre em contato: <a href='mailto:winkler.thales@eb.mil.br'>winkler.thales@eb.mil.br</a></i>"
+        "Criado e Desenvolvido por:<br><b>2º Sgt Com Equipe Técnica</b><br><br>"
+        "<i>Este sistema está em constante evolução. Para suporte ou envio de sugestões, entre em contato: <a href='mailto:suporte@eb.mil.br'>suporte@eb.mil.br</a></i>"
         "</div>", 
         unsafe_allow_html=True
     )
@@ -3163,39 +3195,14 @@ tipo_perfil = perfil.get("perfil", "Operador")
 st.sidebar.title("💰 Gestão Orçamentária")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🛠 Estação de Trabalho")
-st.sidebar.info(f"**Militar:** {perfil.get('nome')}\n\n**OM:** {om_user}")
+st.sidebar.info(f"**Militar:** {perfil.get('nome')}\n\n**OM:** {om_user}\n\n**Seção Primária:** {secao_user}")
 
 if tipo_perfil == "Fiscal":
-    st.sidebar.warning("🛡️ **Perfil: FISCAL (Somente Leitura)**")
-    resp_secoes = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
-    secoes_da_om = sorted(list(set([r["secao"] for r in resp_secoes.data])))
-    if not secoes_da_om: secoes_da_om = [secao_user]
-    secao_ativa = st.sidebar.selectbox("🔎 Operar dados da Seção:", secoes_da_om, index=secoes_da_om.index(secao_user) if secao_user in secoes_da_om else 0)
+    st.sidebar.warning("🛡️ **Perfil: FISCAL (Somente Leitura / Auditoria Global)**")
 elif tipo_perfil == "Chefe":
     st.sidebar.success(f"👑 **Perfil: CHEFE**\n\n**Seção:** {secao_user}")
-    secao_ativa = secao_user
 else:
     st.sidebar.info(f"👤 **Perfil: OPERADOR**\n\n**Seção:** {secao_user}")
-    secao_ativa = secao_user
-
-id_banco = f"{om_user}_{secao_ativa}"
-
-def carregar_dados_banco():
-    resp_dados = supabase.table("dados").select("ncs").eq("id", id_banco).execute()
-    if len(resp_dados.data) > 0:
-        return resp_dados.data[0].get("ncs", {})
-    return {}
-
-if "banco" not in st.session_state or st.session_state.get("secao_carregada") != id_banco:
-    st.session_state.banco = carregar_dados_banco()
-    st.session_state.secao_carregada = id_banco
-
-banco_dados = st.session_state.banco
-
-def salvar_dados(dados_para_salvar):
-    supabase.table("dados").update({"ncs": dados_para_salvar}).eq("id", id_banco).execute()
-
-st.sidebar.markdown("---")
 
 with st.sidebar.expander("⚙️ Alterar Minha Senha"):
     with st.form("form_alterar_senha"):
@@ -3219,14 +3226,6 @@ if st.sidebar.button("Sair da Conta (Logout)", use_container_width=True):
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 📅 Filtro de Exercício")
-
-anos_disponiveis = set(extrair_ano(nc) for nc in banco_dados.keys() if nc != "CONFIG_REQUISICAO")
-lista_anos = sorted(list(anos_disponiveis), reverse=True) if anos_disponiveis else ["2026"]
-ano_selecionado = st.sidebar.selectbox("Selecione o Ano de Referência:", lista_anos)
-ncs_do_ano = [nc for nc in banco_dados.keys() if nc != "CONFIG_REQUISICAO" and extrair_ano(nc) == ano_selecionado]
-
-st.sidebar.markdown("---")
 st.sidebar.markdown(
     "<div style='text-align: center; color: gray; font-size: 12px;'>"
     "Criado e Desenvolvido por:<br><b>2º Sgt Com Thales Winkler</b><br><br>"
@@ -3237,10 +3236,89 @@ st.sidebar.markdown(
 )
 
 # =====================================================================
-# 9. TÍTULO PRINCIPAL E NAVEGAÇÃO POR ABAS
+# 9. FILTROS SUPERIORES NO TOPO DA PÁGINA (MAIS ESPAÇO ÚTIL)
 # =====================================================================
+OPCAO_TODAS_SECOES = "🌟 TODAS AS SEÇÕES DA OM"
+
+# Recupera as seções cadastradas da OM
+resp_secoes = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
+secoes_da_om = sorted(list(set([r["secao"] for r in resp_secoes.data if r.get("secao")])))
+if not secoes_da_om:
+    secoes_da_om = [secao_user]
+
+# Linha de filtros no topo acima do conteúdo
+col_topo_ano, col_topo_sec = st.columns([1.5, 3.5])
+
+with col_topo_sec:
+    if tipo_perfil == "Fiscal":
+        opcoes_secao = [OPCAO_TODAS_SECOES] + secoes_da_om
+        idx_sec_ini = 0
+        if "filtro_secao_topo" in st.session_state and st.session_state["filtro_secao_topo"] in opcoes_secao:
+            idx_sec_ini = opcoes_secao.index(st.session_state["filtro_secao_topo"])
+        secao_ativa = st.selectbox(
+            "🏢 Seção da OM para Análise / Operação:",
+            opcoes_secao,
+            index=idx_sec_ini,
+            key="filtro_secao_topo",
+            help="Como Fiscal, selecione uma seção específica ou visualize toda a OM unificada."
+        )
+    else:
+        secao_ativa = secao_user
+        st.text_input("🏢 Seção Ativa:", value=f"{secao_user} (Sua Seção)", disabled=True)
+
+# Definição e carregamento do cofre de dados conforme Seção Ativa
+if tipo_perfil == "Fiscal" and secao_ativa == OPCAO_TODAS_SECOES:
+    id_banco = f"{om_user}_TODAS"
+    def carregar_dados_banco():
+        resp = supabase.table("dados").select("*").like("id", f"{om_user}_%").execute()
+        banco_unificado = {}
+        for linha in resp.data:
+            ncs_sec = linha.get("ncs", {})
+            if isinstance(ncs_sec, dict):
+                for nc, val in ncs_sec.items():
+                    if nc != "CONFIG_REQUISICAO":
+                        banco_unificado[nc] = val
+                    else:
+                        if "CONFIG_REQUISICAO" not in banco_unificado:
+                            banco_unificado["CONFIG_REQUISICAO"] = val
+        return banco_unificado
+else:
+    id_banco = f"{om_user}_{secao_ativa}"
+    def carregar_dados_banco():
+        resp_dados = supabase.table("dados").select("ncs").eq("id", id_banco).execute()
+        if len(resp_dados.data) > 0:
+            return resp_dados.data[0].get("ncs", {})
+        return {}
+
+if "banco" not in st.session_state or st.session_state.get("secao_carregada") != id_banco:
+    st.session_state.banco = carregar_dados_banco()
+    st.session_state.secao_carregada = id_banco
+
+banco_dados = st.session_state.banco
+
+def salvar_dados(dados_para_salvar):
+    if tipo_perfil == "Fiscal" and secao_ativa == OPCAO_TODAS_SECOES:
+        return
+    supabase.table("dados").update({"ncs": dados_para_salvar}).eq("id", id_banco).execute()
+
+# Abertura inicial garantida no ano corrente
+ano_atual_sistema = str(datetime.datetime.now().year)
+anos_disponiveis = set(extrair_ano(nc) for nc in banco_dados.keys() if nc != "CONFIG_REQUISICAO" and extrair_ano(nc))
+anos_disponiveis.add(ano_atual_sistema)
+lista_anos = sorted(list(anos_disponiveis), reverse=True)
+idx_ano_padrao = lista_anos.index(ano_atual_sistema) if ano_atual_sistema in lista_anos else 0
+
+with col_topo_ano:
+    idx_ano_sel = idx_ano_padrao
+    if "filtro_ano_topo" in st.session_state and st.session_state["filtro_ano_topo"] in lista_anos:
+        idx_ano_sel = lista_anos.index(st.session_state["filtro_ano_topo"])
+    ano_selecionado = st.selectbox("📅 Exercício (Ano):", lista_anos, index=idx_ano_sel, key="filtro_ano_topo")
+
+ncs_do_ano = [nc for nc in banco_dados.keys() if nc != "CONFIG_REQUISICAO" and extrair_ano(nc) == ano_selecionado]
+
+# Título Principal e Banner
 st.markdown(f"""
-<div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 16px 22px; border-radius: 12px; color: white; display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); flex-wrap: wrap; gap: 12px;">
+<div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 16px 22px; border-radius: 12px; color: white; display: flex; align-items: center; justify-content: space-between; margin-top: 10px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); flex-wrap: wrap; gap: 12px;">
   <div style="display: flex; align-items: center; gap: 14px;">
     <div style="font-size: 28px;">🇧🇷</div>
     <div>
@@ -3265,6 +3343,7 @@ tab_cadastro, tab_visualizacao, tab_visao_global, tab_consulta_pregoes, tab_aces
     "👥 Gerenciar Acessos"
 ])
 
+# =====================================================================
 # =====================================================================
 # ABA 1: CADASTRO MANUAL
 # =====================================================================
@@ -3390,7 +3469,7 @@ with tab_cadastro:
                 valor_unitario = st.number_input("Valor Unitário (R$):", min_value=0.0, step=0.01, key="item_valor")
                 quantidade = st.number_input("Quantidade:", min_value=0, step=1, key="item_qtd")
             with col_it2:
-                nr_uasg = st.text_input("Nº da UASG:", "160440", key="item_uasg").strip()
+                nr_uasg = st.text_input("Nº da UASG:", "160001", key="item_uasg").strip()
                 nr_pregao = st.text_input("Nº do Pregão / Processo:", "", key="item_pregao").strip()
                 nr_ata = st.text_input("Nº da Ata:", "", key="item_ata").strip()
             with col_it3:
@@ -3459,27 +3538,70 @@ with tab_visualizacao:
                 if resultados_busca:
                     st.success(f"🎯 Encontrado(s) **{len(resultados_busca)}** registro(s). A coluna **NC Vinculada** indica a qual NC o item pertence:")
                     st.dataframe(pd.DataFrame(resultados_busca), use_container_width=True, hide_index=True)
+                    
+                    st.markdown("##### 🚀 Acesso Direto à Nota de Crédito:")
+                    for idx_b, res_it in enumerate(resultados_busca[:20]):
+                        c_info, c_btn = st.columns([3.5, 1.5])
+                        with c_info:
+                            st.markdown(f"**Item {res_it['Item']}:** {res_it['Material']} — *Fornecedor:* {res_it['Fornecedor']} — *Status:* `{res_it['Situação']}`")
+                        with c_btn:
+                            nc_alvo = res_it['NC Vinculada']
+                            if st.button(f"👉 Ir para NC {nc_alvo}", key=f"btn_ir_nc_res_{idx_b}_{nc_alvo}", use_container_width=True):
+                                st.session_state["vis_item_select_nc"] = nc_alvo
+                                st.session_state["filtro_pi_tab2"] = "TODOS OS PIs"
+                                st.rerun()
                 else:
                     st.warning("Nenhum material encontrado com os termos digitados.")
 
         pis_disponiveis = list(set([banco_dados[nc].get("pi", "Não informado") for nc in ncs_do_ano if isinstance(banco_dados[nc], dict) and banco_dados[nc].get("pi", "Não informado").strip()]))
         opcoes_filtro_pi = ["TODOS OS PIs"] + sorted(pis_disponiveis)
         
-        col_filtro1, col_filtro2 = st.columns([2, 2])
+        col_filtro1, col_filtro_sit, col_filtro2 = st.columns([1.5, 1.8, 2.0])
         with col_filtro1:
-            filtro_pi = st.selectbox("📌 Filtrar por PI:", opcoes_filtro_pi)
+            filtro_pi = st.selectbox("📌 Filtrar por PI:", opcoes_filtro_pi, key="filtro_pi_tab2")
         
-        if filtro_pi == "TODOS OS PIs":
-            ncs_filtradas = ncs_do_ano
+        with col_filtro_sit:
+            filtro_situacao_tab2 = st.multiselect(
+                "🚦 Filtrar Itens por Situação:",
+                ["Planejamento", "Aguardando entrega", "Recebido"],
+                default=["Planejamento", "Aguardando entrega", "Recebido"],
+                help="Desmarque 'Recebido' para ocultar itens já recebidos ou fornecedores já finalizados.",
+                key="filtro_sit_tab2"
+            )
+        
+        if not filtro_situacao_tab2:
+            ncs_filtradas = []
+            msg_aviso_filtro = "⚠️ Nenhuma Situação selecionada no filtro acima. Selecione ao menos uma opção (ex: 'Planejamento', 'Aguardando entrega' ou 'Recebido') para visualizar as NCs."
         else:
-            ncs_filtradas = [nc for nc in ncs_do_ano if banco_dados[nc].get("pi", "Não informado") == filtro_pi]
+            ncs_candidatas = ncs_do_ano if filtro_pi == "TODOS OS PIs" else [nc for nc in ncs_do_ano if banco_dados[nc].get("pi", "Não informado") == filtro_pi]
+            ncs_filtradas = []
+            for nc in ncs_candidatas:
+                itens_nc = banco_dados[nc].get("itens", [])
+                if not itens_nc:
+                    if "Planejamento" in filtro_situacao_tab2:
+                        ncs_filtradas.append(nc)
+                else:
+                    tem_item = any(
+                        (str(it.get("Situação", "Planejamento") or "Planejamento").strip() in filtro_situacao_tab2)
+                        for it in itens_nc
+                    )
+                    if tem_item:
+                        ncs_filtradas.append(nc)
+            msg_aviso_filtro = "Nenhuma NC encontrada para os filtros selecionados (PI e Situação)."
             
-        if not ncs_filtradas:
-            st.warning("Nenhuma NC encontrada para o PI selecionado.")
+        with col_filtro2:
+            if ncs_filtradas:
+                idx_nc_sel = 0
+                if "vis_item_select_nc" in st.session_state and st.session_state["vis_item_select_nc"] in ncs_filtradas:
+                    idx_nc_sel = ncs_filtradas.index(st.session_state["vis_item_select_nc"])
+                nc_selecionada_vis = st.selectbox("Selecione a NC para Gerenciamento e Análise:", ncs_filtradas, index=idx_nc_sel, key="vis_item_select_nc")
+            else:
+                nc_selecionada_vis = None
+                st.selectbox("Selecione a NC para Gerenciamento e Análise:", ["Nenhuma NC com estes filtros"], disabled=True, key="vis_item_select_nc_disabled")
+            
+        if not nc_selecionada_vis:
+            st.warning(msg_aviso_filtro)
         else:
-            with col_filtro2:
-                nc_selecionada_vis = st.selectbox("Selecione a NC para Gerenciamento e Análise:", ncs_filtradas, key="vis_item_select_nc")
-            
             dados_nc = banco_dados[nc_selecionada_vis]
             total_recebido = dados_nc.get("valor_recebido", 0.0)
             nd_vinculada = dados_nc.get("nd", "Não informada")
@@ -3503,6 +3625,13 @@ with tab_visualizacao:
                 df_base_mestre = pd.DataFrame(dados_nc["itens"])
                 
                 if not df_base_mestre.empty:
+                    if "Situação" not in df_base_mestre.columns:
+                        df_base_mestre["Situação"] = "Planejamento"
+                    else:
+                        df_base_mestre["Situação"] = df_base_mestre["Situação"].fillna("Planejamento").astype(str).str.strip()
+                        df_base_mestre["Situação"] = df_base_mestre["Situação"].apply(
+                            lambda s: s if s in ["Planejamento", "Aguardando entrega", "Recebido"] else "Planejamento"
+                        )
                     if "Subitem" not in df_base_mestre.columns:
                         df_base_mestre["Subitem"] = [determinar_subitem(nd_vinculada, n) for n in df_base_mestre["Nome"]]
                     else:
@@ -3527,20 +3656,6 @@ with tab_visualizacao:
                     st.metric("Total Planejado / Gasto", f"R$ {total_gasto_geral:,.2f}", delta=f"R$ {total_gasto_geral:,.2f}", delta_color="inverse")
                 with card3:
                     st.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
-                
-                st.write("")
-                try:
-                    excel_nc_bytes, mime_nc, ext_nc = gerar_planilha_nc_completa(nc_selecionada_vis, dados_nc, om_user, secao_ativa)
-                    st.download_button(
-                        label=f"📥 Baixar Planilha Executiva da NC {nc_selecionada_vis} ({ext_nc.upper()})",
-                        data=excel_nc_bytes,
-                        file_name=f"Relatorio_NC_{nc_selecionada_vis}_{om_user}.{ext_nc}",
-                        mime=mime_nc,
-                        use_container_width=False,
-                        type="secondary"
-                    )
-                except Exception as e_nc_plan:
-                    st.caption(f"Aviso de download: {e_nc_plan}")
 
                 if not df_base_mestre.empty:
                     st.markdown("---")
@@ -3570,7 +3685,7 @@ with tab_visualizacao:
                         st.altair_chart(grafico_status, use_container_width=True)
                 
                 st.markdown("---")
-                st.subheader("📋 Planilhas de Acompanhamento e Requisições por Fornecedor")
+                st.subheader("📋 Controle de Itens e Requisições por Fornecedor")
 
                 with st.expander("🎯 Conferir ou Alterar Sub Item de um Material da NC (Buscar por Função da ND)", expanded=False):
                     itens_nc_ajuste = banco_dados[nc_selecionada_vis].get("itens", [])
@@ -3626,9 +3741,9 @@ with tab_visualizacao:
                         c1, c2 = st.columns(2)
                         with c1:
                             cfg_om = st.text_area("Nome da OM (Pode usar 2 linhas):", value=config_req.get("cabecalho_om", f"{om_user}\n(NOME HISTÓRICO DA OM)"))
-                            cfg_ind = st.text_input("Indicativo do DIEx (Ex: CFGS/23ºBI):", value=config_req.get("indicativo_diex", f"SEÇÃO/{om_user}"))
+                            cfg_ind = st.text_input("Indicativo do DIEx (Ex: SALC/1ºBtl):", value=config_req.get("indicativo_diex", f"SEÇÃO/{om_user}"))
                             cfg_remetente = st.text_input("Remetente (Campo 'Do:'):", value=config_req.get("remetente_do", "Chefe da Seção"))
-                            cfg_cidade = st.text_input("Cidade/UF da OM (Ex: Blumenau-SC):", value=config_req.get("cidade_om", "Blumenau-SC"))
+                            cfg_cidade = st.text_input("Cidade/UF da OM (Ex: Brasília-DF):", value=config_req.get("cidade_om", "Brasília-DF"))
                         with c2:
                             cfg_ass_nome = st.text_input("Sua Assinatura (Ex: FLÁVIO - Cap):", value=config_req.get("assinatura_nome", "NOME - Posto"))
                             cfg_ass_func = st.text_input("Função de quem Assina:", value=config_req.get("assinatura_funcao", "Chefe da Seção"))
@@ -3659,9 +3774,18 @@ with tab_visualizacao:
                 html_od_func = format_html_var(config_req.get("od_funcao"), "Ordenador de Despesas da OM")
 
                 if not df_base_mestre.empty:
-                    lista_fornecedores = sorted(df_base_mestre["Fornecedor"].unique())
+                    # Aplicação do filtro de Situação dos Itens na Tab 2
+                    if filtro_situacao_tab2:
+                        df_base_filtrada = df_base_mestre[df_base_mestre["Situação"].isin(filtro_situacao_tab2)].copy()
+                    else:
+                        df_base_filtrada = df_base_mestre.iloc[0:0].copy()
+                    
+                    lista_fornecedores = sorted(df_base_filtrada["Fornecedor"].unique()) if not df_base_filtrada.empty else []
                     houve_alteracao = False
                     df_atualizado_acumulado = []
+                    
+                    if not lista_fornecedores and not df_base_mestre.empty:
+                        st.info("ℹ️ Nenhum item para exibir nesta NC com o filtro de Situação selecionado (por exemplo, todos os itens já constam como 'Recebido'). Altere as opções no filtro de Situação acima para visualizá-los.")
                     
                     for i, forn in enumerate(lista_fornecedores):
                         col_titulo, col_btn_baixa = st.columns([3, 1])
@@ -3680,7 +3804,15 @@ with tab_visualizacao:
                                     st.toast(f"Itens de {forn} marcados como Recebidos!")
                                     st.rerun()
                                     
-                        df_forn_atual = df_base_mestre[df_base_mestre["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
+                        df_forn_atual = df_base_filtrada[df_base_filtrada["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
+                        for col_str in ["Nome", "Subitem", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]:
+                            if col_str in df_forn_atual.columns:
+                                df_forn_atual[col_str] = df_forn_atual[col_str].fillna("").astype(str)
+                        if "Situação" in df_forn_atual.columns:
+                            df_forn_atual["Situação"] = df_forn_atual["Situação"].fillna("Planejamento").astype(str).str.strip()
+                            df_forn_atual["Situação"] = df_forn_atual["Situação"].apply(
+                                lambda s: s if s in ["Planejamento", "Aguardando entrega", "Recebido"] else "Planejamento"
+                            )
                         
                         doc_info = banco_dados[nc_selecionada_vis].get("doc_info", {})
                         info_forn = doc_info.get(forn, {"diex": "", "eb": "", "data": "", "assunto": "", "empenho": ""})
@@ -3880,14 +4012,26 @@ with tab_visualizacao:
                             "Ata": st.column_config.TextColumn("Ata"),
                             "Fornecedor": st.column_config.TextColumn("Fornecedor"),
                             "CNPJ": st.column_config.TextColumn("CNPJ"),
-                            "Situação": st.column_config.TextColumn("Situação", required=True) 
+                            "Situação": st.column_config.SelectboxColumn(
+                                "Situação",
+                                options=["Planejamento", "Aguardando entrega", "Recebido"],
+                                required=True,
+                                help="Clique para selecionar a Situação do Item"
+                            )
                         }
                         ordem_col = ["Item", "Subitem", "Nome", "Qtd", "Valor Unitário", "Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
                         
                         if tipo_perfil == "Fiscal":
                             st.dataframe(df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, hide_index=True, use_container_width=True)
                             total_desse_forn = df_forn_atual["Total"].sum()
-                            st.markdown(f"<h4 style='text-align: right; color: #1E88E5;'>Total {forn}: R$ {total_desse_forn:,.2f}</h4>", unsafe_allow_html=True)
+                            st.markdown(f"""
+                            <div style="display: flex; justify-content: flex-end; margin-top: 8px; margin-bottom: 16px;">
+                                <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); display: flex; gap: 10px; align-items: baseline;">
+                                    <span style="font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total {forn}:</span>
+                                    <span style="font-size: 18px; font-weight: 800; color: #1e3a29;">R$ {total_desse_forn:,.2f}</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
                         
                         else:
                             df_editado_forn = st.data_editor(
@@ -3905,25 +4049,44 @@ with tab_visualizacao:
                             df_editado_forn["Total"] = df_editado_forn["Valor Unitário"].astype(float) * df_editado_forn["Qtd"].astype(int)
                             total_desse_forn = df_editado_forn["Total"].sum()
                             
-                            st.markdown(f"<h4 style='text-align: right; color: #1E88E5;'>Total {forn}: R$ {total_desse_forn:,.2f}</h4>", unsafe_allow_html=True)
+                            st.markdown(f"""
+                            <div style="display: flex; justify-content: flex-end; margin-top: 8px; margin-bottom: 16px;">
+                                <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); display: flex; gap: 10px; align-items: baseline;">
+                                    <span style="font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total {forn}:</span>
+                                    <span style="font-size: 18px; font-weight: 800; color: #1e3a29;">R$ {total_desse_forn:,.2f}</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
                             st.write("") 
                             
                             df_atualizado_acumulado.append(df_editado_forn)
                     
                     if tipo_perfil != "Fiscal" and houve_alteracao:
-                        df_final_para_salvar = pd.concat(df_atualizado_acumulado, ignore_index=True)
-                        df_final_para_salvar["Total"] = df_final_para_salvar["Valor Unitário"].astype(float) * df_final_para_salvar["Qtd"].astype(int)
-                        if "Subitem" in df_final_para_salvar.columns:
-                            df_final_para_salvar["Subitem"] = df_final_para_salvar.apply(
-                                lambda r: str(r["Subitem"]).strip() if str(r.get("Subitem", "") or "").strip() else determinar_subitem(nd_vinculada, r.get("Nome", "")),
-                                axis=1
-                            )
+                        mapa_alteracoes = {}
+                        for df_edit in df_atualizado_acumulado:
+                            for r in df_edit.to_dict(orient="records"):
+                                if "Item" in r and str(r["Item"]).isdigit():
+                                    mapa_alteracoes[int(r["Item"])] = r
                         
-                        banco_dados[nc_selecionada_vis]["itens"] = df_final_para_salvar.to_dict(orient="records")
+                        for item_bd in banco_dados[nc_selecionada_vis]["itens"]:
+                            it_nr = int(item_bd.get("Item", 0)) if str(item_bd.get("Item", "")).isdigit() else None
+                            if it_nr in mapa_alteracoes:
+                                alt = mapa_alteracoes[it_nr]
+                                item_bd["Situação"] = alt.get("Situação", item_bd.get("Situação"))
+                                item_bd["Nome"] = alt.get("Nome", item_bd.get("Nome"))
+                                item_bd["Subitem"] = alt.get("Subitem", item_bd.get("Subitem"))
+                                item_bd["Qtd"] = int(alt.get("Qtd", item_bd.get("Qtd")))
+                                item_bd["Valor Unitário"] = float(alt.get("Valor Unitário", item_bd.get("Valor Unitário")))
+                                item_bd["Total"] = item_bd["Qtd"] * item_bd["Valor Unitário"]
+                                item_bd["Fornecedor"] = alt.get("Fornecedor", item_bd.get("Fornecedor"))
+                                item_bd["CNPJ"] = alt.get("CNPJ", item_bd.get("CNPJ"))
+                                item_bd["Pregão"] = alt.get("Pregão", item_bd.get("Pregão"))
+                                item_bd["Ata"] = alt.get("Ata", item_bd.get("Ata"))
+                                item_bd["UASG"] = alt.get("UASG", item_bd.get("UASG"))
+                        
                         salvar_dados(banco_dados)
                         st.session_state.banco = banco_dados
-                        st.toast("✅ Alteração salva automaticamente!")
-                        st.rerun()
+                        st.toast("✅ Alteração salva automaticamente com sucesso!")
     else:
          st.info("Nenhuma NC cadastrada para este ano nesta seção.")
 
@@ -3933,7 +4096,7 @@ with tab_visualizacao:
 with tab_visao_global:
     dados_anuais = []
     
-    if tipo_perfil == "Fiscal":
+    if tipo_perfil == "Fiscal" and secao_ativa == OPCAO_TODAS_SECOES:
         st.subheader(f"🌐 Visão Corporativa da OM ({om_user}) - Todas as Seções")
         resp_todas_secoes = supabase.table("dados").select("*").like("id", f"{om_user}_%").execute()
         for linha in resp_todas_secoes.data:
@@ -3959,20 +4122,6 @@ with tab_visao_global:
                     })
                     
     if dados_anuais:
-        try:
-            planilha_anual_bytes, mime_anual, ext_anual = gerar_planilha_global_ano_completa(ano_selecionado, banco_dados, om_user, secao_ativa)
-            st.download_button(
-                label=f"📥 Baixar Relatório Anual Consolidado do Ano {ano_selecionado} ({ext_anual.upper()})",
-                data=planilha_anual_bytes,
-                file_name=f"Relatorio_Anual_Geral_{limpar_nome_aba(ano_selecionado)}_{om_user}.{ext_anual}",
-                mime=mime_anual,
-                type="primary"
-            )
-        except Exception as e_glob_plan:
-            st.caption(f"Aviso de download: {e_glob_plan}")
-
-        st.write("")
-
         df_anual = pd.DataFrame(dados_anuais)
         df_agrupado = df_anual.groupby(["ND", "Situação"])["Valor Total"].sum().reset_index()
         
@@ -3986,7 +4135,14 @@ with tab_visao_global:
         st.altair_chart(grafico_anual, use_container_width=True)
         
         total_geral_ano = df_agrupado["Valor Total"].sum()
-        st.markdown(f"<h3 style='text-align: right;'>Total Geral Cadastrado em {ano_selecionado}: <span style='color: #1E88E5;'>R$ {total_geral_ano:,.2f}</span></h3>", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="display: flex; justify-content: flex-end; margin-top: 14px; margin-bottom: 20px;">
+            <div style="background: #ffffff; border: 1.5px solid #cbd5e1; border-radius: 10px; padding: 12px 24px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); display: flex; gap: 14px; align-items: baseline;">
+                <span style="font-size: 14px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">Total Geral Cadastrado em {ano_selecionado}:</span>
+                <span style="font-size: 24px; font-weight: 800; color: #1e3a29;">R$ {total_geral_ano:,.2f}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
         
         st.markdown("---")
         df_pivot = df_agrupado.pivot(index="ND", columns="Situação", values="Valor Total").fillna(0)
@@ -4006,7 +4162,7 @@ with tab_consulta_pregoes:
 
     col_u1, col_u2, col_u3 = st.columns([2, 3, 2])
     with col_u1:
-        uasg_busca = st.text_input("Código da UASG:", value="160440", max_chars=6, key="input_uasg_pregoes")
+        uasg_busca = st.text_input("Código da UASG:", value="160001", max_chars=6, key="input_uasg_pregoes")
     with col_u2:
         ano_now = datetime.datetime.now().year
         lista_exercicios = [str(ano_now + 1)] + [str(ano_now - i) for i in range(6)]
