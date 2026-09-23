@@ -25,6 +25,8 @@ from urllib3.util.retry import Retry
 from typing import Tuple, Optional, List, Dict
 import concurrent.futures
 import urllib3
+import uuid
+import time
 # =====================================================================
 # BANCO DE DADOS E LOGICA DE SUBITENS DA NATUREZA DE DESPESA (ND)
 # Baseado no Manual SIAFI / MCASP / Orcamento Federal
@@ -3591,28 +3593,41 @@ with tab_visualizacao:
             
         with col_filtro2:
             if ncs_filtradas:
-                idx_nc_sel = 0
-                if "vis_item_select_nc" in st.session_state and st.session_state["vis_item_select_nc"] in ncs_filtradas:
-                    idx_nc_sel = ncs_filtradas.index(st.session_state["vis_item_select_nc"])
-                nc_selecionada_vis = st.selectbox("Selecione a NC para Gerenciamento e Análise:", ncs_filtradas, index=idx_nc_sel, key="vis_item_select_nc")
+                if "vis_item_select_nc" in st.session_state and st.session_state["vis_item_select_nc"] not in ncs_filtradas:
+                    del st.session_state["vis_item_select_nc"]
+                nc_selecionada_vis = st.selectbox("Selecione a NC para Gerenciamento e Análise:", ncs_filtradas, key="vis_item_select_nc")
             else:
                 nc_selecionada_vis = None
+                if "vis_item_select_nc" in st.session_state:
+                    del st.session_state["vis_item_select_nc"]
                 st.selectbox("Selecione a NC para Gerenciamento e Análise:", ["Nenhuma NC com estes filtros"], disabled=True, key="vis_item_select_nc_disabled")
             
         if not nc_selecionada_vis:
             st.warning(msg_aviso_filtro)
         else:
-            dados_nc = banco_dados[nc_selecionada_vis]
+            dados_nc = banco_dados.get(nc_selecionada_vis, {})
             total_recebido = dados_nc.get("valor_recebido", 0.0)
             nd_vinculada = dados_nc.get("nd", "Não informada")
             pi_vinculado = dados_nc.get("pi", "Não informado")
             
             st.markdown(f"**PI:** `{pi_vinculado}` &nbsp;&nbsp;|&nbsp;&nbsp; **ND:** `{nd_vinculada}`")
             
-            if dados_nc["itens"]:
+            itens_nc_lista = dados_nc.get("itens", [])
+            if itens_nc_lista:
                 precisa_salvar_subitens = False
-                for it in dados_nc["itens"]:
-                    it["Total"] = float(it.get("Valor Unitário", 0.0)) * int(it.get("Qtd", 0))
+                for idx_i, it in enumerate(itens_nc_lista):
+                    if not it.get("_uid"):
+                        it["_uid"] = f"it_{nc_selecionada_vis}_{idx_i}_{uuid.uuid4().hex[:6]}"
+                        precisa_salvar_subitens = True
+                    try:
+                        v_u = float(pd.to_numeric(it.get("Valor Unitário", 0.0), errors="coerce") or 0.0)
+                    except Exception:
+                        v_u = 0.0
+                    try:
+                        q_u = int(pd.to_numeric(it.get("Qtd", 0), errors="coerce") or 0)
+                    except Exception:
+                        q_u = 0
+                    it["Total"] = v_u * q_u
                     it["CNPJ"] = formatar_cnpj(it.get("CNPJ", ""))
                     if not str(it.get("Subitem", "") or "").strip():
                         it["Subitem"] = determinar_subitem(nd_vinculada, it.get("Nome", ""))
@@ -3622,471 +3637,577 @@ with tab_visualizacao:
                     salvar_dados(banco_dados)
                     st.session_state.banco = banco_dados
                 
-                df_base_mestre = pd.DataFrame(dados_nc["itens"])
+                df_base_mestre = pd.DataFrame(itens_nc_lista)
+            else:
+                df_base_mestre = pd.DataFrame(columns=[
+                    "Item", "Subitem", "Nome", "Qtd", "Valor Unitário", "Total", 
+                    "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"
+                ])
                 
-                if not df_base_mestre.empty:
-                    if "Situação" not in df_base_mestre.columns:
-                        df_base_mestre["Situação"] = "Planejamento"
-                    else:
-                        df_base_mestre["Situação"] = df_base_mestre["Situação"].fillna("Planejamento").astype(str).str.strip()
-                        df_base_mestre["Situação"] = df_base_mestre["Situação"].apply(
-                            lambda s: s if s in ["Planejamento", "Aguardando entrega", "Recebido"] else "Planejamento"
-                        )
-                    if "Subitem" not in df_base_mestre.columns:
-                        df_base_mestre["Subitem"] = [determinar_subitem(nd_vinculada, n) for n in df_base_mestre["Nome"]]
-                    else:
-                        df_base_mestre["Subitem"] = df_base_mestre.apply(
-                            lambda r: str(r["Subitem"]).strip() if str(r.get("Subitem", "") or "").strip() else determinar_subitem(nd_vinculada, r.get("Nome", "")),
-                            axis=1
-                        )
-                    df_base_mestre["Valor Unitário"] = df_base_mestre["Valor Unitário"].astype(float)
-                    df_base_mestre["Qtd"] = df_base_mestre["Qtd"].astype(int)
-                    df_base_mestre["Total"] = df_base_mestre["Valor Unitário"] * df_base_mestre["Qtd"]
-                    total_gasto_geral = df_base_mestre["Total"].sum()
+            if not df_base_mestre.empty:
+                if "Situação" not in df_base_mestre.columns:
+                    df_base_mestre["Situação"] = "Planejamento"
                 else:
-                    total_gasto_geral = 0.0
-                
-                saldo_disponivel = total_recebido - total_gasto_geral
-                
-                st.write("")
-                card1, card2, card3 = st.columns(3)
-                with card1:
-                    st.metric("Total Recebido na NC", f"R$ {total_recebido:,.2f}")
-                with card2:
-                    st.metric("Total Planejado / Gasto", f"R$ {total_gasto_geral:,.2f}", delta=f"R$ {total_gasto_geral:,.2f}", delta_color="inverse")
-                with card3:
-                    st.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
+                    df_base_mestre["Situação"] = df_base_mestre["Situação"].fillna("Planejamento").astype(str).str.strip()
+                    df_base_mestre["Situação"] = df_base_mestre["Situação"].apply(
+                        lambda s: s if s in ["Planejamento", "Aguardando entrega", "Recebido"] else "Planejamento"
+                    )
+                if "Subitem" not in df_base_mestre.columns:
+                    df_base_mestre["Subitem"] = [determinar_subitem(nd_vinculada, n) for n in df_base_mestre["Nome"]]
+                else:
+                    df_base_mestre["Subitem"] = df_base_mestre.apply(
+                        lambda r: str(r["Subitem"]).strip() if str(r.get("Subitem", "") or "").strip() else determinar_subitem(nd_vinculada, r.get("Nome", "")),
+                        axis=1
+                    )
+                df_base_mestre["Valor Unitário"] = pd.to_numeric(df_base_mestre["Valor Unitário"], errors="coerce").fillna(0.0)
+                df_base_mestre["Qtd"] = pd.to_numeric(df_base_mestre["Qtd"], errors="coerce").fillna(0).astype(int)
+                df_base_mestre["Total"] = df_base_mestre["Valor Unitário"] * df_base_mestre["Qtd"]
+                total_gasto_geral = df_base_mestre["Total"].sum()
+            else:
+                total_gasto_geral = 0.0
+            
+            saldo_disponivel = total_recebido - total_gasto_geral
+            
+            st.write("")
+            card1, card2, card3 = st.columns(3)
+            with card1:
+                st.metric("Total Recebido na NC", f"R$ {total_recebido:,.2f}")
+            with card2:
+                st.metric("Total Planejado / Gasto", f"R$ {total_gasto_geral:,.2f}", delta=f"R$ {total_gasto_geral:,.2f}", delta_color="inverse")
+            with card3:
+                st.metric("Saldo Restante Disponível", f"R$ {saldo_disponivel:,.2f}")
 
-                if not df_base_mestre.empty:
-                    st.markdown("---")
-                    st.markdown("### 📈 Resumo Gráfico das Aquisições")
-                    col_graf1, col_graf2 = st.columns(2)
-                    
-                    with col_graf1:
-                        st.markdown("**Valores Comprometidos por Fornecedor (R$)**")
-                        gasto_fornecedor = df_base_mestre.groupby("Fornecedor")["Total"].sum().reset_index()
-                        grafico_forn = alt.Chart(gasto_fornecedor).mark_bar(color='#1E88E5').encode(
-                            x=alt.X('Fornecedor', sort='-y'),
-                            y='Total',
-                            tooltip=['Fornecedor', 'Total']
-                        ).properties(height=300)
-                        st.altair_chart(grafico_forn, use_container_width=True)
-                    
-                    with col_graf2:
-                        st.markdown("**Status Atual das Entregas (Qtd. Itens)**")
-                        status_contagem = df_base_mestre["Situação"].value_counts().reset_index()
-                        status_contagem.columns = ["Situação", "Quantidade"]
-                        
-                        grafico_status = alt.Chart(status_contagem).mark_bar(color="#28a745").encode(
-                            x=alt.X("Situação", sort="-y"),
-                            y="Quantidade",
-                            tooltip=["Situação", "Quantidade"]
-                        ).properties(height=300)
-                        st.altair_chart(grafico_status, use_container_width=True)
-                
+            if not df_base_mestre.empty:
                 st.markdown("---")
-                st.subheader("📋 Controle de Itens e Requisições por Fornecedor")
-
-                with st.expander("🎯 Conferir ou Alterar Sub Item de um Material da NC (Buscar por Função da ND)", expanded=False):
-                    itens_nc_ajuste = banco_dados[nc_selecionada_vis].get("itens", [])
-                    if itens_nc_ajuste:
-                        opcoes_itens_nc = [f"Item {it.get('Item', 1)} - {it.get('Nome', '')[:50]} (Subitem Atual: {it.get('Subitem', 'S/ Subitem')})" for it in itens_nc_ajuste]
-                        it_selecionado_para_ajuste = st.selectbox("Selecione o Item da NC para Consultar / Ajustar:", opcoes_itens_nc, key=f"sel_it_ajuste_{nc_selecionada_vis}")
-                        
-                        idx_it_ajuste = opcoes_itens_nc.index(it_selecionado_para_ajuste)
-                        item_obj_ajuste = itens_nc_ajuste[idx_it_ajuste]
-                        
-                        c_aj1, c_aj2 = st.columns([3, 1])
-                        with c_aj1:
-                            opcoes_sub_aj, idx_sub_aj, mapa_sub_aj = montar_opcoes_subitem(nd_vinculada, item_obj_ajuste.get('Nome', ''), item_obj_ajuste.get('Subitem', ''))
-                            sub_sel_aj = st.selectbox(
-                                "Sub Item Correspondente na Função da ND:",
-                                opcoes_sub_aj,
-                                index=idx_sub_aj,
-                                key=f"sel_sub_aj_{nc_selecionada_vis}_{idx_it_ajuste}"
-                            )
-                            if sub_sel_aj == "✏️ Digitar outro código manualmente...":
-                                cod_sub_novo = st.text_input("Código do Subitem (2 dígitos):", max_chars=2, key=f"man_sub_aj_{nc_selecionada_vis}_{idx_it_ajuste}").strip()
-                            else:
-                                cod_sub_novo = mapa_sub_aj.get(sub_sel_aj, extrair_codigo_subitem(sub_sel_aj))
-                            
-                            funcao_aj_txt = obter_funcao_subitem(nd_vinculada, cod_sub_novo)
-                            if funcao_aj_txt:
-                                st.caption(f"📖 **Função do Subitem {cod_sub_novo}:** {funcao_aj_txt}")
-                        
-                        with c_aj2:
-                            st.write("")
-                            st.write("")
-                            if st.button("💾 Aplicar Subitem", type="primary", key=f"btn_salvar_sub_aj_{nc_selecionada_vis}_{idx_it_ajuste}", use_container_width=True):
-                                if tipo_perfil == "Fiscal":
-                                    st.error("Fiscal não tem permissão para alterar itens.")
-                                else:
-                                    item_obj_ajuste["Subitem"] = cod_sub_novo
-                                    salvar_dados(banco_dados)
-                                    st.session_state.banco = banco_dados
-                                    st.toast(f"Subitem do Item {item_obj_ajuste.get('Item')} atualizado para {cod_sub_novo}!")
-                                    st.rerun()
-                    else:
-                        st.info("Nenhum item cadastrado nesta NC ainda.")
+                st.markdown("### 📈 Resumo Gráfico das Aquisições")
+                col_graf1, col_graf2 = st.columns(2)
                 
-                config_req = banco_dados.get("CONFIG_REQUISICAO", {})
-                pre_cadastro_pendente = not bool(config_req)
+                with col_graf1:
+                    st.markdown("**Valores Comprometidos por Fornecedor (R$)**")
+                    gasto_fornecedor = df_base_mestre.groupby("Fornecedor")["Total"].sum().reset_index()
+                    grafico_forn = alt.Chart(gasto_fornecedor).mark_bar(color='#1E88E5').encode(
+                        x=alt.X('Fornecedor', sort='-y'),
+                        y='Total',
+                        tooltip=['Fornecedor', 'Total']
+                    ).properties(height=300)
+                    st.altair_chart(grafico_forn, use_container_width=True)
                 
-                if pre_cadastro_pendente:
-                    st.warning("⚠️ **Atenção:** O cabeçalho padrão da sua Seção ainda não foi configurado.")
-                
-                with st.expander("⚙️ Personalizar Cabeçalho, Cidade e Assinaturas (Padrão da sua Seção)", expanded=pre_cadastro_pendente):
-                    st.info("Preencha estes dados uma única vez para padronizar as requisições impressas.")
-                    with st.form("form_config_req"):
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            cfg_om = st.text_area("Nome da OM (Pode usar 2 linhas):", value=config_req.get("cabecalho_om", f"{om_user}\n(NOME HISTÓRICO DA OM)"))
-                            cfg_ind = st.text_input("Indicativo do DIEx (Ex: SALC/1ºBtl):", value=config_req.get("indicativo_diex", f"SEÇÃO/{om_user}"))
-                            cfg_remetente = st.text_input("Remetente (Campo 'Do:'):", value=config_req.get("remetente_do", "Chefe da Seção"))
-                            cfg_cidade = st.text_input("Cidade/UF da OM (Ex: Brasília-DF):", value=config_req.get("cidade_om", "Brasília-DF"))
-                        with c2:
-                            cfg_ass_nome = st.text_input("Sua Assinatura (Ex: FLÁVIO - Cap):", value=config_req.get("assinatura_nome", "NOME - Posto"))
-                            cfg_ass_func = st.text_input("Função de quem Assina:", value=config_req.get("assinatura_funcao", "Chefe da Seção"))
-                            cfg_od_nome = st.text_input("Nome do OD (Ex: SILVA - Cel):", value=config_req.get("od_nome", "NOME DO OD - Posto"))
-                            cfg_od_func = st.text_input("Função do OD:", value=config_req.get("od_funcao", f"Ordenador de Despesas do {om_user}"))
-                        
-                        if st.form_submit_button("💾 Salvar Novo Padrão da Seção", type="primary"):
-                            banco_dados["CONFIG_REQUISICAO"] = {
-                                "cabecalho_om": cfg_om, "indicativo_diex": cfg_ind, "remetente_do": cfg_remetente,
-                                "cidade_om": cfg_cidade, "assinatura_nome": cfg_ass_nome, "assinatura_funcao": cfg_ass_func,
-                                "od_nome": cfg_od_nome, "od_funcao": cfg_od_func
-                            }
-                            salvar_dados(banco_dados)
-                            st.session_state.banco = banco_dados
-                            st.success("Configuração atualizada com sucesso!")
-                            st.rerun()
-                
-                def format_html_var(val, default):
-                    return str(val).strip() if val else default
-
-                html_cabecalho_om = format_html_var(config_req.get("cabecalho_om"), f"{om_user}<br>(NOME HISTÓRICO)").replace("\n", "<br>")
-                html_ind = format_html_var(config_req.get("indicativo_diex"), f"SEÇÃO/{om_user}")
-                html_rem = format_html_var(config_req.get("remetente_do"), "Função do Remetente")
-                html_cidade = format_html_var(config_req.get("cidade_om"), "Cidade-UF")
-                html_ass_nome = format_html_var(config_req.get("assinatura_nome"), "NOME DO MILITAR - Posto")
-                html_ass_func = format_html_var(config_req.get("assinatura_funcao"), "Função do Remetente")
-                html_od_nome = format_html_var(config_req.get("od_nome"), "NOME DO OD - Posto")
-                html_od_func = format_html_var(config_req.get("od_funcao"), "Ordenador de Despesas da OM")
-
-                if not df_base_mestre.empty:
-                    # Aplicação do filtro de Situação dos Itens na Tab 2
-                    if filtro_situacao_tab2:
-                        df_base_filtrada = df_base_mestre[df_base_mestre["Situação"].isin(filtro_situacao_tab2)].copy()
-                    else:
-                        df_base_filtrada = df_base_mestre.iloc[0:0].copy()
+                with col_graf2:
+                    st.markdown("**Status Atual das Entregas (Qtd. Itens)**")
+                    status_contagem = df_base_mestre["Situação"].value_counts().reset_index()
+                    status_contagem.columns = ["Situação", "Quantidade"]
                     
-                    lista_fornecedores = sorted(df_base_filtrada["Fornecedor"].unique()) if not df_base_filtrada.empty else []
-                    houve_alteracao = False
-                    df_atualizado_acumulado = []
-                    
-                    if not lista_fornecedores and not df_base_mestre.empty:
-                        st.info("ℹ️ Nenhum item para exibir nesta NC com o filtro de Situação selecionado (por exemplo, todos os itens já constam como 'Recebido'). Altere as opções no filtro de Situação acima para visualizá-los.")
-                    
-                    for i, forn in enumerate(lista_fornecedores):
-                        col_titulo, col_btn_baixa = st.columns([3, 1])
-                        with col_titulo:
-                            st.markdown(f"### 🏢 Fornecedor: **{forn}**")
-                        
-                        if tipo_perfil != "Fiscal":
-                            with col_btn_baixa:
-                                st.write("") 
-                                if st.button(f"✅ Receber todos os itens", key=f"btn_lote_{nc_selecionada_vis}_{i}", use_container_width=True):
-                                    for it_bd in banco_dados[nc_selecionada_vis]["itens"]:
-                                        if it_bd.get("Fornecedor") == forn:
-                                            it_bd["Situação"] = "Recebido"
-                                    salvar_dados(banco_dados)
-                                    st.session_state.banco = banco_dados
-                                    st.toast(f"Itens de {forn} marcados como Recebidos!")
-                                    st.rerun()
-                                    
-                        df_forn_atual = df_base_filtrada[df_base_filtrada["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
-                        for col_str in ["Nome", "Subitem", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]:
-                            if col_str in df_forn_atual.columns:
-                                df_forn_atual[col_str] = df_forn_atual[col_str].fillna("").astype(str)
-                        if "Situação" in df_forn_atual.columns:
-                            df_forn_atual["Situação"] = df_forn_atual["Situação"].fillna("Planejamento").astype(str).str.strip()
-                            df_forn_atual["Situação"] = df_forn_atual["Situação"].apply(
-                                lambda s: s if s in ["Planejamento", "Aguardando entrega", "Recebido"] else "Planejamento"
-                            )
-                        
-                        doc_info = banco_dados[nc_selecionada_vis].get("doc_info", {})
-                        info_forn = doc_info.get(forn, {"diex": "", "eb": "", "data": "", "assunto": "", "empenho": ""})
+                    grafico_status = alt.Chart(status_contagem).mark_bar(color="#28a745").encode(
+                        x=alt.X("Situação", sort="-y"),
+                        y="Quantidade",
+                        tooltip=["Situação", "Quantidade"]
+                    ).properties(height=300)
+                    st.altair_chart(grafico_status, use_container_width=True)
+            
+            st.markdown("---")
+            st.subheader("📋 Controle de Itens e Requisições por Fornecedor")
 
-                        with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Preencher e Imprimir)", expanded=False):
-                            with st.form(f"form_req_{forn}_{i}"):
-                                col_req1, col_req2 = st.columns(2)
-                                with col_req1:
-                                    diex_val = st.text_input("Nº do DIEx:", value=info_forn.get("diex", ""))
-                                    eb_val = st.text_input("Nº do EB (Processo/Documento):", value=info_forn.get("eb", ""))
-                                with col_req2:
-                                    data_val = st.text_input("Data (Ex: 08 de setembro de 2026):", value=info_forn.get("data", ""))
-                                    assunto_val = st.text_input("Assunto (Ex: materiais de construção):", value=info_forn.get("assunto", ""))
-                                
-                                st.markdown("---")
-                                st.markdown("##### 📦 Controle de Depósito e Almoxarifado (Pós-Empenho)")
-                                empenho_val = st.text_input("Nº da Nota de Empenho (NE):", value=info_forn.get("empenho", ""), key=f"ne_deposito_{forn}_{i}")
-                                
-                                btn_salvar_req = st.form_submit_button("💾 Salvar Dados da Requisição e Depósito", type="primary")
-                                
-                                if btn_salvar_req:
-                                    if "doc_info" not in banco_dados[nc_selecionada_vis]:
-                                        banco_dados[nc_selecionada_vis]["doc_info"] = {}
-                                    banco_dados[nc_selecionada_vis]["doc_info"][forn] = {
-                                        "diex": diex_val, "eb": eb_val, "data": data_val, "assunto": assunto_val, "empenho": empenho_val
-                                    }
-                                    salvar_dados(banco_dados)
-                                    st.session_state.banco = banco_dados
-                                    st.success("Dados salvos e atualizados!")
-                                    st.rerun()
-                            
-                            if info_forn.get("empenho"):
-                                st.success(f"📦 **Depósito Vinculado:** DIEx nº **{info_forn.get('diex', 'S/N')}** ➔ NE: **{info_forn.get('empenho')}**")
-
-                            diex_display = info_forn.get("diex", "") if info_forn.get("diex", "") else "______"
-                            eb_display = info_forn.get("eb", "") if info_forn.get("eb", "") else "_________________"
-                            data_display = info_forn.get("data", "") if info_forn.get("data", "") else "____ de _______________ de 2026"
-                            assunto_display = info_forn.get("assunto", "") if info_forn.get("assunto", "") else "______________________"
-                            local_display = html_cidade
-                            
-                            linhas_tabela_html = ""
-                            soma_total_forn = 0.0
-                            pregao_atual = df_forn_atual["Pregão"].iloc[0] if not df_forn_atual.empty else ""
-                            uasg_atual = df_forn_atual["UASG"].iloc[0] if not df_forn_atual.empty else ""
-                            cnpj_atual = df_forn_atual["CNPJ"].iloc[0] if not df_forn_atual.empty else ""
-                            
-                            for _, row in df_forn_atual.iterrows():
-                                v_unit = float(row['Valor Unitário'])
-                                qtd = int(row['Qtd'])
-                                v_total = v_unit * qtd
-                                soma_total_forn += v_total
-                                
-                                v_unit_str = f"R$ {v_unit:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                                v_total_str = f"R$ {v_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                                
-                                subitem_val = str(row.get('Subitem', '') or '').strip()
-                                if not subitem_val:
-                                    subitem_val = determinar_subitem(nd_vinculada, row.get('Nome', ''))
-                                
-                                linhas_tabela_html += f"""
-                                <tr>
-                                    <td>{row['Item']}</td>
-                                    <td>{subitem_val}</td>
-                                    <td style="text-align: left; padding-left: 5px;">{row['Nome']}</td>
-                                    <td>{qtd}</td>
-                                    <td>{v_unit_str}</td>
-                                    <td>{v_total_str}</td>
-                                </tr>
-                                """
-                                
-                            total_geral_str = f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                            
-                            html_template = f"""
-                            <html>
-                            <head>
-                            <style>
-                                @media print {{
-                                    @page {{ margin: 0; }} 
-                                    body {{ padding: 2cm; background-color: white; }} 
-                                    .no-print {{ display: none !important; }}
-                                    .editable-doc {{ box-shadow: none !important; border: none !important; padding: 0 !important; max-width: 100%; margin: 0 !important; }}
-                                    .quebra-pagina {{ page-break-before: always; }}
-                                }}
-                                body {{ font-family: 'Times New Roman', Times, serif; color: black; background-color: #f8f9fa; margin: 0; }}
-                                .editable-doc {{
-                                    padding: 40px; background-color: white; max-width: 800px; margin: 20px auto; 
-                                    border: 1px solid #ccc; box-shadow: 2px 2px 10px #aaa;
-                                }}
-                                table.borda, .borda th, .borda td {{
-                                    border: 1px solid black; border-collapse: collapse;
-                                }}
-                                .borda th, .borda td {{ padding: 5px; text-align: center; }}
-                                .separador-tela {{
-                                    border-top: 2px dashed #ccc; color: #999; text-align: center; margin: 40px 0;
-                                    padding-top: 10px; font-size: 12px; font-family: Arial, sans-serif;
-                                }}
-                            </style>
-                            </head>
-                            <body>
-                            <div class="no-print" style="text-align: center; margin-bottom: 20px; padding-top: 20px;">
-                                <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #28a745; color: white; border: none; border-radius: 5px; font-weight: bold;">
-                                    🖨️ Imprimir / Salvar como PDF
-                                </button>
-                            </div>
-                        
-                            <div class="editable-doc">
-                                <table style="width: 100%; border: none;">
-                                    <tr style="border: none;">
-                                        <td style="width: 30%; border: none;"></td>
-                                        <td style="width: 40%; border: none; text-align: center; vertical-align: top;">
-                                            <img src="https://upload.wikimedia.org/wikipedia/commons/b/bf/Coat_of_arms_of_Brazil.svg" width="80">
-                                        </td>
-                                        <td style="width: 30%; border: none; text-align: center; vertical-align: top; font-weight: bold; font-size: 14px; line-height: 1.2;">
-                                            VISTO<br><br>_________________<br>Fisc Adm
-                                        </td>
-                                    </tr>
-                                </table>
-                                
-                                <div style="text-align: center; line-height: 1.2;">
-                                    <b>MINISTÉRIO DA DEFESA</b><br>
-                                    <b>EXÉRCITO BRASILEIRO</b><br>
-                                    <b>{html_cabecalho_om}</b>
-                                </div>
-                                <br>
-                                
-                                <table style="width: 100%; border: none;">
-                                    <tr style="border: none;">
-                                        <td style="border: none; text-align: left; padding: 0;">DIEx nº {diex_display} - {html_ind}<br>EB: {eb_display}</td>
-                                        <td style="border: none; text-align: right; padding: 0;">{local_display}, {data_display}.</td>
-                                    </tr>
-                                </table>
-                                <br>
-                                <div style="line-height: 1.5;">
-                                    <b>Do:</b> {html_rem}<br>
-                                    <b>Ao:</b> Sr Fiscal Administrativo<br>
-                                    <b>Assunto:</b> aquisição de {assunto_display}
-                                </div>
-                                <br>
-                                <div style="text-align: justify; text-indent: 30px; line-height: 1.5;">
-                                    1. Nos termos contidos na lei 14.133/2021, solicito-vos providências junto ao Ordenador de Despesas no sentido de aprovar o empenho da despesa para aquisição de material, com os respectivos recursos e destinos:
-                                </div>
-                                <div style="margin-left: 30px; line-height: 1.5; margin-top: 10px;">
-                                    a) <b>Nota de crédito:</b> {nc_selecionada_vis} &nbsp;&nbsp;&nbsp; b) <b>PI:</b> {pi_vinculado}; <b>ND:</b> {nd_vinculada}<br>
-                                    <b>Edital de Pregão:</b> {pregao_atual} / <b>UASG:</b> {uasg_atual} / <b>Tipo de Empenho:</b> Ordinário<br>
-                                    <b>Empresa:</b> {cnpj_atual} – {forn}
-                                </div>
-                                <br>
-                                <table class="borda" style="width: 100%;">
-                                    <tr style="font-weight: bold; background-color: #f2f2f2;">
-                                        <td>Item</td><td>Sub Item</td><td>Nomenclatura</td><td>Qtd</td><td>Valor Unitário</td><td>Valor Total</td>
-                                    </tr>
-                                    {linhas_tabela_html}
-                                    <tr style="font-weight: bold;">
-                                        <td colspan="5">TOTAL</td><td>{total_geral_str}</td>
-                                    </tr>
-                                </table>
-                                <br>
-                                <div style="text-align: justify; text-indent: 30px; line-height: 1.5;">
-                                    2. O material solicitado deverá ser empenhado na empresa vencedora do item acima citado, proveniente de seu respectivo Pregão Eletrônico.
-                                </div>
-                                <br><br>
-                                <div style="text-align: center; line-height: 1.2;">
-                                    <b>{html_ass_nome}</b><br>
-                                    {html_ass_func}
-                                </div>
-                                
-                                <div class="separador-tela no-print">
-                                    ✂️ --- QUEBRA DE PÁGINA --- ✂️
-                                </div>
-                                
-                                <div class="quebra-pagina" style="padding-top: 10px; line-height: 1.5; font-size: 14px;">
-                                    <b>DESPACHO DO OD:</b><br>
-                                    1. Autorizo a aquisição do material relacionado na letra b) do número 1);<br>
-                                    2. Empregar os recursos provenientes da nota de crédito relacionado na letra a);<br>
-                                    3. A SALC inicie os procedimentos legais, conforme legislação em vigor para empenho da despesa.<br>
-                                    <br><br>
-                                    <div style="text-align: center; line-height: 1.2;">
-                                        <b>{html_od_nome}</b><br>
-                                        {html_od_func}
-                                    </div>
-                                </div>
-                            </div>
-                            </body>
-                            </html>
-                            """
-                            components.html(html_template, height=800, scrolling=True)
-                        
-                        cfg_colunas = {
-                            "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
-                            "Subitem": st.column_config.TextColumn("Sub Item", help="Subitem da despesa (2 últimos dígitos da ND)", max_chars=10),
-                            "Nome": st.column_config.TextColumn("Nome", required=True),
-                            "Qtd": st.column_config.NumberColumn("Qtd", min_value=0, step=1, required=True),
-                            "Valor Unitário": st.column_config.NumberColumn("Valor Unitário", min_value=0.0, step=0.01, format="R$ %.2f", required=True),
-                            "Total": st.column_config.NumberColumn("Total", format="R$ %.2f"),
-                            "UASG": st.column_config.TextColumn("UASG"),
-                            "Pregão": st.column_config.TextColumn("Pregão"),
-                            "Ata": st.column_config.TextColumn("Ata"),
-                            "Fornecedor": st.column_config.TextColumn("Fornecedor"),
-                            "CNPJ": st.column_config.TextColumn("CNPJ"),
-                            "Situação": st.column_config.SelectboxColumn(
-                                "Situação",
-                                options=["Planejamento", "Aguardando entrega", "Recebido"],
-                                required=True,
-                                help="Clique para selecionar a Situação do Item"
-                            )
-                        }
-                        ordem_col = ["Item", "Subitem", "Nome", "Qtd", "Valor Unitário", "Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
-                        
-                        if tipo_perfil == "Fiscal":
-                            st.dataframe(df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, hide_index=True, use_container_width=True)
-                            total_desse_forn = df_forn_atual["Total"].sum()
-                            st.markdown(f"""
-                            <div style="display: flex; justify-content: flex-end; margin-top: 8px; margin-bottom: 16px;">
-                                <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); display: flex; gap: 10px; align-items: baseline;">
-                                    <span style="font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total {forn}:</span>
-                                    <span style="font-size: 18px; font-weight: 800; color: #1e3a29;">R$ {total_desse_forn:,.2f}</span>
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        
+            with st.expander("🎯 Conferir ou Alterar Sub Item de um Material da NC (Buscar por Função da ND)", expanded=False):
+                itens_nc_ajuste = banco_dados[nc_selecionada_vis].get("itens", [])
+                if itens_nc_ajuste:
+                    opcoes_itens_nc = [f"Item {it.get('Item', 1)} - {it.get('Nome', '')[:50]} (Subitem Atual: {it.get('Subitem', 'S/ Subitem')})" for it in itens_nc_ajuste]
+                    it_selecionado_para_ajuste = st.selectbox("Selecione o Item da NC para Consultar / Ajustar:", opcoes_itens_nc, key=f"sel_it_ajuste_{nc_selecionada_vis}")
+                    
+                    idx_it_ajuste = opcoes_itens_nc.index(it_selecionado_para_ajuste)
+                    item_obj_ajuste = itens_nc_ajuste[idx_it_ajuste]
+                    
+                    c_aj1, c_aj2 = st.columns([3, 1])
+                    with c_aj1:
+                        opcoes_sub_aj, idx_sub_aj, mapa_sub_aj = montar_opcoes_subitem(nd_vinculada, item_obj_ajuste.get('Nome', ''), item_obj_ajuste.get('Subitem', ''))
+                        sub_sel_aj = st.selectbox(
+                            "Sub Item Correspondente na Função da ND:",
+                            opcoes_sub_aj,
+                            index=idx_sub_aj,
+                            key=f"sel_sub_aj_{nc_selecionada_vis}_{idx_it_ajuste}"
+                        )
+                        if sub_sel_aj == "✏️ Digitar outro código manualmente...":
+                            cod_sub_novo = st.text_input("Código do Subitem (2 dígitos):", max_chars=2, key=f"man_sub_aj_{nc_selecionada_vis}_{idx_it_ajuste}").strip()
                         else:
-                            df_editado_forn = st.data_editor(
-                                df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, disabled=["Total"], 
-                                num_rows="dynamic", use_container_width=True, hide_index=True,
-                                key=f"editor_forn_{nc_selecionada_vis}_{forn.replace(' ', '_')}_{i}"
-                            )
-                            
-                            dict_antigo = df_forn_atual.drop(columns=["Total"]).to_dict("records")
-                            dict_novo = df_editado_forn.drop(columns=["Total"]).to_dict("records")
-                            
-                            if dict_antigo != dict_novo:
-                                houve_alteracao = True
-                            
-                            df_editado_forn["Total"] = df_editado_forn["Valor Unitário"].astype(float) * df_editado_forn["Qtd"].astype(int)
-                            total_desse_forn = df_editado_forn["Total"].sum()
-                            
-                            st.markdown(f"""
-                            <div style="display: flex; justify-content: flex-end; margin-top: 8px; margin-bottom: 16px;">
-                                <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); display: flex; gap: 10px; align-items: baseline;">
-                                    <span style="font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total {forn}:</span>
-                                    <span style="font-size: 18px; font-weight: 800; color: #1e3a29;">R$ {total_desse_forn:,.2f}</span>
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            st.write("") 
-                            
-                            df_atualizado_acumulado.append(df_editado_forn)
+                            cod_sub_novo = mapa_sub_aj.get(sub_sel_aj, extrair_codigo_subitem(sub_sel_aj))
+                        
+                        funcao_aj_txt = obter_funcao_subitem(nd_vinculada, cod_sub_novo)
+                        if funcao_aj_txt:
+                            st.caption(f"📖 **Função do Subitem {cod_sub_novo}:** {funcao_aj_txt}")
                     
-                    if tipo_perfil != "Fiscal" and houve_alteracao:
-                        mapa_alteracoes = {}
-                        for df_edit in df_atualizado_acumulado:
-                            for r in df_edit.to_dict(orient="records"):
-                                if "Item" in r and str(r["Item"]).isdigit():
-                                    mapa_alteracoes[int(r["Item"])] = r
-                        
-                        for item_bd in banco_dados[nc_selecionada_vis]["itens"]:
-                            it_nr = int(item_bd.get("Item", 0)) if str(item_bd.get("Item", "")).isdigit() else None
-                            if it_nr in mapa_alteracoes:
-                                alt = mapa_alteracoes[it_nr]
-                                item_bd["Situação"] = alt.get("Situação", item_bd.get("Situação"))
-                                item_bd["Nome"] = alt.get("Nome", item_bd.get("Nome"))
-                                item_bd["Subitem"] = alt.get("Subitem", item_bd.get("Subitem"))
-                                item_bd["Qtd"] = int(alt.get("Qtd", item_bd.get("Qtd")))
-                                item_bd["Valor Unitário"] = float(alt.get("Valor Unitário", item_bd.get("Valor Unitário")))
-                                item_bd["Total"] = item_bd["Qtd"] * item_bd["Valor Unitário"]
-                                item_bd["Fornecedor"] = alt.get("Fornecedor", item_bd.get("Fornecedor"))
-                                item_bd["CNPJ"] = alt.get("CNPJ", item_bd.get("CNPJ"))
-                                item_bd["Pregão"] = alt.get("Pregão", item_bd.get("Pregão"))
-                                item_bd["Ata"] = alt.get("Ata", item_bd.get("Ata"))
-                                item_bd["UASG"] = alt.get("UASG", item_bd.get("UASG"))
-                        
+                    with c_aj2:
+                        st.write("")
+                        st.write("")
+                        if st.button("💾 Aplicar Subitem", type="primary", key=f"btn_salvar_sub_aj_{nc_selecionada_vis}_{idx_it_ajuste}", use_container_width=True):
+                            if tipo_perfil == "Fiscal":
+                                st.error("Fiscal não tem permissão para alterar itens.")
+                            else:
+                                item_obj_ajuste["Subitem"] = cod_sub_novo
+                                salvar_dados(banco_dados)
+                                st.session_state.banco = banco_dados
+                                st.toast(f"Subitem do Item {item_obj_ajuste.get('Item')} atualizado para {cod_sub_novo}!")
+                                st.rerun()
+                else:
+                    st.info("Nenhum item cadastrado nesta NC ainda.")
+
+            if itens_nc_lista and tipo_perfil != "Fiscal":
+                with st.expander("🛠️ Ações Rápidas: Excluir ou Mover Item desta NC", expanded=False):
+                    c_act1, c_act2 = st.columns(2)
+                    with c_act1:
+                        st.markdown("##### 🗑️ Excluir Item desta NC")
+                        opcoes_itens_del = {
+                            f"Item {it.get('Item', 1)} - {it.get('Nome', '')[:35]} ({it.get('Fornecedor', 'N/I')}) | R$ {float(it.get('Total', 0.0)):,.2f}": it.get('_uid')
+                            for it in itens_nc_lista
+                        }
+                        item_para_excluir_label = st.selectbox(
+                            "Selecione o item que deseja excluir:",
+                            list(opcoes_itens_del.keys()),
+                            key=f"sel_item_del_{nc_selecionada_vis}"
+                        )
+                        uid_para_excluir = opcoes_itens_del.get(item_para_excluir_label)
+                        confirma_del_item = st.checkbox("Confirmo a exclusão definitiva deste item", key=f"chk_del_item_{uid_para_excluir}")
+                        if st.button("🗑️ Excluir Item Permanentemente", type="secondary", key=f"btn_del_item_{uid_para_excluir}"):
+                            if not confirma_del_item:
+                                st.error("Marque a caixa de confirmação para autorizar a exclusão.")
+                            else:
+                                banco_dados[nc_selecionada_vis]["itens"] = [
+                                    it for it in banco_dados[nc_selecionada_vis]["itens"]
+                                    if it.get("_uid") != uid_para_excluir
+                                ]
+                                salvar_dados(banco_dados)
+                                st.session_state.banco = banco_dados
+                                st.success("Item excluído com sucesso da Nota de Crédito!")
+                                st.toast("Item excluído!")
+                                st.rerun()
+
+                    with c_act2:
+                        st.markdown("##### 🔁 Mover Item para Outra NC")
+                        outras_ncs = [k for k in banco_dados.keys() if k != "CONFIG_REQUISICAO" and k != nc_selecionada_vis and extrair_ano(k) == ano_selecionado]
+                        if not outras_ncs:
+                            st.caption("ℹ️ Não há outras NCs cadastradas neste ano para onde mover itens.")
+                        else:
+                            opcoes_itens_mover = {
+                                f"Item {it.get('Item', 1)} - {it.get('Nome', '')[:35]} ({it.get('Fornecedor', 'N/I')}) | R$ {float(it.get('Total', 0.0)):,.2f}": it
+                                for it in itens_nc_lista
+                            }
+                            item_para_mover_label = st.selectbox(
+                                "Selecione o item para transferir:",
+                                list(opcoes_itens_mover.keys()),
+                                key=f"sel_item_mover_{nc_selecionada_vis}"
+                            )
+                            nc_destino_mover = st.selectbox(
+                                "Selecione a NC de Destino:",
+                                outras_ncs,
+                                key=f"sel_nc_dest_mover_{nc_selecionada_vis}"
+                            )
+                            if st.button("🔁 Transferir Item para a NC Selecionada", type="primary", key=f"btn_mover_item_{nc_selecionada_vis}"):
+                                item_obj = opcoes_itens_mover[item_para_mover_label]
+                                banco_dados[nc_selecionada_vis]["itens"] = [
+                                    it for it in banco_dados[nc_selecionada_vis]["itens"]
+                                    if it.get("_uid") != item_obj.get("_uid")
+                                ]
+                                if "itens" not in banco_dados[nc_destino_mover]:
+                                    banco_dados[nc_destino_mover]["itens"] = []
+                                nd_nova = banco_dados[nc_destino_mover].get("nd", "")
+                                item_obj_copia = dict(item_obj)
+                                if nd_nova:
+                                    item_obj_copia["Subitem"] = determinar_subitem(nd_nova, item_obj_copia.get("Nome", ""))
+                                banco_dados[nc_destino_mover]["itens"].append(item_obj_copia)
+                                
+                                salvar_dados(banco_dados)
+                                st.session_state.banco = banco_dados
+                                st.success(f"Item transferido com sucesso para **{nc_destino_mover}**!")
+                                st.toast(f"Item transferido para {nc_destino_mover}!")
+                                st.rerun()
+
+            config_req = banco_dados.get("CONFIG_REQUISICAO", {})
+            pre_cadastro_pendente = not bool(config_req)
+            
+            if pre_cadastro_pendente:
+                st.warning("⚠️ **Atenção:** O cabeçalho padrão da sua Seção ainda não foi configurado.")
+            
+            with st.expander("⚙️ Personalizar Cabeçalho, Cidade e Assinaturas (Padrão da sua Seção)", expanded=pre_cadastro_pendente):
+                st.info("Preencha estes dados uma única vez para padronizar as requisições impressas.")
+                with st.form("form_config_req"):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        cfg_om = st.text_area("Nome da OM (Pode usar 2 linhas):", value=config_req.get("cabecalho_om", f"{om_user}\n(NOME HISTÓRICO DA OM)"))
+                        cfg_ind = st.text_input("Indicativo do DIEx (Ex: SALC/1ºBtl):", value=config_req.get("indicativo_diex", f"SEÇÃO/{om_user}"))
+                        cfg_remetente = st.text_input("Remetente (Campo 'Do:'):", value=config_req.get("remetente_do", "Chefe da Seção"))
+                        cfg_cidade = st.text_input("Cidade/UF da OM (Ex: Brasília-DF):", value=config_req.get("cidade_om", "Brasília-DF"))
+                    with c2:
+                        cfg_ass_nome = st.text_input("Sua Assinatura (Ex: FLÁVIO - Cap):", value=config_req.get("assinatura_nome", "NOME - Posto"))
+                        cfg_ass_func = st.text_input("Função de quem Assina:", value=config_req.get("assinatura_funcao", "Chefe da Seção"))
+                        cfg_od_nome = st.text_input("Nome do OD (Ex: SILVA - Cel):", value=config_req.get("od_nome", "NOME DO OD - Posto"))
+                        cfg_od_func = st.text_input("Função do OD:", value=config_req.get("od_funcao", f"Ordenador de Despesas do {om_user}"))
+                    
+                    if st.form_submit_button("💾 Salvar Novo Padrão da Seção", type="primary"):
+                        banco_dados["CONFIG_REQUISICAO"] = {
+                            "cabecalho_om": cfg_om, "indicativo_diex": cfg_ind, "remetente_do": cfg_remetente,
+                            "cidade_om": cfg_cidade, "assinatura_nome": cfg_ass_nome, "assinatura_funcao": cfg_ass_func,
+                            "od_nome": cfg_od_nome, "od_funcao": cfg_od_func
+                        }
                         salvar_dados(banco_dados)
                         st.session_state.banco = banco_dados
-                        st.toast("✅ Alteração salva automaticamente com sucesso!")
+                        st.success("Configuração atualizada com sucesso!")
+                        st.rerun()
+            
+            def format_html_var(val, default):
+                return str(val).strip() if val else default
+
+            html_cabecalho_om = format_html_var(config_req.get("cabecalho_om"), f"{om_user}<br>(NOME HISTÓRICO)").replace("\n", "<br>")
+            html_ind = format_html_var(config_req.get("indicativo_diex"), f"SEÇÃO/{om_user}")
+            html_rem = format_html_var(config_req.get("remetente_do"), "Função do Remetente")
+            html_cidade = format_html_var(config_req.get("cidade_om"), "Cidade-UF")
+            html_ass_nome = format_html_var(config_req.get("assinatura_nome"), "NOME DO MILITAR - Posto")
+            html_ass_func = format_html_var(config_req.get("assinatura_funcao"), "Função do Remetente")
+            html_od_nome = format_html_var(config_req.get("od_nome"), "NOME DO OD - Posto")
+            html_od_func = format_html_var(config_req.get("od_funcao"), "Ordenador de Despesas da OM")
+
+            if not df_base_mestre.empty:
+                # Aplicação do filtro de Situação dos Itens na Tab 2
+                if filtro_situacao_tab2:
+                    df_base_filtrada = df_base_mestre[df_base_mestre["Situação"].isin(filtro_situacao_tab2)].copy()
+                else:
+                    df_base_filtrada = df_base_mestre.iloc[0:0].copy()
+                
+                lista_fornecedores = sorted(df_base_filtrada["Fornecedor"].unique()) if not df_base_filtrada.empty else []
+                houve_alteracao = False
+                df_atualizado_acumulado = []
+                
+                if not lista_fornecedores and not df_base_mestre.empty:
+                    st.info("ℹ️ Nenhum item para exibir nesta NC com o filtro de Situação selecionado (por exemplo, todos os itens já constam como 'Recebido'). Altere as opções no filtro de Situação acima para visualizá-los.")
+                
+                for i, forn in enumerate(lista_fornecedores):
+                    col_titulo, col_btn_baixa = st.columns([3, 1])
+                    with col_titulo:
+                        st.markdown(f"### 🏢 Fornecedor: **{forn}**")
+                    
+                    if tipo_perfil != "Fiscal":
+                        with col_btn_baixa:
+                            st.write("") 
+                            if st.button(f"✅ Receber todos os itens", key=f"btn_lote_{nc_selecionada_vis}_{i}", use_container_width=True):
+                                for it_bd in banco_dados[nc_selecionada_vis]["itens"]:
+                                    if it_bd.get("Fornecedor") == forn:
+                                        it_bd["Situação"] = "Recebido"
+                                salvar_dados(banco_dados)
+                                st.session_state.banco = banco_dados
+                                st.toast(f"Itens de {forn} marcados como Recebidos!")
+                                st.rerun()
+                                
+                    df_forn_atual = df_base_filtrada[df_base_filtrada["Fornecedor"] == forn].sort_values(by="Item").reset_index(drop=True)
+                    for col_str in ["Nome", "Subitem", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]:
+                        if col_str in df_forn_atual.columns:
+                            df_forn_atual[col_str] = df_forn_atual[col_str].fillna("").astype(str)
+                    if "Situação" in df_forn_atual.columns:
+                        df_forn_atual["Situação"] = df_forn_atual["Situação"].fillna("Planejamento").astype(str).str.strip()
+                        df_forn_atual["Situação"] = df_forn_atual["Situação"].apply(
+                            lambda s: s if s in ["Planejamento", "Aguardando entrega", "Recebido"] else "Planejamento"
+                        )
+                    
+                    doc_info = banco_dados[nc_selecionada_vis].get("doc_info", {})
+                    info_forn = doc_info.get(forn, {"diex": "", "eb": "", "data": "", "assunto": "", "empenho": ""})
+
+                    with st.expander(f"📄 GERAR REQUISIÇÃO: {forn} (Preencher e Imprimir)", expanded=False):
+                        with st.form(f"form_req_{forn}_{i}"):
+                            col_req1, col_req2 = st.columns(2)
+                            with col_req1:
+                                diex_val = st.text_input("Nº do DIEx:", value=info_forn.get("diex", ""))
+                                eb_val = st.text_input("Nº do EB (Processo/Documento):", value=info_forn.get("eb", ""))
+                            with col_req2:
+                                data_val = st.text_input("Data (Ex: 08 de setembro de 2026):", value=info_forn.get("data", ""))
+                                assunto_val = st.text_input("Assunto (Ex: materiais de construção):", value=info_forn.get("assunto", ""))
+                            
+                            st.markdown("---")
+                            st.markdown("##### 📦 Controle de Depósito e Almoxarifado (Pós-Empenho)")
+                            empenho_val = st.text_input("Nº da Nota de Empenho (NE):", value=info_forn.get("empenho", ""), key=f"ne_deposito_{forn}_{i}")
+                            
+                            btn_salvar_req = st.form_submit_button("💾 Salvar Dados da Requisição e Depósito", type="primary")
+                            
+                            if btn_salvar_req:
+                                if "doc_info" not in banco_dados[nc_selecionada_vis]:
+                                    banco_dados[nc_selecionada_vis]["doc_info"] = {}
+                                banco_dados[nc_selecionada_vis]["doc_info"][forn] = {
+                                    "diex": diex_val, "eb": eb_val, "data": data_val, "assunto": assunto_val, "empenho": empenho_val
+                                }
+                                salvar_dados(banco_dados)
+                                st.session_state.banco = banco_dados
+                                st.success("Dados salvos e atualizados!")
+                                st.rerun()
+                        
+                        if info_forn.get("empenho"):
+                            st.success(f"📦 **Depósito Vinculado:** DIEx nº **{info_forn.get('diex', 'S/N')}** ➔ NE: **{info_forn.get('empenho')}**")
+
+                        diex_display = info_forn.get("diex", "") if info_forn.get("diex", "") else "______"
+                        eb_display = info_forn.get("eb", "") if info_forn.get("eb", "") else "_________________"
+                        data_display = info_forn.get("data", "") if info_forn.get("data", "") else "____ de _______________ de 2026"
+                        assunto_display = info_forn.get("assunto", "") if info_forn.get("assunto", "") else "______________________"
+                        local_display = html_cidade
+                        
+                        linhas_tabela_html = ""
+                        soma_total_forn = 0.0
+                        pregao_atual = df_forn_atual["Pregão"].iloc[0] if not df_forn_atual.empty else ""
+                        uasg_atual = df_forn_atual["UASG"].iloc[0] if not df_forn_atual.empty else ""
+                        cnpj_atual = df_forn_atual["CNPJ"].iloc[0] if not df_forn_atual.empty else ""
+                        
+                        for _, row in df_forn_atual.iterrows():
+                            v_unit = float(row['Valor Unitário'])
+                            qtd = int(row['Qtd'])
+                            v_total = v_unit * qtd
+                            soma_total_forn += v_total
+                            
+                            v_unit_str = f"R$ {v_unit:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                            v_total_str = f"R$ {v_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                            
+                            subitem_val = str(row.get('Subitem', '') or '').strip()
+                            if not subitem_val:
+                                subitem_val = determinar_subitem(nd_vinculada, row.get('Nome', ''))
+                            
+                            linhas_tabela_html += f"""
+                            <tr>
+                                <td>{row['Item']}</td>
+                                <td>{subitem_val}</td>
+                                <td style="text-align: left; padding-left: 5px;">{row['Nome']}</td>
+                                <td>{qtd}</td>
+                                <td>{v_unit_str}</td>
+                                <td>{v_total_str}</td>
+                            </tr>
+                            """
+                            
+                        total_geral_str = f"R$ {soma_total_forn:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                        
+                        html_template = f"""
+                        <html>
+                        <head>
+                        <style>
+                            @media print {{
+                                @page {{ margin: 0; }} 
+                                body {{ padding: 2cm; background-color: white; }} 
+                                .no-print {{ display: none !important; }}
+                                .editable-doc {{ box-shadow: none !important; border: none !important; padding: 0 !important; max-width: 100%; margin: 0 !important; }}
+                                .quebra-pagina {{ page-break-before: always; }}
+                            }}
+                            body {{ font-family: 'Times New Roman', Times, serif; color: black; background-color: #f8f9fa; margin: 0; }}
+                            .editable-doc {{
+                                padding: 40px; background-color: white; max-width: 800px; margin: 20px auto; 
+                                border: 1px solid #ccc; box-shadow: 2px 2px 10px #aaa;
+                            }}
+                            table.borda, .borda th, .borda td {{
+                                border: 1px solid black; border-collapse: collapse;
+                            }}
+                            .borda th, .borda td {{ padding: 5px; text-align: center; }}
+                            .separador-tela {{
+                                border-top: 2px dashed #ccc; color: #999; text-align: center; margin: 40px 0;
+                                padding-top: 10px; font-size: 12px; font-family: Arial, sans-serif;
+                            }}
+                        </style>
+                        </head>
+                        <body>
+                        <div class="no-print" style="text-align: center; margin-bottom: 20px; padding-top: 20px;">
+                            <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #28a745; color: white; border: none; border-radius: 5px; font-weight: bold;">
+                                🖨️ Imprimir / Salvar como PDF
+                            </button>
+                        </div>
+                    
+                        <div class="editable-doc">
+                            <table style="width: 100%; border: none;">
+                                <tr style="border: none;">
+                                    <td style="width: 30%; border: none;"></td>
+                                    <td style="width: 40%; border: none; text-align: center; vertical-align: top;">
+                                        <img src="https://upload.wikimedia.org/wikipedia/commons/b/bf/Coat_of_arms_of_Brazil.svg" width="80">
+                                    </td>
+                                    <td style="width: 30%; border: none; text-align: center; vertical-align: top; font-weight: bold; font-size: 14px; line-height: 1.2;">
+                                        VISTO<br><br>_________________<br>Fisc Adm
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <div style="text-align: center; line-height: 1.2;">
+                                <b>MINISTÉRIO DA DEFESA</b><br>
+                                <b>EXÉRCITO BRASILEIRO</b><br>
+                                <b>{html_cabecalho_om}</b>
+                            </div>
+                            <br>
+                            
+                            <table style="width: 100%; border: none;">
+                                <tr style="border: none;">
+                                    <td style="border: none; text-align: left; padding: 0;">DIEx nº {diex_display} - {html_ind}<br>EB: {eb_display}</td>
+                                    <td style="border: none; text-align: right; padding: 0;">{local_display}, {data_display}.</td>
+                                </tr>
+                            </table>
+                            <br>
+                            <div style="line-height: 1.5;">
+                                <b>Do:</b> {html_rem}<br>
+                                <b>Ao:</b> Sr Fiscal Administrativo<br>
+                                <b>Assunto:</b> aquisição de {assunto_display}
+                            </div>
+                            <br>
+                            <div style="text-align: justify; text-indent: 30px; line-height: 1.5;">
+                                1. Nos termos contidos na lei 14.133/2021, solicito-vos providências junto ao Ordenador de Despesas no sentido de aprovar o empenho da despesa para aquisição de material, com os respectivos recursos e destinos:
+                            </div>
+                            <div style="margin-left: 30px; line-height: 1.5; margin-top: 10px;">
+                                a) <b>Nota de crédito:</b> {nc_selecionada_vis} &nbsp;&nbsp;&nbsp; b) <b>PI:</b> {pi_vinculado}; <b>ND:</b> {nd_vinculada}<br>
+                                <b>Edital de Pregão:</b> {pregao_atual} / <b>UASG:</b> {uasg_atual} / <b>Tipo de Empenho:</b> Ordinário<br>
+                                <b>Empresa:</b> {cnpj_atual} – {forn}
+                            </div>
+                            <br>
+                            <table class="borda" style="width: 100%;">
+                                <tr style="font-weight: bold; background-color: #f2f2f2;">
+                                    <td>Item</td><td>Sub Item</td><td>Nomenclatura</td><td>Qtd</td><td>Valor Unitário</td><td>Valor Total</td>
+                                </tr>
+                                {linhas_tabela_html}
+                                <tr style="font-weight: bold;">
+                                    <td colspan="5">TOTAL</td><td>{total_geral_str}</td>
+                                </tr>
+                            </table>
+                            <br>
+                            <div style="text-align: justify; text-indent: 30px; line-height: 1.5;">
+                                2. O material solicitado deverá ser empenhado na empresa vencedora do item acima citado, proveniente de seu respectivo Pregão Eletrônico.
+                            </div>
+                            <br><br>
+                            <div style="text-align: center; line-height: 1.2;">
+                                <b>{html_ass_nome}</b><br>
+                                {html_ass_func}
+                            </div>
+                            
+                            <div class="separador-tela no-print">
+                                ✂️ --- QUEBRA DE PÁGINA --- ✂️
+                            </div>
+                            
+                            <div class="quebra-pagina" style="padding-top: 10px; line-height: 1.5; font-size: 14px;">
+                                <b>DESPACHO DO OD:</b><br>
+                                1. Autorizo a aquisição do material relacionado na letra b) do número 1);<br>
+                                2. Empregar os recursos provenientes da nota de crédito relacionado na letra a);<br>
+                                3. A SALC inicie os procedimentos legais, conforme legislação em vigor para empenho da despesa.<br>
+                                <br><br>
+                                <div style="text-align: center; line-height: 1.2;">
+                                    <b>{html_od_nome}</b><br>
+                                    {html_od_func}
+                                </div>
+                            </div>
+                        </div>
+                        </body>
+                        </html>
+                        """
+                        components.html(html_template, height=800, scrolling=True)
+                    
+                    cfg_colunas = {
+                        "Item": st.column_config.NumberColumn("Item", min_value=1, step=1, required=True),
+                        "Subitem": st.column_config.TextColumn("Sub Item", help="Subitem da despesa (2 últimos dígitos da ND)", max_chars=10),
+                        "Nome": st.column_config.TextColumn("Nome", required=True),
+                        "Qtd": st.column_config.NumberColumn("Qtd", min_value=0, step=1, required=True),
+                        "Valor Unitário": st.column_config.NumberColumn("Valor Unitário", min_value=0.0, step=0.01, format="R$ %.2f", required=True),
+                        "Total": st.column_config.NumberColumn("Total", format="R$ %.2f"),
+                        "UASG": st.column_config.TextColumn("UASG"),
+                        "Pregão": st.column_config.TextColumn("Pregão"),
+                        "Ata": st.column_config.TextColumn("Ata"),
+                        "Fornecedor": st.column_config.TextColumn("Fornecedor"),
+                        "CNPJ": st.column_config.TextColumn("CNPJ"),
+                        "Situação": st.column_config.SelectboxColumn(
+                            "Situação",
+                            options=["Planejamento", "Aguardando entrega", "Recebido"],
+                            required=True,
+                            help="Clique para selecionar a Situação do Item"
+                        )
+                    }
+                    ordem_col = ["Item", "Subitem", "Nome", "Qtd", "Valor Unitário", "Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG"]
+                    
+                    if tipo_perfil == "Fiscal":
+                        st.dataframe(df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, hide_index=True, use_container_width=True)
+                        total_desse_forn = df_forn_atual["Total"].sum()
+                        st.markdown(f"""
+                        <div style="display: flex; justify-content: flex-end; margin-top: 8px; margin-bottom: 16px;">
+                            <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); display: flex; gap: 10px; align-items: baseline;">
+                                <span style="font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total {forn}:</span>
+                                <span style="font-size: 18px; font-weight: 800; color: #1e3a29;">R$ {total_desse_forn:,.2f}</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    else:
+                        df_editado_forn = st.data_editor(
+                            df_forn_atual, column_order=ordem_col, column_config=cfg_colunas, disabled=["Total"], 
+                            num_rows="dynamic", use_container_width=True, hide_index=True,
+                            key=f"editor_forn_{nc_selecionada_vis}_{forn.replace(' ', '_')}_{i}"
+                        )
+                        
+                        cols_cmp = [c for c in df_forn_atual.columns if c not in ["Total", "_uid"]]
+                        dict_antigo = df_forn_atual[cols_cmp].fillna("").to_dict("records")
+                        dict_novo = df_editado_forn[cols_cmp].fillna("").to_dict("records")
+                        
+                        if dict_antigo != dict_novo:
+                            houve_alteracao = True
+                        
+                        v_unit_num = pd.to_numeric(df_editado_forn["Valor Unitário"], errors="coerce").fillna(0.0)
+                        qtd_num = pd.to_numeric(df_editado_forn["Qtd"], errors="coerce").fillna(0).astype(int)
+                        df_editado_forn["Total"] = v_unit_num * qtd_num
+                        total_desse_forn = df_editado_forn["Total"].sum()
+                        
+                        st.markdown(f"""
+                        <div style="display: flex; justify-content: flex-end; margin-top: 8px; margin-bottom: 16px;">
+                            <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); display: flex; gap: 10px; align-items: baseline;">
+                                <span style="font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total {forn}:</span>
+                                <span style="font-size: 18px; font-weight: 800; color: #1e3a29;">R$ {total_desse_forn:,.2f}</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        st.write("") 
+                        
+                        df_atualizado_acumulado.append((forn, df_forn_atual, df_editado_forn))
+                
+                if tipo_perfil != "Fiscal" and houve_alteracao:
+                    uids_excluidos = set()
+                    uids_adicionados_ou_atualizados = {}
+                    
+                    for forn_nome, df_original, df_edit in df_atualizado_acumulado:
+                        uids_orig = set(df_original["_uid"].dropna().unique()) if "_uid" in df_original.columns else set()
+                        uids_novos = set(df_edit["_uid"].dropna().unique()) if "_uid" in df_edit.columns else set()
+                        
+                        uids_excluidos.update(uids_orig - uids_novos)
+                        
+                        for r in df_edit.to_dict(orient="records"):
+                            uid_item = r.get("_uid")
+                            if not uid_item or pd.isna(uid_item) or str(uid_item).strip() == "":
+                                uid_item = f"it_{nc_selecionada_vis}_{uuid.uuid4().hex[:8]}"
+                            
+                            qtd_val = int(pd.to_numeric(r.get("Qtd", 0), errors="coerce") or 0)
+                            v_unit_val = float(pd.to_numeric(r.get("Valor Unitário", 0.0), errors="coerce") or 0.0)
+                            total_val = qtd_val * v_unit_val
+                            
+                            dados_salvar = {
+                                "_uid": uid_item,
+                                "Item": int(pd.to_numeric(r.get("Item", 1), errors="coerce") or 1),
+                                "Subitem": str(r.get("Subitem", "") or "").strip(),
+                                "Nome": str(r.get("Nome", "") or "").strip(),
+                                "Qtd": qtd_val,
+                                "Valor Unitário": v_unit_val,
+                                "Total": total_val,
+                                "Situação": str(r.get("Situação", "Planejamento") or "Planejamento"),
+                                "Fornecedor": str(r.get("Fornecedor", forn_nome) or forn_nome).strip().upper(),
+                                "CNPJ": formatar_cnpj(str(r.get("CNPJ", "") or "")),
+                                "Pregão": str(r.get("Pregão", "") or ""),
+                                "Ata": str(r.get("Ata", "") or ""),
+                                "UASG": str(r.get("UASG", "") or "")
+                            }
+                            uids_adicionados_ou_atualizados[uid_item] = dados_salvar
+                    
+                    nova_lista_itens = []
+                    for it_bd in banco_dados[nc_selecionada_vis]["itens"]:
+                        uid_bd = it_bd.get("_uid")
+                        if uid_bd in uids_excluidos:
+                            continue
+                        if uid_bd in uids_adicionados_ou_atualizados:
+                            nova_lista_itens.append(uids_adicionados_ou_atualizados.pop(uid_bd))
+                        else:
+                            nova_lista_itens.append(it_bd)
+                    
+                    for novo_uid, novo_obj in uids_adicionados_ou_atualizados.items():
+                        nova_lista_itens.append(novo_obj)
+                    
+                    banco_dados[nc_selecionada_vis]["itens"] = nova_lista_itens
+                    salvar_dados(banco_dados)
+                    st.session_state.banco = banco_dados
+                    st.toast("✅ Alterações salvas com sucesso!")
+                    st.rerun()
     else:
          st.info("Nenhuma NC cadastrada para este ano nesta seção.")
 
@@ -4145,7 +4266,7 @@ with tab_visao_global:
         """, unsafe_allow_html=True)
         
         st.markdown("---")
-        df_pivot = df_agrupado.pivot(index="ND", columns="Situação", values="Valor Total").fillna(0)
+        df_pivot = df_agrupado.pivot_table(index="ND", columns="Situação", values="Valor Total", aggfunc="sum").fillna(0)
         df_pivot["Total Geral por ND"] = df_pivot.sum(axis=1)
         for col in df_pivot.columns:
             df_pivot[col] = df_pivot[col].apply(lambda x: f"R$ {x:,.2f}")
@@ -4250,21 +4371,36 @@ with tab_consulta_pregoes:
                             idx_it_sel = opcoes_import.index(it_escolhido_str)
                             item_alvo = itens_pr[idx_it_sel]
 
-                            ncs_disponiveis = [k for k in banco_dados.keys() if k != "CONFIG_REQUISICAO"]
+                            ncs_do_ano = [k for k in banco_dados.keys() if k != "CONFIG_REQUISICAO" and extrair_ano(k) == ano_selecionado]
+                            ncs_disponiveis = sorted(ncs_do_ano) if ncs_do_ano else sorted([k for k in banco_dados.keys() if k != "CONFIG_REQUISICAO"])
                             
                             if not ncs_disponiveis:
                                 st.warning("⚠️ Você ainda não tem nenhuma Nota de Crédito cadastrada. Cadastre uma NC na aba '1. Cadastrar e Lançar Compras' antes de importar itens.")
                             else:
-                                with st.form(f"form_importar_item_{chave_p}_{item_alvo['Item']}"):
+                                idx_nc_ini = 0
+                                nc_ativa_ctx = st.session_state.get("vis_item_select_nc", "")
+                                if nc_ativa_ctx in ncs_disponiveis:
+                                    idx_nc_ini = ncs_disponiveis.index(nc_ativa_ctx)
+                                
+                                nc_destino = st.selectbox(
+                                    "🎯 Selecione a Nota de Crédito (NC) de Destino para este Item:",
+                                    ncs_disponiveis,
+                                    index=idx_nc_ini,
+                                    key=f"sel_nc_dest_{chave_p}_{item_alvo['Item']}"
+                                )
+                                nd_dest = banco_dados.get(nc_destino, {}).get("nd", "") if nc_destino in banco_dados else ""
+                                pi_dest = banco_dados.get(nc_destino, {}).get("pi", "") if nc_destino in banco_dados else ""
+                                st.caption(f"📌 **Destino Selecionado:** `{nc_destino}` | **ND:** `{nd_dest or 'Não informada'}` | **PI:** `{pi_dest or 'Não informado'}`")
+
+                                with st.form(f"form_importar_item_{chave_p}_{item_alvo['Item']}_{nc_destino}"):
                                     st.markdown(f"**Item Selecionado:** `{item_alvo['Item']}` - {item_alvo['Descrição']}")
                                     st.markdown(f"• **Fornecedor Identificado:** `{item_alvo['Fornecedor']}`")
                                     st.markdown(f"• **Ata Vinculada:** `{item_alvo['Ata Vinculada']}` | **Pregão:** `{row_p['Nº da Licitação']}`")
 
                                     c_imp1, c_imp2, c_imp3 = st.columns(3)
                                     with c_imp1:
-                                        nc_destino = st.selectbox("Vincular à Nota de Crédito (NC):", ncs_disponiveis)
+                                        st.text_input("NC de Destino (Confirmada):", value=nc_destino, disabled=True)
                                     with c_imp2:
-                                        # Puxa o saldo real garantido (Fórmula: Registrada - Empenhada)
                                         saldo_num = int(converter_para_float(item_alvo.get("Saldo p/ Empenho", "0")))
                                         if saldo_num <= 0:
                                             st.caption("⚠️ Item com Saldo 0 (Totalmente Empenhado)")
@@ -4272,11 +4408,9 @@ with tab_consulta_pregoes:
                                         else:
                                             qtd_para_importar = st.number_input("Quantidade a Empenhar / Comprar:", min_value=1, value=saldo_num, step=1)
                                     with c_imp3:
-                                        # Puxa o Valor Unitário real sugerido já preenchido
                                         v_sug = float(item_alvo.get("Valor Unitario Sugerido", 0.0))
                                         valor_unit_imp = st.number_input("Valor Unitário (R$):", min_value=0.0, value=v_sug, step=0.01)
 
-                                    nd_dest = banco_dados.get(nc_destino, {}).get("nd", "") if nc_destino in banco_dados else ""
                                     opcoes_sub_imp, idx_sub_imp, mapa_sub_imp = montar_opcoes_subitem(nd_dest, item_alvo.get("Descrição", ""))
 
                                     c_imp4, c_imp5, c_imp6 = st.columns(3)
@@ -4312,7 +4446,6 @@ with tab_consulta_pregoes:
                                             cnpj_puro = item_alvo.get("CNPJ Puro", "")
                                             forn_puro = item_alvo.get("Fornecedor Puro", "")
                                             
-                                            # Garante a resolução da Razão Social do Fornecedor e CNPJ
                                             if cnpj_puro and (not forn_puro or forn_puro == cnpj_puro or len(re.findall(r"[A-Za-zÀ-ÿ]{3,}", forn_puro)) == 0):
                                                 nome_rec = consultar_razao_social_cnpj(cnpj_puro)
                                                 if nome_rec:
@@ -4324,6 +4457,7 @@ with tab_consulta_pregoes:
                                             sub_final_imp = subitem_imp_final if subitem_imp_final else determinar_subitem(nd_dest, item_alvo.get("Descrição", ""))
 
                                             novo_item_nc = {
+                                                "_uid": f"it_{nc_destino}_{int(time.time())}_{uuid.uuid4().hex[:6]}",
                                                 "Item": int(item_alvo["Item"]) if str(item_alvo["Item"]).isdigit() else 1,
                                                 "Subitem": sub_final_imp,
                                                 "Nome": item_alvo["Descrição"].strip(),
@@ -4341,11 +4475,15 @@ with tab_consulta_pregoes:
                                             if nc_destino not in banco_dados:
                                                 st.error("Nota de Crédito não encontrada.")
                                             else:
+                                                if "itens" not in banco_dados[nc_destino]:
+                                                    banco_dados[nc_destino]["itens"] = []
                                                 banco_dados[nc_destino]["itens"].append(novo_item_nc)
                                                 salvar_dados(banco_dados)
                                                 st.session_state.banco = banco_dados
+                                                st.session_state["vis_item_select_nc"] = nc_destino
                                                 st.success(f"🎉 Item nº {item_alvo['Item']} importado com sucesso para a NC **{nc_destino}** com valor de R$ {valor_unit_imp:,.2f}!")
                                                 st.toast(f"Item {item_alvo['Item']} adicionado à NC {nc_destino}!")
+                                                st.rerun()
                     else:
                         st.warning("Nenhum item localizado no pregão.")
 
@@ -4354,59 +4492,301 @@ with tab_consulta_pregoes:
 # =====================================================================
 with tab_acessos:
     if tipo_perfil == "Operador":
-        st.warning("⚠️ **Acesso Restrito:** O seu perfil de Operador não tem permissão para cadastrar novos usuários.")
+        st.warning("⚠️ **Acesso Restrito:** O seu perfil de Operador não tem permissão para gerenciar usuários ou transferir perfis.")
     else:
-        st.subheader("👥 Painel de Controle de Usuários")
+        st.subheader("👥 Gestão de Acessos, Equipe e Transferência de Funções")
+        
+        # Recupera usuários do Supabase de acordo com a hierarquia
         if tipo_perfil == "Chefe":
-            st.info(f"Como **Chefe**, você pode criar contas de novos **Operadores** para a seção {secao_user}.")
-            opcoes_perfil_novo = ["Operador"]
-            secoes_permitidas = [secao_user]
+            st.info(f"👑 **Painel do Chefe de Seção ({secao_user}):** Você visualiza os integrantes da sua seção, pode cadastrar novos Operadores e transferir a Chefia da Seção.")
+            resp_membros = supabase.table("usuarios").select("id, nome, perfil, secao, om").eq("om", om_user).eq("secao", secao_user).execute()
         else:
-            st.info(f"Como **Fiscal**, você pode cadastrar os **Chefes** e **Operadores** de qualquer seção do {om_user}.")
-            opcoes_perfil_novo = ["Chefe", "Operador"]
+            st.info(f"🛡️ **Painel do Fiscal da OM ({om_user}):** Você tem visão corporativa completa de todas as seções, pode cadastrar Chefes/Operadores e transferir a função de Fiscal Administrativo.")
+            resp_membros = supabase.table("usuarios").select("id, nome, perfil, secao, om").eq("om", om_user).execute()
+        
+        membros_raw = resp_membros.data if resp_membros.data else []
+        
+        # Abas internas para organização exemplar
+        aba_equipe_vis, aba_transferir, aba_cadastrar_user = st.tabs([
+            "📋 Integrantes Cadastrados",
+            "🔄 Transferência de Perfil / Função",
+            "➕ Cadastrar Novo Militar"
+        ])
+        
+        # -------------------------------------------------------------
+        # 1. INTEGRANTES CADASTRADOS (VISUALIZAÇÃO DE SUBORDINADOS)
+        # -------------------------------------------------------------
+        with aba_equipe_vis:
+            st.markdown("#### 📋 Militares Cadastrados na sua Esfera de Gestão")
             
-            resp_secoes_gerais = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
-            secoes_permitidas = sorted(list(set([r["secao"] for r in resp_secoes_gerais.data])))
-            secoes_permitidas.append("NOVA SEÇÃO...")
-            
-        with st.form("form_novo_usuario_interno"):
-            col_add1, col_add2 = st.columns(2)
-            with col_add1:
-                novo_int_user = st.text_input("Usuário de Login:").strip().lower()
-                novo_int_nome = st.text_input("Nome/Posto (Ex: Cb Silva):")
-            with col_add2:
-                novo_int_senha = st.text_input("Definir Senha Temporária:", type="password")
-                novo_int_perfil = st.selectbox("Nível de Acesso:", opcoes_perfil_novo)
-                
             if tipo_perfil == "Fiscal":
-                secao_selecionada = st.selectbox("Vincular à Seção:", secoes_permitidas)
-                if secao_selecionada == "NOVA SEÇÃO...":
-                    secao_final = st.text_input("Digite o nome da Nova Seção (Ex: ALMOX):").strip().upper()
-                else:
-                    secao_final = secao_selecionada
-            else:
-                secao_final = secao_user
+                secoes_encontradas = sorted(list(set([m["secao"] for m in membros_raw if m.get("secao")])))
+                col_f_sec, col_f_busca = st.columns([1, 2])
+                with col_f_sec:
+                    filtro_sec_view = st.selectbox("Filtrar por Seção:", ["Todas as Seções"] + secoes_encontradas)
+                with col_f_busca:
+                    termo_busca_user = st.text_input("Buscar por Nome ou Login:", placeholder="Digite para filtrar...").strip().lower()
                 
-            if st.form_submit_button("Cadastrar Novo Militar", type="primary", use_container_width=True):
-                if not novo_int_user or not novo_int_senha or not novo_int_nome or not secao_final:
-                    st.warning("Preencha todos os campos para cadastrar o militar.")
+                membros_filtrados = [
+                    m for m in membros_raw 
+                    if (filtro_sec_view == "Todas as Seções" or m.get("secao") == filtro_sec_view)
+                    and (not termo_busca_user or termo_busca_user in (m.get("nome") or "").lower() or termo_busca_user in (m.get("id") or "").lower())
+                ]
+            else:
+                termo_busca_user = st.text_input("Buscar militar na seção:", placeholder="Digite o nome ou login...").strip().lower()
+                membros_filtrados = [
+                    m for m in membros_raw 
+                    if not termo_busca_user or termo_busca_user in (m.get("nome") or "").lower() or termo_busca_user in (m.get("id") or "").lower()
+                ]
+            
+            # Métricas da equipe
+            total_integrantes = len(membros_filtrados)
+            qtd_chefes = len([m for m in membros_filtrados if m.get("perfil") == "Chefe"])
+            qtd_operadores = len([m for m in membros_filtrados if m.get("perfil") == "Operador"])
+            qtd_fiscais = len([m for m in membros_filtrados if m.get("perfil") == "Fiscal"])
+            
+            m_c1, m_c2, m_c3, m_c4 = st.columns(4)
+            with m_c1:
+                st.metric("Total de Integrantes", total_integrantes)
+            with m_c2:
+                st.metric("Chefes de Seção", qtd_chefes)
+            with m_c3:
+                st.metric("Operadores", qtd_operadores)
+            with m_c4:
+                st.metric("Fiscais", qtd_fiscais)
+                
+            st.write("")
+            
+            if membros_filtrados:
+                dados_tabela_equipe = []
+                for m in membros_filtrados:
+                    eh_voce = " (Você)" if m["id"] == usuario_atual else ""
+                    dados_tabela_equipe.append({
+                        "Login / ID": m.get("id"),
+                        "Nome / Posto": m.get("nome"),
+                        "Perfil": m.get("perfil"),
+                        "Seção": m.get("secao"),
+                        "Situação": f"Ativo{eh_voce}"
+                    })
+                df_equipe = pd.DataFrame(dados_tabela_equipe)
+                st.dataframe(df_equipe, use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum militar localizado com os filtros informados.")
+
+            st.write("")
+            st.markdown("##### 🗑️ Excluir Operador")
+            if tipo_perfil == "Chefe":
+                ops_disponiveis_del = [m for m in membros_raw if m.get("secao") == secao_user and m.get("perfil") == "Operador" and m.get("id") != usuario_atual]
+            else:
+                ops_disponiveis_del = [m for m in membros_raw if m.get("perfil") == "Operador" and m.get("id") != usuario_atual]
+
+            if not ops_disponiveis_del:
+                st.caption("ℹ️ Nenhum operador disponível para exclusão nesta seção/OM.")
+            else:
+                with st.expander("🗑️ Excluir Operador do Sistema", expanded=False):
+                    st.caption("Remova permanentemente o acesso de um Operador à sua seção/OM.")
+                    mapa_del = {
+                        f"{op.get('nome')} (login: {op.get('id')}) — Seção: {op.get('secao')}": op 
+                        for op in ops_disponiveis_del
+                    }
+                    sel_del_label = st.selectbox("Selecione o Operador para remover:", list(mapa_del.keys()), key="sel_op_para_excluir")
+                    op_del_obj = mapa_del[sel_del_label]
+                    
+                    st.warning(f"Atenção: O operador **{op_del_obj.get('nome')}** (login: `{op_del_obj.get('id')}`) perderá totalmente o acesso ao sistema.")
+                    conf_del = st.checkbox(
+                        f"Declaro que confirmo a exclusão definitiva do operador {op_del_obj.get('nome')}.", 
+                        key=f"chk_del_{op_del_obj.get('id')}"
+                    )
+                    
+                    if st.button("🗑️ Excluir Operador Definitivamente", type="secondary", key=f"btn_del_{op_del_obj.get('id')}"):
+                        if not conf_del:
+                            st.error("Marque a caixa de confirmação para autorizar a exclusão.")
+                        else:
+                            try:
+                                supabase.table("usuarios").delete().eq("id", op_del_obj["id"]).execute()
+                                st.success(f"Operador **{op_del_obj.get('nome')}** excluído com sucesso!")
+                                st.toast("Operador excluído com sucesso!")
+                                st.rerun()
+                            except Exception as e_del:
+                                st.error(f"Erro ao excluir operador: {e_del}")
+
+        # -------------------------------------------------------------
+        # 2. TRANSFERÊNCIA DE PERFIL / FUNÇÃO (PASSAGEM DE COMANDO/CHEFIA)
+        # -------------------------------------------------------------
+        with aba_transferir:
+            st.markdown("#### 🔄 Passagem e Transferência de Função")
+            
+            if tipo_perfil == "Chefe":
+                st.markdown(f"""
+                Você está conectado como **Chefe da Seção {secao_user}**.  
+                Neste painel, você pode transferir a Chefia da Seção para um dos **Operadores** cadastrados na sua seção.  
+                **Atenção às regras:**
+                - O Operador selecionado será promovido a **Chefe** da Seção **{secao_user}**.
+                - O seu usuário atual (`{usuario_atual}`) continuará acessando normalmente o sistema, mas passará a ter o perfil de **Operador**.
+                """)
+                
+                operadores_secao = [
+                    m for m in membros_raw 
+                    if m.get("secao") == secao_user and m.get("perfil") == "Operador" and m.get("id") != usuario_atual
+                ]
+                
+                if not operadores_secao:
+                    st.warning(f"⚠️ Não há nenhum **Operador** cadastrado na seção **{secao_user}** para o qual transferir a chefia. Cadastre um operador na aba 'Cadastrar Novo Militar' antes de realizar a transferência.")
                 else:
-                    verifica_existencia = supabase.table("usuarios").select("id").eq("id", novo_int_user).execute()
-                    if len(verifica_existencia.data) > 0:
-                        st.error("Este usuário já existe no sistema.")
+                    mapa_op_chefe = {
+                        f"{op['nome']} (login: {op['id']})": op
+                        for op in operadores_secao
+                    }
+                    
+                    op_sel_label = st.selectbox(
+                        "Selecione o militar para assumir a Chefia da Seção:",
+                        list(mapa_op_chefe.keys()),
+                        key="sel_transf_chefe_box"
+                    )
+                    candidato_chefe = mapa_op_chefe[op_sel_label]
+                    
+                    st.info(f"O militar **{candidato_chefe['nome']}** passará a ser o novo Chefe da Seção {secao_user}.")
+                    confirma_chefe = st.checkbox(
+                        f"Declaro que estou ciente da passagem da Chefia para {candidato_chefe['nome']} e que meu perfil passará a ser Operador.",
+                        key=f"chk_transf_chefe_{candidato_chefe['id']}"
+                    )
+                    
+                    btn_transf_chefe = st.button("🔄 Confirmar Transferência de Chefia", type="primary", use_container_width=True, key="btn_transf_chefia_act")
+                    if btn_transf_chefe:
+                        if not confirma_chefe:
+                            st.error("Você deve marcar a caixa de confirmação para efetivar a transferência.")
+                        else:
+                            try:
+                                # Promove o operador a Chefe
+                                supabase.table("usuarios").update({"perfil": "Chefe"}).eq("id", candidato_chefe["id"]).execute()
+                                # Atualiza o perfil do chefe atual para Operador
+                                supabase.table("usuarios").update({"perfil": "Operador"}).eq("id", usuario_atual).execute()
+                                
+                                st.success(f"🎉 Chefia da Seção {secao_user} transferida com sucesso para {candidato_chefe['nome']}! Seu perfil foi alterado para Operador.")
+                                st.toast("Transferência concluída com sucesso!")
+                                st.rerun()
+                            except Exception as e_transf:
+                                st.error(f"Erro ao processar transferência: {e_transf}")
+            
+            elif tipo_perfil == "Fiscal":
+                st.markdown(f"""
+                Você está conectado como **Fiscal Administrativo Geral do {om_user}**.  
+                Neste painel, você pode transferir a função de Fiscal da OM para qualquer outro militar cadastrado na OM (seja ele Chefe ou Operador de qualquer seção).  
+                **Atenção às regras:**
+                - O militar selecionado assumirá o perfil de **Fiscal** geral da OM **{om_user}**.
+                - O seu perfil atual passará a ser **Chefe** da sua seção (`{secao_user}`).
+                """)
+                
+                outros_militares_om = [
+                    m for m in membros_raw 
+                    if m.get("id") != usuario_atual
+                ]
+                
+                if not outros_militares_om:
+                    st.warning(f"⚠️ Não há outros militares cadastrados no **{om_user}**. Cadastre novos militares antes de transferir a função de Fiscal.")
+                else:
+                    mapa_mil_fiscal = {
+                        f"{m['nome']} — Seção: {m['secao']} (Perfil atual: {m['perfil']}) [login: {m['id']}]": m
+                        for m in outros_militares_om
+                    }
+                    
+                    m_sel_label = st.selectbox(
+                        "Selecione o militar para assumir a função de Fiscal da OM:",
+                        list(mapa_mil_fiscal.keys()),
+                        key="sel_transf_fiscal_box"
+                    )
+                    candidato_fiscal = mapa_mil_fiscal[m_sel_label]
+                    
+                    perfil_destino_antigo = st.selectbox(
+                        "Definir o seu novo perfil após a transferência:",
+                        ["Chefe", "Operador"],
+                        help="Qual perfil você passará a ter na sua seção.",
+                        key="sel_perfil_antigo_fiscal_box"
+                    )
+                    
+                    st.info(f"O militar **{candidato_fiscal['nome']}** ({candidato_fiscal['secao']}) passará a ser o novo Fiscal da OM. Seu perfil será alterado para **{perfil_destino_antigo}** da seção {secao_user}.")
+                    confirma_fiscal = st.checkbox(
+                        f"Declaro que estou ciente da transferência da função de Fiscal da OM para {candidato_fiscal['nome']}.",
+                        key=f"chk_transf_fisc_{candidato_fiscal['id']}"
+                    )
+                    
+                    btn_transf_fiscal = st.button("🔄 Confirmar Transferência de Fiscal da OM", type="primary", use_container_width=True, key="btn_transf_fiscal_act")
+                    if btn_transf_fiscal:
+                        if not confirma_fiscal:
+                            st.error("Você deve marcar a caixa de confirmação para efetivar a transferência.")
+                        else:
+                            try:
+                                # Promove o militar selecionado a Fiscal
+                                supabase.table("usuarios").update({"perfil": "Fiscal"}).eq("id", candidato_fiscal["id"]).execute()
+                                # Atualiza o fiscal atual para Chefe ou Operador
+                                supabase.table("usuarios").update({"perfil": perfil_destino_antigo}).eq("id", usuario_atual).execute()
+                                
+                                st.success(f"🎉 Função de Fiscal da OM transferida com sucesso para {candidato_fiscal['nome']}! Seu perfil foi atualizado para {perfil_destino_antigo}.")
+                                st.toast("Transferência de Fiscal concluída com sucesso!")
+                                st.rerun()
+                            except Exception as e_fisc:
+                                st.error(f"Erro ao processar transferência de Fiscal: {e_fisc}")
+
+
+        # -------------------------------------------------------------
+        # 3. CADASTRAR NOVO MILITAR NA EQUIPE
+        # -------------------------------------------------------------
+        with aba_cadastrar_user:
+            st.markdown("#### ➕ Cadastro de Novo Integrante")
+            if tipo_perfil == "Chefe":
+                st.info(f"Como **Chefe**, você cadastra novos **Operadores** diretamente para a seção **{secao_user}**.")
+                opcoes_perfil_novo = ["Operador"]
+                secoes_permitidas = [secao_user]
+            else:
+                st.info(f"Como **Fiscal**, você pode cadastrar **Chefes** e **Operadores** para qualquer seção do **{om_user}**.")
+                opcoes_perfil_novo = ["Chefe", "Operador"]
+                
+                resp_secoes_gerais = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
+                secoes_permitidas = sorted(list(set([r["secao"] for r in resp_secoes_gerais.data if r.get("secao")])))
+                if not secoes_permitidas:
+                    secoes_permitidas = [secao_user]
+                secoes_permitidas.append("NOVA SEÇÃO...")
+                
+            with st.form("form_novo_usuario_interno"):
+                col_add1, col_add2 = st.columns(2)
+                with col_add1:
+                    novo_int_user = st.text_input("Usuário de Login:").strip().lower()
+                    novo_int_nome = st.text_input("Nome/Posto (Ex: Cb Silva):")
+                with col_add2:
+                    novo_int_senha = st.text_input("Definir Senha Temporária:", type="password")
+                    novo_int_perfil = st.selectbox("Nível de Acesso:", opcoes_perfil_novo)
+                    
+                if tipo_perfil == "Fiscal":
+                    secao_selecionada = st.selectbox("Vincular à Seção:", secoes_permitidas)
+                    if secao_selecionada == "NOVA SEÇÃO...":
+                        secao_final = st.text_input("Digite o nome da Nova Seção (Ex: ALMOX):").strip().upper()
                     else:
-                        supabase.table("usuarios").insert({
-                            "id": novo_int_user, 
-                            "senha": hash_senha(novo_int_senha), 
-                            "nome": novo_int_nome, 
-                            "om": om_user, 
-                            "secao": secao_final, 
-                            "perfil": novo_int_perfil
-                        }).execute()
-                        
-                        id_cofre = f"{om_user}_{secao_final}"
-                        verifica_cofre = supabase.table("dados").select("id").eq("id", id_cofre).execute()
-                        if len(verifica_cofre.data) == 0:
-                            supabase.table("dados").insert({"id": id_cofre, "ncs": {}}).execute()
-                        
-                        st.success(f"✅ Conta criada com senha criptografada para {novo_int_nome} na Seção {secao_final}!")
+                        secao_final = secao_selecionada
+                else:
+                    secao_final = secao_user
+                    
+                if st.form_submit_button("Cadastrar Novo Militar", type="primary", use_container_width=True):
+                    if not novo_int_user or not novo_int_senha or not novo_int_nome or not secao_final:
+                        st.warning("Preencha todos os campos para cadastrar o militar.")
+                    else:
+                        verifica_existencia = supabase.table("usuarios").select("id").eq("id", novo_int_user).execute()
+                        if len(verifica_existencia.data) > 0:
+                            st.error("Este usuário já existe no sistema.")
+                        else:
+                            supabase.table("usuarios").insert({
+                                "id": novo_int_user, 
+                                "senha": hash_senha(novo_int_senha), 
+                                "nome": novo_int_nome, 
+                                "om": om_user, 
+                                "secao": secao_final, 
+                                "perfil": novo_int_perfil
+                            }).execute()
+                            
+                            id_cofre = f"{om_user}_{secao_final}"
+                            verifica_cofre = supabase.table("dados").select("id").eq("id", id_cofre).execute()
+                            if len(verifica_cofre.data) == 0:
+                                supabase.table("dados").insert({"id": id_cofre, "ncs": {}}).execute()
+                            
+                            st.success(f"✅ Conta criada com senha criptografada para {novo_int_nome} na Seção {secao_final}!")
+                            st.toast("Militar cadastrado com sucesso!")
+                            st.rerun()
