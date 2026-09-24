@@ -18,6 +18,8 @@ import streamlit.components.v1 as components
 import hashlib
 import re
 import io
+import os
+import json
 import datetime
 import requests
 from requests.adapters import HTTPAdapter
@@ -46,9 +48,13 @@ def _normalizar_texto(texto: str) -> str:
 STOPWORDS_SUBITEM = {
     "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas", "para", "pra", "com",
     "sem", "por", "e", "ou", "o", "a", "os", "as", "um", "uma", "uns", "umas", "sob",
-    "sobre", "item", "marca", "tipo", "modelo", "unidade", "und", "un", "cx", "pct",
-    "peca", "pecas", "kg", "mm", "cm", "m", "lt", "l", "ml", "cor", "tamanho", "padrao",
-    "conf", "conforme", "especificacao", "edital", "objeto", "aquisicao", "fornecimento", "valor"
+    "sobre", "item", "itens", "marca", "marcas", "tipo", "tipos", "modelo", "modelos",
+    "unidade", "und", "un", "cx", "pct", "peca", "pecas", "kg", "mm", "cm", "m", "lt", "l", "ml",
+    "cor", "tamanho", "padrao", "conf", "conforme", "especificacao", "edital", "objeto",
+    "aquisicao", "fornecimento", "valor", "valores", "material", "materiais", "uso", "usos",
+    "geral", "gerais", "outros", "outras", "outro", "outra", "artigo", "artigos", "produto",
+    "produtos", "registra", "despesas", "despesa", "destinado", "destinados", "destinada",
+    "destinadas", "diversos", "diversa", "diversas", "finalidade", "finalidades"
 }
 
 def extrair_palavras_chave(texto: str) -> List[str]:
@@ -596,6 +602,17 @@ CATALOGO_SUBITENS: Dict[str, List[Dict]] = {   '339030': [   {   'funcao': 'REGI
                                 'E VALVULAS.',
                       'keywords': [   'manutencao imovel',
                                       'construcao',
+                                      'construcao civil',
+                                      'vergalhao',
+                                      'armacao',
+                                      'concreto',
+                                      'ferro',
+                                      'aco',
+                                      'alvenaria',
+                                      'estrutura',
+                                      'viga',
+                                      'coluna',
+                                      'trelica',
                                       'cimento',
                                       'areia',
                                       'brita',
@@ -1531,7 +1548,7 @@ def buscar_correspondencias_subitens(nd: str, descricao_item: str) -> List[Dict]
                         termos_coincidentes.append(p)
                     break
 
-        if score > 0:
+        if score >= 8:
             correspondencias.append({
                 "subitem": item["subitem"],
                 "nd_completa": item["nd_completa"],
@@ -1542,10 +1559,108 @@ def buscar_correspondencias_subitens(nd: str, descricao_item: str) -> List[Dict]
             })
 
     correspondencias.sort(key=lambda x: x["score"], reverse=True)
-    return correspondencias
+    # Se nenhuma atingiu 8 pontos mas houve match, pega a melhor correspondência
+    if not correspondencias:
+        for item in CATALOGO_SUBITENS[grupo]:
+            # repete checagem mínima
+            pass
+    return correspondencias[:5]
+
+_cache_classificacao_ia: Dict[str, Dict] = {}
+
+def classificar_subitem_com_ia(nd: str, descricao_item: str) -> Optional[Dict]:
+    """
+    Utiliza IA (Gemini) para analisar a essência e finalidade do item e apontar
+    com precisão o subitem correspondente da Natureza de Despesa (ND).
+    Retorna dict com 'subitem', 'nome', 'justificativa' ou None.
+    """
+    if not descricao_item or not nd:
+        return None
+    
+    chave_cache = f"{nd}_{descricao_item.strip().lower()}"
+    if chave_cache in _cache_classificacao_ia:
+        return _cache_classificacao_ia[chave_cache]
+    
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        return None
+
+    grupo = identificar_grupo_nd(nd)
+    subitens_disponiveis = CATALOGO_SUBITENS.get(grupo, [])
+    if not subitens_disponiveis:
+        return None
+
+    lista_subitens_txt = "\n".join([
+        f"- {s['subitem']} ({s['nome']}): {s.get('funcao', '')[:140]}..."
+        for s in subitens_disponiveis
+    ])
+
+    prompt = f"""Você é um auditor e especialista em Contabilidade Pública, SIAFI e Execução Orçamentária das Forças Armadas brasileiras.
+Classifique com máxima exatidão o item abaixo no subitem mais apropriado da Natureza de Despesa {nd}.
+
+Item: "{descricao_item}"
+
+Subitens oficiais da ND {nd}:
+{lista_subitens_txt}
+
+Regras:
+1. Avalie a finalidade e emprego real do material ou serviço (ex: vergalhão, ferro armado, cimento, areia e tijolo são materiais de construção civil e alvenaria para manutenção de bens imóveis, subitem 24 na ND 339030).
+2. Selecione apenas 1 subitem da lista oficial.
+3. Responda ESTRITAMENTE em formato JSON com:
+{{
+  "subitem": "código de 2 dígitos",
+  "nome": "nome oficial do subitem",
+  "justificativa": "explicação técnica sucinta (1 a 2 frases) justificando o enquadramento"
+}}
+"""
+
+    models_to_try = ["gemini-3.8-flash", "gemini-3.6-flash"]
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "aistudio-build"
+    }
+
+    for model_name in models_to_try:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "maxOutputTokens": 400,
+                    "responseMimeType": "application/json"
+                }
+            }
+            resp = requests.post(url, json=payload, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                texto_resp = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                if texto_resp:
+                    texto_limpo = re.sub(r'^```json\s*', '', texto_resp.strip())
+                    texto_limpo = re.sub(r'\s*```$', '', texto_limpo.strip())
+                    res_json = json.loads(texto_limpo)
+                    
+                    sub_cod = str(res_json.get("subitem", "")).strip().zfill(2)
+                    cand_nome = obter_nome_subitem(nd, sub_cod)
+                    resultado = {
+                        "subitem": sub_cod,
+                        "nome": cand_nome or res_json.get("nome", ""),
+                        "justificativa": res_json.get("justificativa", ""),
+                        "modelo": model_name
+                    }
+                    _cache_classificacao_ia[chave_cache] = resultado
+                    return resultado
+        except Exception:
+            continue
+
+    return None
 
 def determinar_subitem(nd: str, descricao_item: str) -> str:
     """Retorna o código de 2 dígitos do subitem de maior pontuação ou vazio."""
+    # Tenta usar cache de IA se disponível
+    chave_cache = f"{nd}_{str(descricao_item).strip().lower()}"
+    if chave_cache in _cache_classificacao_ia:
+        return _cache_classificacao_ia[chave_cache]["subitem"]
     corrs = buscar_correspondencias_subitens(nd, descricao_item)
     if corrs:
         return corrs[0]["subitem"]
@@ -1580,10 +1695,10 @@ def listar_subitens_por_nd(nd: str) -> List[Dict]:
     grupo = identificar_grupo_nd(nd)
     return CATALOGO_SUBITENS.get(grupo, [])
 
-def montar_opcoes_subitem(nd: str, descricao_item: str, subitem_atual: str = "") -> Tuple[List[str], int, Dict[str, str]]:
+def montar_opcoes_subitem(nd: str, descricao_item: str, subitem_atual: str = "", sugestao_ia: Optional[Dict] = None) -> Tuple[List[str], int, Dict[str, str]]:
     """
     Gera a lista completa de opções para o selectbox, colocando as correspondências
-    encontradas na FUNÇÃO no topo com os termos encontrados em destaque.
+    encontradas na FUNÇÃO e pela IA no topo.
     Retorna: (opcoes, index_padrao, mapa_opcao_para_codigo)
     """
     correspondencias = buscar_correspondencias_subitens(nd, descricao_item)
@@ -1593,9 +1708,20 @@ def montar_opcoes_subitem(nd: str, descricao_item: str, subitem_atual: str = "")
     mapa_codigos = {}
     subitens_incluidos = set()
 
-    # 1. Correspondências identificadas na FUNÇÃO oficial
+    # 0. Sugestão da IA (Gemini) se fornecida
+    if sugestao_ia and sugestao_ia.get("subitem"):
+        sub_ia = str(sugestao_ia["subitem"]).strip().zfill(2)
+        nome_ia = sugestao_ia.get("nome") or obter_nome_subitem(nd, sub_ia)
+        rotulo_ia = f"✨ {sub_ia} - {nome_ia} [Recomendação IA - Gemini]"
+        opcoes.append(rotulo_ia)
+        mapa_codigos[rotulo_ia] = sub_ia
+        subitens_incluidos.add(sub_ia)
+
+    # 1. Correspondências identificadas por palavras-chave na FUNÇÃO oficial
     for c in correspondencias:
         sub = c["subitem"]
+        if sub in subitens_incluidos:
+            continue
         nome = c["nome"]
         termos_str = ", ".join(c.get("termos", [])[:3])
         if termos_str:
@@ -1628,6 +1754,8 @@ def montar_opcoes_subitem(nd: str, descricao_item: str, subitem_atual: str = "")
             if mapa_codigos.get(op) == sub_alvo:
                 idx_selecionado = i
                 break
+    elif sugestao_ia and sugestao_ia.get("subitem"):
+        idx_selecionado = 0
 
     return opcoes, idx_selecionado, mapa_codigos
 
@@ -3707,7 +3835,7 @@ with tab_visualizacao:
             st.markdown("---")
             st.subheader("📋 Controle de Itens e Requisições por Fornecedor")
 
-            with st.expander("🎯 Conferir ou Alterar Sub Item de um Material da NC (Buscar por Função da ND)", expanded=False):
+            with st.expander("🎯 Conferir ou Alterar Sub Item de um Material da NC (Classificação Inteligente com IA)", expanded=False):
                 itens_nc_ajuste = banco_dados[nc_selecionada_vis].get("itens", [])
                 if itens_nc_ajuste:
                     opcoes_itens_nc = [f"Item {it.get('Item', 1)} - {it.get('Nome', '')[:50]} (Subitem Atual: {it.get('Subitem', 'S/ Subitem')})" for it in itens_nc_ajuste]
@@ -3715,10 +3843,36 @@ with tab_visualizacao:
                     
                     idx_it_ajuste = opcoes_itens_nc.index(it_selecionado_para_ajuste)
                     item_obj_ajuste = itens_nc_ajuste[idx_it_ajuste]
+                    nome_item_alvo = item_obj_ajuste.get('Nome', '')
+                    
+                    # Painel de IA (Gemini)
+                    chave_ia_sessao = f"ia_sub_{nc_selecionada_vis}_{idx_it_ajuste}"
+                    sugestao_ia_atual = st.session_state.get(chave_ia_sessao) or _cache_classificacao_ia.get(f"{nd_vinculada}_{nome_item_alvo.strip().lower()}")
+                    
+                    c_ia1, c_ia2 = st.columns([1, 2])
+                    with c_ia1:
+                        if st.button("✨ Sugerir com IA (Gemini)", key=f"btn_ia_sub_{nc_selecionada_vis}_{idx_it_ajuste}", use_container_width=True, help="Usa a inteligência artificial Gemini para analisar a finalidade contábil do item e sugerir o subitem exato do SIAFI"):
+                            with st.spinner("Classificando com Inteligência Artificial (Gemini)..."):
+                                res_ia = classificar_subitem_com_ia(nd_vinculada, nome_item_alvo)
+                                if res_ia:
+                                    st.session_state[chave_ia_sessao] = res_ia
+                                    st.toast(f"IA recomendou o Subitem {res_ia['subitem']}!")
+                                    st.rerun()
+                                else:
+                                    st.warning("Não foi possível conectar à IA no momento. Usando correspondências por regras.")
+                    
+                    with c_ia2:
+                        if sugestao_ia_atual:
+                            st.info(f"🤖 **Sugestão da IA (Gemini):** Subitem **{sugestao_ia_atual['subitem']} - {sugestao_ia_atual['nome']}**\n\n💡 *{sugestao_ia_atual.get('justificativa', '')}*")
                     
                     c_aj1, c_aj2 = st.columns([3, 1])
                     with c_aj1:
-                        opcoes_sub_aj, idx_sub_aj, mapa_sub_aj = montar_opcoes_subitem(nd_vinculada, item_obj_ajuste.get('Nome', ''), item_obj_ajuste.get('Subitem', ''))
+                        opcoes_sub_aj, idx_sub_aj, mapa_sub_aj = montar_opcoes_subitem(
+                            nd_vinculada, 
+                            nome_item_alvo, 
+                            item_obj_ajuste.get('Subitem', ''),
+                            sugestao_ia=sugestao_ia_atual
+                        )
                         sub_sel_aj = st.selectbox(
                             "Sub Item Correspondente na Função da ND:",
                             opcoes_sub_aj,
@@ -4215,64 +4369,921 @@ with tab_visualizacao:
 # ABA 3: VISÃO GLOBAL ANUAL
 # =====================================================================
 with tab_visao_global:
-    dados_anuais = []
+    # Estado da sessão para controlar exibição do relatório anual oficial
+    if "exibir_relatorio_anual" not in st.session_state:
+        st.session_state["exibir_relatorio_anual"] = False
+
+    # 1. Coleta e consolidação de dados orçamentários do ano selecionado
+    lista_ncs_ano = []
+    lista_itens_ano = []
     
     if tipo_perfil == "Fiscal" and secao_ativa == OPCAO_TODAS_SECOES:
-        st.subheader(f"🌐 Visão Corporativa da OM ({om_user}) - Todas as Seções")
-        resp_todas_secoes = supabase.table("dados").select("*").like("id", f"{om_user}_%").execute()
-        for linha in resp_todas_secoes.data:
-            banco_secao_laco = linha.get("ncs", {})
-            for nc in banco_secao_laco.keys():
-                if nc != "CONFIG_REQUISICAO" and extrair_ano(nc) == ano_selecionado:
-                    nd_atual = banco_secao_laco[nc].get("nd", "Não informada")
-                    for item in banco_secao_laco[nc].get("itens", []):
-                        valor_total_item = float(item.get("Valor Unitário", 0.0)) * int(item.get("Qtd", 0))
-                        dados_anuais.append({
-                            "ND": nd_atual, "Situação": item.get("Situação", "Situação Indefinida"), "Valor Total": valor_total_item
-                        })
+        sub_titulo_vg = f"🌐 Visão Corporativa da OM ({om_user}) - Todas as Seções • Exercício {ano_selecionado}"
+        try:
+            resp_todas_secoes = supabase.table("dados").select("*").like("id", f"{om_user}_%").execute()
+            for linha in (resp_todas_secoes.data or []):
+                sec_id = str(linha.get("id", "")).replace(f"{om_user}_", "")
+                banco_secao_laco = linha.get("ncs", {})
+                if isinstance(banco_secao_laco, dict):
+                    for nc, dados_nc in banco_secao_laco.items():
+                        if nc != "CONFIG_REQUISICAO" and isinstance(dados_nc, dict) and extrair_ano(nc) == ano_selecionado:
+                            v_rec = float(dados_nc.get("valor_recebido") or 0.0)
+                            nd_nc = str(dados_nc.get("nd") or "Não informada").strip()
+                            pi_nc = str(dados_nc.get("pi") or "-").strip()
+                            itens_nc = dados_nc.get("itens", []) or []
+                            
+                            tot_gasto_nc = 0.0
+                            for idx_it, item in enumerate(itens_nc):
+                                try:
+                                    qtd_it = int(float(item.get("Qtd") or 0))
+                                except Exception:
+                                    qtd_it = 0
+                                try:
+                                    v_unit_it = float(item.get("Valor Unitário") or 0.0)
+                                except Exception:
+                                    v_unit_it = 0.0
+                                try:
+                                    tot_it = float(item.get("Total") or (qtd_it * v_unit_it))
+                                except Exception:
+                                    tot_it = qtd_it * v_unit_it
+                                
+                                tot_gasto_nc += tot_it
+                                sub_it = str(item.get("Subitem") or "").strip()
+                                if not sub_it:
+                                    sub_it = determinar_subitem(nd_nc, str(item.get("Nome") or ""))
+                                
+                                sit_it = str(item.get("Situação") or "Planejamento").strip()
+                                if sit_it not in ["Recebido", "Aguardando entrega", "Planejamento"]:
+                                    sit_it = "Planejamento"
+                                
+                                lista_itens_ano.append({
+                                    "Item": int(item.get("Item") or (idx_it + 1)),
+                                    "NC": nc,
+                                    "ND": nd_nc,
+                                    "PI": pi_nc,
+                                    "Subitem": sub_it,
+                                    "Nome": str(item.get("Nome") or "Item sem nome").strip(),
+                                    "Qtd": qtd_it,
+                                    "Valor Unitário": v_unit_it,
+                                    "Total": tot_it,
+                                    "Situação": sit_it,
+                                    "Fornecedor": str(item.get("Fornecedor") or "-").strip(),
+                                    "CNPJ": str(item.get("CNPJ") or "-").strip(),
+                                    "Pregão": str(item.get("Pregão") or "-").strip(),
+                                    "Ata": str(item.get("Ata") or "-").strip(),
+                                    "UASG": str(item.get("UASG") or "-").strip(),
+                                    "Seção": sec_id
+                                })
+                            
+                            lista_ncs_ano.append({
+                                "NC": nc,
+                                "ND": nd_nc,
+                                "PI": pi_nc,
+                                "Valor Recebido": v_rec,
+                                "Total Empenhado": tot_gasto_nc,
+                                "Saldo": v_rec - tot_gasto_nc,
+                                "Qtd Itens": len(itens_nc),
+                                "Seção": sec_id
+                            })
+        except Exception as e_coleta:
+            st.error(f"Erro ao consolidar dados da OM: {e_coleta}")
     else:
-        st.subheader(f"📊 Resumo Geral de Empenhos e Aquisições - Seção: {secao_ativa}")
+        sub_titulo_vg = f"📊 Painel Gerencial de Recursos e Aquisições - Seção: {secao_ativa} • Exercício {ano_selecionado}"
         if ncs_do_ano:
             for nc in ncs_do_ano:
-                nd_atual = banco_dados[nc].get("nd", "Não informada")
-                if not nd_atual.strip(): nd_atual = "Não informada"
-                for item in banco_dados[nc].get("itens", []):
-                    valor_total_item = float(item.get("Valor Unitário", 0.0)) * int(item.get("Qtd", 0))
-                    dados_anuais.append({
-                        "ND": nd_atual, "Situação": item.get("Situação", "Situação Indefinida"), "Valor Total": valor_total_item
-                    })
+                dados_nc = banco_dados.get(nc, {})
+                if isinstance(dados_nc, dict):
+                    v_rec = float(dados_nc.get("valor_recebido") or 0.0)
+                    nd_nc = str(dados_nc.get("nd") or "Não informada").strip()
+                    pi_nc = str(dados_nc.get("pi") or "-").strip()
+                    itens_nc = dados_nc.get("itens", []) or []
                     
-    if dados_anuais:
-        df_anual = pd.DataFrame(dados_anuais)
-        df_agrupado = df_anual.groupby(["ND", "Situação"])["Valor Total"].sum().reset_index()
+                    tot_gasto_nc = 0.0
+                    for idx_it, item in enumerate(itens_nc):
+                        try:
+                            qtd_it = int(float(item.get("Qtd") or 0))
+                        except Exception:
+                            qtd_it = 0
+                        try:
+                            v_unit_it = float(item.get("Valor Unitário") or 0.0)
+                        except Exception:
+                            v_unit_it = 0.0
+                        try:
+                            tot_it = float(item.get("Total") or (qtd_it * v_unit_it))
+                        except Exception:
+                            tot_it = qtd_it * v_unit_it
+                        
+                        tot_gasto_nc += tot_it
+                        sub_it = str(item.get("Subitem") or "").strip()
+                        if not sub_it:
+                            sub_it = determinar_subitem(nd_nc, str(item.get("Nome") or ""))
+                        
+                        sit_it = str(item.get("Situação") or "Planejamento").strip()
+                        if sit_it not in ["Recebido", "Aguardando entrega", "Planejamento"]:
+                            sit_it = "Planejamento"
+                        
+                        lista_itens_ano.append({
+                            "Item": int(item.get("Item") or (idx_it + 1)),
+                            "NC": nc,
+                            "ND": nd_nc,
+                            "PI": pi_nc,
+                            "Subitem": sub_it,
+                            "Nome": str(item.get("Nome") or "Item sem nome").strip(),
+                            "Qtd": qtd_it,
+                            "Valor Unitário": v_unit_it,
+                            "Total": tot_it,
+                            "Situação": sit_it,
+                            "Fornecedor": str(item.get("Fornecedor") or "-").strip(),
+                            "CNPJ": str(item.get("CNPJ") or "-").strip(),
+                            "Pregão": str(item.get("Pregão") or "-").strip(),
+                            "Ata": str(item.get("Ata") or "-").strip(),
+                            "UASG": str(item.get("UASG") or "-").strip(),
+                            "Seção": secao_ativa
+                        })
+                    
+                    lista_ncs_ano.append({
+                        "NC": nc,
+                        "ND": nd_nc,
+                        "PI": pi_nc,
+                        "Valor Recebido": v_rec,
+                        "Total Empenhado": tot_gasto_nc,
+                        "Saldo": v_rec - tot_gasto_nc,
+                        "Qtd Itens": len(itens_nc),
+                        "Seção": secao_ativa
+                    })
+
+    df_ncs_ano = pd.DataFrame(lista_ncs_ano) if lista_ncs_ano else pd.DataFrame(columns=["NC", "ND", "PI", "Valor Recebido", "Total Empenhado", "Saldo", "Qtd Itens", "Seção"])
+    df_itens_ano = pd.DataFrame(lista_itens_ano) if lista_itens_ano else pd.DataFrame(columns=["Item", "NC", "ND", "PI", "Subitem", "Nome", "Qtd", "Valor Unitário", "Total", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata", "UASG", "Seção"])
+
+    # Cálculos estatísticos consolidados
+    total_recebido_ano = float(df_ncs_ano["Valor Recebido"].sum()) if not df_ncs_ano.empty else 0.0
+    total_empenhado_ano = float(df_itens_ano["Total"].sum()) if not df_itens_ano.empty else 0.0
+    saldo_ano = total_recebido_ano - total_empenhado_ano
+    pct_exec = (total_empenhado_ano / total_recebido_ano * 100) if total_recebido_ano > 0 else 0.0
+    total_itens_cadastrados = len(df_itens_ano)
+    total_qtd_unidades = int(df_itens_ano["Qtd"].sum()) if not df_itens_ano.empty else 0
+
+    # Funções para Geração Oficial de Documentos (Excel com Itens e PDF A4 Paisagem)
+    def gerar_excel_anual_completo(om_nome, secao_nome, ano_exercicio, ncs_lista, itens_lista, total_rec, total_emp, saldo_disp, pct_e, tot_itens, tot_qtd):
+        import io
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Itens Adquiridos"
+        ws.views.sheetView[0].showGridLines = True
+
+        cor_militar = "1E3A29"
+        cor_militar_claro = "E8F5E9"
+        cor_cinza_claro = "F8FAFC"
+        
+        font_titulo = Font(name="Arial", size=13, bold=True, color=cor_militar)
+        font_subtitulo = Font(name="Arial", size=11, bold=True, color="1E293B")
+        font_meta = Font(name="Arial", size=9, italic=True, color="475569")
+        font_card_rotulo = Font(name="Arial", size=8, bold=True, color="64748B")
+        font_card_valor = Font(name="Arial", size=11, bold=True, color=cor_militar)
+        font_header_tab = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+        font_item_qtd = Font(name="Arial", size=9, bold=True, color="0F5132")
+        font_total = Font(name="Arial", size=10, bold=True, color="000000")
+
+        fill_header = PatternFill(start_color=cor_militar, end_color=cor_militar, fill_type="solid")
+        fill_zebrado = PatternFill(start_color=cor_cinza_claro, end_color=cor_cinza_claro, fill_type="solid")
+        fill_card = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+        fill_qtd = PatternFill(start_color=cor_militar_claro, end_color=cor_militar_claro, fill_type="solid")
+
+        border_thin = Border(
+            left=Side(style="thin", color="CBD5E1"),
+            right=Side(style="thin", color="CBD5E1"),
+            top=Side(style="thin", color="CBD5E1"),
+            bottom=Side(style="thin", color="CBD5E1")
+        )
+        border_total = Border(
+            top=Side(style="thin", color="000000"),
+            bottom=Side(style="double", color="000000")
+        )
+
+        # 1. Cabeçalho Oficial no topo da Aba Principal
+        ws["A1"] = "MINISTÉRIO DA DEFESA - EXÉRCITO BRASILEIRO"
+        ws["A1"].font = font_titulo
+        ws["A2"] = f"RELATÓRIO ANUAL DE AQUISIÇÕES E MATERIAIS ADQUIRIDOS - EXERCÍCIO {ano_exercicio}"
+        ws["A2"].font = font_subtitulo
+        ws["A3"] = f"Organização Militar: {om_nome} | Seção: {secao_nome} | NCs: {len(ncs_lista)} | Total de Itens: {tot_itens} ({tot_qtd:,} unidades)"
+        ws["A3"].font = font_meta
+
+        # 2. Cartões de Resumo Executivo
+        cards = [
+            ("TOTAL CONCEDIDO (R$)", f"R$ {total_rec:,.2f}"),
+            ("TOTAL EMPENHADO (R$)", f"R$ {total_emp:,.2f}"),
+            ("SALDO DISPONÍVEL (R$)", f"R$ {saldo_disp:,.2f}"),
+            ("TAXA DE EXECUÇÃO", f"{pct_e:.1f}%"),
+            ("TOTAL DE ITENS", f"{tot_itens}"),
+            ("UNIDADES ADQUIRIDAS", f"{tot_qtd:,}")
+        ]
+        for idx_c, (rot, val) in enumerate(cards, 1):
+            col_let = get_column_letter(idx_c)
+            c_rot = ws[f"{col_let}5"]
+            c_rot.value = rot
+            c_rot.font = font_card_rotulo
+            c_rot.fill = fill_card
+            c_rot.alignment = Alignment(horizontal="center", vertical="center")
+            c_rot.border = border_thin
+
+            c_val = ws[f"{col_let}6"]
+            c_val.value = val
+            c_val.font = font_card_valor
+            c_val.fill = fill_card
+            c_val.alignment = Alignment(horizontal="center", vertical="center")
+            c_val.border = border_thin
+
+        # 3. Cabeçalho da Tabela de Itens
+        colunas_itens = [
+            "Item", "Nota de Crédito", "ND", "PI", "Subitem",
+            "Descrição do Material / Serviço", "Quantidade (Qtd)",
+            "Valor Unitário (R$)", "Valor Total (R$)", "Situação",
+            "Fornecedor", "CNPJ", "Pregão", "Ata", "Seção"
+        ]
+        for idx_col, col_nome in enumerate(colunas_itens, 1):
+            c = ws.cell(row=8, column=idx_col, value=col_nome)
+            c.font = font_header_tab
+            c.fill = fill_header
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = border_thin
+        ws.row_dimensions[8].height = 28
+
+        # 4. Inserção de todos os itens adquiridos no ano
+        linha_atual = 9
+        for idx_it, it in enumerate(itens_lista, 1):
+            ws.cell(row=linha_atual, column=1, value=it.get("Item", idx_it)).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(row=linha_atual, column=2, value=str(it.get("NC", ""))).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(row=linha_atual, column=3, value=str(it.get("ND", ""))).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(row=linha_atual, column=4, value=str(it.get("PI", ""))).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(row=linha_atual, column=5, value=str(it.get("Subitem", ""))).alignment = Alignment(horizontal="center", vertical="center")
+            
+            c_nome = ws.cell(row=linha_atual, column=6, value=str(it.get("Nome", "")))
+            c_nome.alignment = Alignment(horizontal="left", vertical="center")
+
+            c_qtd = ws.cell(row=linha_atual, column=7, value=int(it.get("Qtd", 0)))
+            c_qtd.font = font_item_qtd
+            c_qtd.fill = fill_qtd
+            c_qtd.alignment = Alignment(horizontal="center", vertical="center")
+            c_qtd.number_format = "#,##0"
+
+            c_vu = ws.cell(row=linha_atual, column=8, value=float(it.get("Valor Unitário", 0.0)))
+            c_vu.alignment = Alignment(horizontal="right", vertical="center")
+            c_vu.number_format = "R$ #,##0.00"
+
+            c_tot = ws.cell(row=linha_atual, column=9, value=float(it.get("Total", 0.0)))
+            c_tot.font = Font(name="Arial", size=9, bold=True)
+            c_tot.alignment = Alignment(horizontal="right", vertical="center")
+            c_tot.number_format = "R$ #,##0.00"
+
+            ws.cell(row=linha_atual, column=10, value=str(it.get("Situação", ""))).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(row=linha_atual, column=11, value=str(it.get("Fornecedor", ""))).alignment = Alignment(horizontal="left", vertical="center")
+            ws.cell(row=linha_atual, column=12, value=str(it.get("CNPJ", ""))).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(row=linha_atual, column=13, value=str(it.get("Pregão", ""))).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(row=linha_atual, column=14, value=str(it.get("Ata", ""))).alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(row=linha_atual, column=15, value=str(it.get("Seção", ""))).alignment = Alignment(horizontal="center", vertical="center")
+
+            for col_i in range(1, 16):
+                cell_i = ws.cell(row=linha_atual, column=col_i)
+                cell_i.border = border_thin
+                if idx_it % 2 == 0 and col_i != 7:
+                    cell_i.fill = fill_zebrado
+
+            linha_atual += 1
+
+        # 5. Linha de Totais da Lista de Itens
+        ws.cell(row=linha_atual, column=1, value="TOTAL CONSOLIDADO").alignment = Alignment(horizontal="center", vertical="center")
+        ws.cell(row=linha_atual, column=6, value=f"{len(itens_lista)} Itens Adquiridos").font = font_total
+
+        c_sum_qtd = ws.cell(row=linha_atual, column=7, value=f"=SUM(G9:G{linha_atual-1})" if linha_atual > 9 else 0)
+        c_sum_qtd.font = Font(name="Arial", size=10, bold=True, color="0F5132")
+        c_sum_qtd.alignment = Alignment(horizontal="center", vertical="center")
+        c_sum_qtd.number_format = "#,##0"
+
+        c_sum_tot = ws.cell(row=linha_atual, column=9, value=f"=SUM(I9:I{linha_atual-1})" if linha_atual > 9 else 0)
+        c_sum_tot.font = Font(name="Arial", size=10, bold=True, color=cor_militar)
+        c_sum_tot.alignment = Alignment(horizontal="right", vertical="center")
+        c_sum_tot.number_format = "R$ #,##0.00"
+
+        for col_i in range(1, 16):
+            cell_tot = ws.cell(row=linha_atual, column=col_i)
+            cell_tot.font = font_total
+            cell_tot.border = border_total
+
+        larguras = {
+            "A": 8, "B": 17, "C": 12, "D": 12, "E": 12,
+            "F": 45, "G": 18, "H": 18, "I": 18, "J": 18,
+            "K": 28, "L": 20, "M": 14, "N": 14, "O": 14
+        }
+        for col_l, w in larguras.items():
+            ws.column_dimensions[col_l].width = w
+
+        # Aba 2: Relação de Notas de Crédito
+        ws2 = wb.create_sheet(title="Notas de Crédito")
+        ws2.views.sheetView[0].showGridLines = True
+        ws2["A1"] = f"Relação de Notas de Crédito - Exercício {ano_exercicio}"
+        ws2["A1"].font = font_titulo
+        colunas_nc = ["Nota de Crédito", "ND", "PI", "Qtd Itens", "Valor Recebido (R$)", "Total Empenhado (R$)", "Saldo (R$)", "% Execução", "Seção"]
+        for idx_col, h in enumerate(colunas_nc, 1):
+            cell_h = ws2.cell(row=3, column=idx_col, value=h)
+            cell_h.font = font_header_tab
+            cell_h.fill = fill_header
+            cell_h.alignment = Alignment(horizontal="center", vertical="center")
+            cell_h.border = border_thin
+        
+        for idx_nc, nc_obj in enumerate(ncs_lista, 4):
+            ws2.cell(row=idx_nc, column=1, value=str(nc_obj.get("NC", ""))).alignment = Alignment(horizontal="center")
+            ws2.cell(row=idx_nc, column=2, value=str(nc_obj.get("ND", ""))).alignment = Alignment(horizontal="center")
+            ws2.cell(row=idx_nc, column=3, value=str(nc_obj.get("PI", ""))).alignment = Alignment(horizontal="center")
+            ws2.cell(row=idx_nc, column=4, value=int(nc_obj.get("Qtd Itens", 0))).alignment = Alignment(horizontal="center")
+            
+            c_rec = ws2.cell(row=idx_nc, column=5, value=float(nc_obj.get("Valor Recebido", 0.0)))
+            c_rec.number_format = "R$ #,##0.00"
+            c_rec.alignment = Alignment(horizontal="right")
+
+            c_emp = ws2.cell(row=idx_nc, column=6, value=float(nc_obj.get("Total Empenhado", 0.0)))
+            c_emp.number_format = "R$ #,##0.00"
+            c_emp.alignment = Alignment(horizontal="right")
+
+            c_sal = ws2.cell(row=idx_nc, column=7, value=float(nc_obj.get("Saldo", 0.0)))
+            c_sal.number_format = "R$ #,##0.00"
+            c_sal.alignment = Alignment(horizontal="right")
+
+            v_rec_n = float(nc_obj.get("Valor Recebido", 0.0))
+            v_emp_n = float(nc_obj.get("Total Empenhado", 0.0))
+            pct_n = (v_emp_n / v_rec_n * 100) if v_rec_n > 0 else 0.0
+            ws2.cell(row=idx_nc, column=8, value=f"{pct_n:.1f}%").alignment = Alignment(horizontal="center")
+            ws2.cell(row=idx_nc, column=9, value=str(nc_obj.get("Seção", ""))).alignment = Alignment(horizontal="center")
+            
+            for col_i in range(1, 10):
+                ws2.cell(row=idx_nc, column=col_i).border = border_thin
+
+        for col_l in ["A", "B", "C", "D", "E", "F", "G", "H", "I"]:
+            ws2.column_dimensions[col_l].width = 18
+
+        buf_excel_out = io.BytesIO()
+        wb.save(buf_excel_out)
+        buf_excel_out.seek(0)
+        return buf_excel_out.getvalue()
+
+    def gerar_pdf_anual_completo(om_nome, secao_nome, ano_exercicio, ncs_lista, itens_lista, total_rec, total_emp, saldo_disp, pct_e, tot_itens, tot_qtd, cfg_req):
+        import io, html, datetime
+        from reportlab.lib.pagesizes import landscape, A4
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+
+        buf_pdf_out = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buf_pdf_out,
+            pagesize=landscape(A4),
+            leftMargin=20,
+            rightMargin=20,
+            topMargin=20,
+            bottomMargin=20
+        )
+
+        styles = getSampleStyleSheet()
+        cor_primaria = colors.HexColor("#1E3A29")
+        cor_fundo_cinza = colors.HexColor("#F8FAFC")
+        cor_linha = colors.HexColor("#CBD5E1")
+
+        style_top1 = ParagraphStyle('Top1', parent=styles['Normal'], fontSize=8.5, fontName='Helvetica-Bold', alignment=1, textColor=colors.HexColor('#475569'))
+        style_top2 = ParagraphStyle('Top2', parent=styles['Normal'], fontSize=11, fontName='Helvetica-Bold', alignment=1, textColor=colors.black)
+        style_top3 = ParagraphStyle('Top3', parent=styles['Normal'], fontSize=8, alignment=1, textColor=colors.HexColor('#64748B'))
+        style_titulo = ParagraphStyle('Tit', parent=styles['Heading1'], fontSize=13, fontName='Helvetica-Bold', alignment=1, textColor=cor_primaria, spaceAfter=3)
+        style_sub = ParagraphStyle('Sub', parent=styles['Normal'], fontSize=8, alignment=1, textColor=colors.HexColor('#475569'), spaceAfter=8)
+
+        style_sec_tit = ParagraphStyle('SecTit', parent=styles['Normal'], fontSize=9, fontName='Helvetica-Bold', textColor=cor_primaria, spaceAfter=4)
+        
+        style_th = ParagraphStyle('TH', parent=styles['Normal'], fontSize=7.5, fontName='Helvetica-Bold', alignment=1, textColor=colors.white)
+        style_td = ParagraphStyle('TD', parent=styles['Normal'], fontSize=7, leading=9, textColor=colors.black)
+        style_td_c = ParagraphStyle('TDC', parent=styles['Normal'], fontSize=7, leading=9, alignment=1, textColor=colors.black)
+        style_td_r = ParagraphStyle('TDR', parent=styles['Normal'], fontSize=7, leading=9, alignment=2, textColor=colors.black)
+        style_td_b_r = ParagraphStyle('TDBR', parent=styles['Normal'], fontSize=7.5, fontName='Helvetica-Bold', alignment=2, textColor=cor_primaria)
+        style_td_b_c = ParagraphStyle('TDBC', parent=styles['Normal'], fontSize=7.5, fontName='Helvetica-Bold', alignment=1, textColor=colors.HexColor('#0F5132'))
+
+        story = []
+
+        # 1. Cabeçalho Militar
+        story.append(Paragraph("MINISTÉRIO DA DEFESA", style_top1))
+        story.append(Paragraph("EXÉRCITO BRASILEIRO", style_top2))
+        story.append(Paragraph(html.escape(f"{om_nome} • {secao_nome}"), style_top3))
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(f"RELATÓRIO ANUAL DE GESTÃO ORÇAMENTÁRIA E AQUISIÇÕES - EXERCÍCIO {ano_exercicio}", style_titulo))
+        data_emissao = datetime.datetime.now().strftime("%d/%m/%Y às %H:%M")
+        story.append(Paragraph(f"Documento Consolidado emitido em {data_emissao}", style_sub))
+
+        # 2. Resumo de Recursos
+        story.append(Paragraph("1. BALANÇO DE RECURSOS ORÇAMENTÁRIOS CONCEDIDOS E EXECUTADOS", style_sec_tit))
+        resumo_data = [
+            [
+                Paragraph("Total Concedido em NCs", style_top1),
+                Paragraph("Total Empenhado / Alocado", style_top1),
+                Paragraph("Saldo Disponível", style_top1),
+                Paragraph("Taxa de Execução", style_top1),
+                Paragraph("Itens / Descrições", style_top1),
+                Paragraph("Unidades Adquiridas", style_top1)
+            ],
+            [
+                Paragraph(f"R$ {total_rec:,.2f}", style_td_b_c),
+                Paragraph(f"R$ {total_emp:,.2f}", style_td_b_c),
+                Paragraph(f"R$ {saldo_disp:,.2f}", style_td_b_c),
+                Paragraph(f"{pct_e:.1f}%", style_td_b_c),
+                Paragraph(f"{tot_itens}", style_td_b_c),
+                Paragraph(f"{tot_qtd:,} unid.", style_td_b_c)
+            ]
+        ]
+        t_resumo = Table(resumo_data, colWidths=[133, 133, 133, 133, 133, 133])
+        t_resumo.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#E2E8F0")),
+            ('BACKGROUND', (0,1), (-1,1), cor_fundo_cinza),
+            ('GRID', (0,0), (-1,-1), 0.5, cor_linha),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+        ]))
+        story.append(t_resumo)
+        story.append(Spacer(1, 8))
+
+        # 3. Tabela de Notas de Crédito
+        if ncs_lista:
+            story.append(Paragraph(f"2. NOTAS DE CRÉDITO DO EXERCÍCIO ({len(ncs_lista)} NCs)", style_sec_tit))
+            nc_rows = [[
+                Paragraph("Nota de Crédito", style_th),
+                Paragraph("ND", style_th),
+                Paragraph("PI", style_th),
+                Paragraph("Qtd Itens", style_th),
+                Paragraph("Valor Concedido", style_th),
+                Paragraph("Total Empenhado", style_th),
+                Paragraph("Saldo Disponível", style_th),
+                Paragraph("Execução", style_th),
+                Paragraph("Seção", style_th)
+            ]]
+            for nc_o in ncs_lista:
+                v_r = float(nc_o.get("Valor Recebido", 0.0))
+                v_e = float(nc_o.get("Total Empenhado", 0.0))
+                v_s = float(nc_o.get("Saldo", 0.0))
+                p_e = (v_e / v_r * 100) if v_r > 0 else 0.0
+                nc_rows.append([
+                    Paragraph(html.escape(str(nc_o.get("NC", ""))), style_td_c),
+                    Paragraph(html.escape(str(nc_o.get("ND", ""))), style_td_c),
+                    Paragraph(html.escape(str(nc_o.get("PI", ""))), style_td_c),
+                    Paragraph(str(nc_o.get("Qtd Itens", 0)), style_td_c),
+                    Paragraph(f"R$ {v_r:,.2f}", style_td_r),
+                    Paragraph(f"R$ {v_e:,.2f}", style_td_r),
+                    Paragraph(f"R$ {v_s:,.2f}", style_td_r),
+                    Paragraph(f"{p_e:.1f}%", style_td_c),
+                    Paragraph(html.escape(str(nc_o.get("Seção", ""))), style_td_c)
+                ])
+            t_ncs = Table(nc_rows, colWidths=[95, 60, 60, 50, 110, 110, 110, 60, 125])
+            t_ncs.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), cor_primaria),
+                ('GRID', (0,0), (-1,-1), 0.5, cor_linha),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, cor_fundo_cinza]),
+                ('TOPPADDING', (0,0), (-1,-1), 2),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+            ]))
+            story.append(t_ncs)
+            story.append(Spacer(1, 8))
+
+        # 4. Tabela Completa de Itens Adquiridos no Ano (com Quantidades)
+        story.append(Paragraph(f"3. LISTAGEM COMPLETA DE TODOS OS ITENS ADQUIRIDOS NO ANO ({len(itens_lista)} ITENS • {tot_qtd:,} UNIDADES)", style_sec_tit))
+        itens_rows = [[
+            Paragraph("Item", style_th),
+            Paragraph("NC", style_th),
+            Paragraph("ND", style_th),
+            Paragraph("Subitem", style_th),
+            Paragraph("Descrição do Material / Serviço", style_th),
+            Paragraph("Qtd", style_th),
+            Paragraph("Valor Unit.", style_th),
+            Paragraph("Total (R$)", style_th),
+            Paragraph("Situação", style_th),
+            Paragraph("Fornecedor", style_th),
+            Paragraph("Pregão / Ata", style_th)
+        ]]
+        for it_o in itens_lista:
+            vu = float(it_o.get("Valor Unitário", 0.0))
+            tot = float(it_o.get("Total", 0.0))
+            qtd = int(it_o.get("Qtd", 0))
+            itens_rows.append([
+                Paragraph(str(it_o.get("Item", "")), style_td_c),
+                Paragraph(html.escape(str(it_o.get("NC", ""))), style_td_c),
+                Paragraph(html.escape(str(it_o.get("ND", ""))), style_td_c),
+                Paragraph(html.escape(str(it_o.get("Subitem", ""))), style_td_c),
+                Paragraph(html.escape(str(it_o.get("Nome", ""))), style_td),
+                Paragraph(f"<b>{qtd}</b>", style_td_b_c),
+                Paragraph(f"R$ {vu:,.2f}", style_td_r),
+                Paragraph(f"R$ {tot:,.2f}", style_td_b_r),
+                Paragraph(html.escape(str(it_o.get("Situação", ""))), style_td_c),
+                Paragraph(html.escape(str(it_o.get("Fornecedor", ""))), style_td),
+                Paragraph(html.escape(str(it_o.get("Pregão", ""))), style_td_c)
+            ])
+        
+        # Linha de total geral dos itens
+        itens_rows.append([
+            Paragraph("TOTAL", style_th),
+            Paragraph("", style_th),
+            Paragraph("", style_th),
+            Paragraph("", style_th),
+            Paragraph(f"<b>Total Consolidado ({len(itens_lista)} Itens)</b>", style_th),
+            Paragraph(f"<b>{tot_qtd:,}</b>", style_th),
+            Paragraph("", style_th),
+            Paragraph(f"<b>R$ {total_emp:,.2f}</b>", style_th),
+            Paragraph("", style_th),
+            Paragraph("", style_th),
+            Paragraph("", style_th)
+        ])
+
+        t_itens = Table(itens_rows, colWidths=[25, 65, 55, 50, 215, 42, 65, 75, 60, 95, 55], repeatRows=1)
+        t_itens.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), cor_primaria),
+            ('BACKGROUND', (0,-1), (-1,-1), cor_primaria),
+            ('GRID', (0,0), (-1,-1), 0.5, cor_linha),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('ROWBACKGROUNDS', (0,1), (-1,-2), [colors.white, cor_fundo_cinza]),
+            ('TOPPADDING', (0,0), (-1,-1), 2),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+        ]))
+        story.append(t_itens)
+        story.append(Spacer(1, 14))
+
+        # 5. Assinaturas
+        n_chefe = cfg_req.get("assinatura_nome", "Chefe da Seção")
+        f_chefe = cfg_req.get("assinatura_funcao", f"Chefe da {secao_nome}")
+        n_od = cfg_req.get("od_nome", "Ordenador de Despesas")
+        f_od = cfg_req.get("od_funcao", "Ordenador de Despesas")
+
+        t_ass = Table([
+            [
+                Paragraph(f"<br/><br/>________________________________________<br/><b>{html.escape(n_chefe)}</b><br/>{html.escape(f_chefe)}", style_td_c),
+                Paragraph(f"<br/><br/>________________________________________<br/><b>{html.escape(n_od)}</b><br/>{html.escape(f_od)}", style_td_c)
+            ]
+        ], colWidths=[400, 400])
+        story.append(KeepTogether([
+            Paragraph("Certifico a exatidão das informações financeiras e das quantidades adquiridas deste relatório anual.", style_sub),
+            t_ass
+        ]))
+
+        doc.build(story)
+        buf_pdf_out.seek(0)
+        return buf_pdf_out.getvalue()
+
+    # Prepara arquivos para download imediato em Base64 (imunes a bloqueios de cookies e proxies)
+    import base64
+    bytes_excel_anual = None
+    bytes_pdf_anual = None
+    b64_pdf = ""
+    b64_excel = ""
+    nome_arquivo_pdf = f"Relatorio_Anual_{ano_selecionado}_{om_user}_{secao_ativa}.pdf".replace(" ", "_").replace("º", "o").replace("/", "_")
+    nome_arquivo_excel = f"Relatorio_Anual_Itens_{ano_selecionado}_{om_user}_{secao_ativa}.xlsx".replace(" ", "_").replace("º", "o").replace("/", "_")
+
+    if lista_itens_ano or lista_ncs_ano:
+        try:
+            bytes_excel_anual = gerar_excel_anual_completo(
+                om_user, secao_ativa, ano_selecionado,
+                lista_ncs_ano, lista_itens_ano,
+                total_recebido_ano, total_empenhado_ano, saldo_ano, pct_exec,
+                total_itens_cadastrados, total_qtd_unidades
+            )
+            if bytes_excel_anual:
+                b64_excel = base64.b64encode(bytes_excel_anual).decode("utf-8")
+        except Exception as e_xls:
+            print("Erro ao gerar Excel anual:", e_xls)
+
+        try:
+            cfg_req_atual = banco_dados.get("CONFIG_REQUISICAO", {}) if isinstance(banco_dados, dict) else {}
+            bytes_pdf_anual = gerar_pdf_anual_completo(
+                om_user, secao_ativa, ano_selecionado,
+                lista_ncs_ano, lista_itens_ano,
+                total_recebido_ano, total_empenhado_ano, saldo_ano, pct_exec,
+                total_itens_cadastrados, total_qtd_unidades,
+                cfg_req_atual
+            )
+            if bytes_pdf_anual:
+                b64_pdf = base64.b64encode(bytes_pdf_anual).decode("utf-8")
+        except Exception as e_pdf:
+            print("Erro ao gerar PDF anual:", e_pdf)
+
+    # Cabeçalho da Visão Global e Botões Principais de Ação
+    col_vg1, col_vg2, col_vg3, col_vg4 = st.columns([2.6, 1.2, 1.1, 1.1])
+    with col_vg1:
+        st.subheader(sub_titulo_vg)
+        st.caption(f"Exercício de **{ano_selecionado}** • **{len(df_ncs_ano)}** Notas de Crédito ativas • **{total_itens_cadastrados}** itens cadastrados ({total_qtd_unidades} unidades adquiridas)")
+    
+    with col_vg2:
+        rotulo_btn_rel = "❌ Fechar Relatório" if st.session_state.get("exibir_relatorio_anual", False) else "📑 Ver Relatório Anual"
+        if st.button(rotulo_btn_rel, type="primary", use_container_width=True, key="btn_toggle_relatorio_anual"):
+            st.session_state["exibir_relatorio_anual"] = not st.session_state.get("exibir_relatorio_anual", False)
+            st.rerun()
+
+    with col_vg3:
+        if b64_pdf:
+            st.markdown(f"""
+            <a href="data:application/pdf;base64,{b64_pdf}" download="{nome_arquivo_pdf}"
+               style="display: flex; align-items: center; justify-content: center; gap: 6px; background-color: #1e3a29; color: #ffffff !important; font-weight: 700; font-size: 13px; padding: 0 12px; height: 38px; border-radius: 8px; text-decoration: none; box-shadow: 0 2px 4px rgba(0,0,0,0.15); border: 1px solid #14271c; width: 100%; box-sizing: border-box; text-align: center; cursor: pointer;">
+               📥 Baixar PDF
+            </a>
+            """, unsafe_allow_html=True)
+
+    with col_vg4:
+        if b64_excel:
+            st.markdown(f"""
+            <a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64_excel}" download="{nome_arquivo_excel}"
+               style="display: flex; align-items: center; justify-content: center; gap: 6px; background-color: #2563eb; color: #ffffff !important; font-weight: 700; font-size: 13px; padding: 0 12px; height: 38px; border-radius: 8px; text-decoration: none; box-shadow: 0 2px 4px rgba(0,0,0,0.15); border: 1px solid #1d4ed8; width: 100%; box-sizing: border-box; text-align: center; cursor: pointer;">
+               📊 Baixar Excel
+            </a>
+            """, unsafe_allow_html=True)
+
+    # =========================================================================
+    # VISUALIZAÇÃO DO RELATÓRIO ANUAL OFICIAL (DOCUMENTO EXECUTIVO / IMPRESSÃO)
+    # =========================================================================
+    if st.session_state.get("exibir_relatorio_anual", False):
+        import datetime
+        data_hora_emissao = datetime.datetime.now().strftime("%d/%m/%Y às %H:%M")
+        
+        # Banner executivo (sem nenhum onclick inline no HTML para evitar erro #231 do React)
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #1e3a29 0%, #15291d 100%); color: #ffffff; padding: 20px 24px; border-radius: 12px; margin-top: 15px; margin-bottom: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.12);">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+                <div>
+                    <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; background: rgba(255,255,255,0.18); padding: 4px 10px; border-radius: 4px; font-weight: 700;">Documento Oficial Consolidado</span>
+                    <h2 style="margin: 8px 0 4px 0; font-size: 21px; font-weight: 800; color: #ffffff;">RELATÓRIO ANUAL DE EXECUÇÃO ORÇAMENTÁRIA E AQUISIÇÕES</h2>
+                    <p style="margin: 0; font-size: 13px; color: #d1fae5;">Exercício Financeiro: <b>{ano_selecionado}</b> • OM: <b>{om_user}</b> • Seção: <b>{secao_ativa}</b> • Emissão: {data_hora_emissao}</p>
+                </div>
+                <div style="background: rgba(255,255,255,0.15); border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: 700; color: #ffffff;">
+                    {total_itens_cadastrados} itens • {total_qtd_unidades} unidades
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Barra de Ações (Download Direto de PDF e Excel via Base64 + Impressão no Navegador)
+        col_act1, col_act2, col_act3 = st.columns([1.2, 1.2, 1])
+        with col_act1:
+            if b64_pdf:
+                st.markdown(f"""
+                <a href="data:application/pdf;base64,{b64_pdf}" download="{nome_arquivo_pdf}"
+                   style="display: flex; align-items: center; justify-content: center; gap: 8px; background-color: #1e3a29; color: #ffffff !important; font-weight: 700; font-size: 13px; padding: 0 16px; height: 42px; border-radius: 8px; text-decoration: none; box-shadow: 0 2px 5px rgba(0,0,0,0.15); border: 1px solid #14271c; width: 100%; box-sizing: border-box; text-align: center; cursor: pointer;">
+                   📥 Baixar Documento em PDF (A4 Paisagem)
+                </a>
+                """, unsafe_allow_html=True)
+        with col_act2:
+            if b64_excel:
+                st.markdown(f"""
+                <a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64_excel}" download="{nome_arquivo_excel}"
+                   style="display: flex; align-items: center; justify-content: center; gap: 8px; background-color: #2563eb; color: #ffffff !important; font-weight: 700; font-size: 13px; padding: 0 16px; height: 42px; border-radius: 8px; text-decoration: none; box-shadow: 0 2px 5px rgba(0,0,0,0.15); border: 1px solid #1d4ed8; width: 100%; box-sizing: border-box; text-align: center; cursor: pointer;">
+                   📊 Baixar Planilha com Todos os Itens (.xlsx)
+                </a>
+                """, unsafe_allow_html=True)
+        with col_act3:
+            # Botão de impressão isolado em iframe nativo (seguro contra erro do React)
+            st.components.v1.html("""
+            <div style="display: flex; justify-content: flex-end; align-items: center; height: 100%;">
+                <button onclick="window.parent.print()" style="background: #475569; color: white; border: none; padding: 0 16px; height: 42px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; font-family: sans-serif; box-shadow: 0 2px 5px rgba(0,0,0,0.15); width: 100%;">
+                    🖨️ Imprimir Página
+                </button>
+            </div>
+            """, height=44)
+
+        # Visualizador direto do PDF na tela (Preview embutido)
+        if b64_pdf:
+            with st.expander("👁️ Visualizar PDF Formatado Diretamente na Tela (Preview)", expanded=False):
+                st.markdown(f"""
+                <div style="border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; margin-top: 8px;">
+                    <iframe src="data:application/pdf;base64,{b64_pdf}#view=FitH" width="100%" height="600px" style="border: none;"></iframe>
+                </div>
+                """, unsafe_allow_html=True)
+
+        # Quadro 1: Indicadores e Recursos Concedidos
+        st.markdown(f"""
+        <div style="background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 22px; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
+            <div style="border-bottom: 2px solid #1e3a29; padding-bottom: 10px; margin-bottom: 18px;">
+                <h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #1e3a29; text-transform: uppercase; letter-spacing: 0.5px;">
+                    1. Balanço de Recursos Orçamentários e Créditos Concedidos ({ano_selecionado})
+                </h3>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+                <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; text-align: center;">
+                    <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total Concedido em NCs</span>
+                    <div style="font-size: 20px; font-weight: 800; color: #0f172a; margin-top: 4px;">R$ {total_recebido_ano:,.2f}</div>
+                    <span style="font-size: 11px; color: #64748b;">{len(df_ncs_ano)} Notas de Crédito</span>
+                </div>
+                <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; text-align: center;">
+                    <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total Empenhado / Alocado</span>
+                    <div style="font-size: 20px; font-weight: 800; color: #1e3a29; margin-top: 4px;">R$ {total_empenhado_ano:,.2f}</div>
+                    <span style="font-size: 11px; color: #64748b;">{total_itens_cadastrados} itens adquiridos</span>
+                </div>
+                <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; text-align: center;">
+                    <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;">Saldo Global Disponível</span>
+                    <div style="font-size: 20px; font-weight: 800; color: {'#dc2626' if saldo_ano < 0 else '#15803d'}; margin-top: 4px;">R$ {saldo_ano:,.2f}</div>
+                    <span style="font-size: 11px; color: #64748b;">Remanescente para empenho</span>
+                </div>
+                <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; text-align: center;">
+                    <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;">Taxa de Execução</span>
+                    <div style="font-size: 20px; font-weight: 800; color: #0284c7; margin-top: 4px;">{pct_exec:.1f}%</div>
+                    <span style="font-size: 11px; color: #64748b;">Índice de aproveitamento orçamentário</span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Tabela Detalhada das Notas de Crédito
+        if not df_ncs_ano.empty:
+            st.markdown("##### 📋 Tabela Discriminativa de Notas de Crédito do Exercício")
+            df_ncs_exibir = df_ncs_ano.copy()
+            df_ncs_exibir["% Exec."] = df_ncs_exibir.apply(lambda r: f"{(r['Total Empenhado'] / r['Valor Recebido'] * 100):.1f}%" if r["Valor Recebido"] > 0 else "0.0%", axis=1)
+            df_ncs_exibir["Valor Recebido (R$)"] = df_ncs_exibir["Valor Recebido"].apply(lambda x: f"R$ {x:,.2f}")
+            df_ncs_exibir["Total Empenhado (R$)"] = df_ncs_exibir["Total Empenhado"].apply(lambda x: f"R$ {x:,.2f}")
+            df_ncs_exibir["Saldo (R$)"] = df_ncs_exibir["Saldo"].apply(lambda x: f"R$ {x:,.2f}")
+            cols_nc_view = ["NC", "ND", "PI", "Qtd Itens", "Valor Recebido (R$)", "Total Empenhado (R$)", "Saldo (R$)", "% Exec."]
+            if "Seção" in df_ncs_exibir.columns and tipo_perfil == "Fiscal":
+                cols_nc_view.insert(1, "Seção")
+            st.dataframe(df_ncs_exibir[cols_nc_view], use_container_width=True, hide_index=True)
+
+        # Quadro 2: Gráficos e Distribuição de Recursos
+        st.markdown(f"""
+        <div style="background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-top: 24px; margin-bottom: 22px; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
+            <div style="border-bottom: 2px solid #1e3a29; padding-bottom: 10px; margin-bottom: 18px;">
+                <h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #1e3a29; text-transform: uppercase; letter-spacing: 0.5px;">
+                    2. Gráficos e Distribuição dos Recursos do Exercício ({ano_selecionado})
+                </h3>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_g1, col_g2 = st.columns([1, 1])
+        if not df_itens_ano.empty:
+            with col_g1:
+                st.markdown("###### 📊 Alocação por Natureza de Despesa (ND) e Status")
+                df_agrup_nd = df_itens_ano.groupby(["ND", "Situação"])["Total"].sum().reset_index()
+                escala_cores_rel = alt.Scale(domain=["Recebido", "Planejamento", "Aguardando entrega"], range=["#28a745", "#007bff", "#dc3545"])
+                graf_nd = alt.Chart(df_agrup_nd).mark_bar().encode(
+                    x=alt.X("ND:N", title="Natureza de Despesa"),
+                    y=alt.Y("Total:Q", title="Total Alocado (R$)"),
+                    color=alt.Color("Situação:N", scale=escala_cores_rel, title="Situação"),
+                    tooltip=[alt.Tooltip("ND:N"), alt.Tooltip("Situação:N"), alt.Tooltip("Total:Q", format=",.2f")]
+                ).properties(height=340)
+                st.altair_chart(graf_nd, use_container_width=True)
+            
+            with col_g2:
+                st.markdown("###### 🏢 Top Fornecedores / Credores por Volume Financeiro")
+                df_forn = df_itens_ano.groupby("Fornecedor")["Total"].sum().reset_index().sort_values("Total", ascending=False).head(8)
+                graf_forn = alt.Chart(df_forn).mark_bar(color="#1e3a29").encode(
+                    x=alt.X("Total:Q", title="Valor Total (R$)"),
+                    y=alt.Y("Fornecedor:N", sort="-x", title="Fornecedor"),
+                    tooltip=[alt.Tooltip("Fornecedor:N"), alt.Tooltip("Total:Q", format=",.2f")]
+                ).properties(height=340)
+                st.altair_chart(graf_forn, use_container_width=True)
+
+        # Quadro 3: Listagem Completa de Todos os Itens Adquiridos no Ano (com Quantidades)
+        st.markdown(f"""
+        <div style="background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-top: 24px; margin-bottom: 22px; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
+            <div style="border-bottom: 2px solid #1e3a29; padding-bottom: 10px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #1e3a29; text-transform: uppercase; letter-spacing: 0.5px;">
+                    3. Listagem Geral de Todos os Itens Adquiridos no Ano ({total_itens_cadastrados} itens • {total_qtd_unidades} unidades)
+                </h3>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not df_itens_ano.empty:
+            filtro_busca_item = st.text_input("🔍 Filtrar itens do relatório anual por nome, fornecedor ou pregão:", placeholder="Digite para filtrar itens...", key="busca_itens_relatorio_anual")
+            
+            df_itens_filtrado = df_itens_ano.copy()
+            if filtro_busca_item.strip():
+                termo = filtro_busca_item.strip().lower()
+                df_itens_filtrado = df_itens_filtrado[
+                    df_itens_filtrado["Nome"].astype(str).str.lower().str.contains(termo) |
+                    df_itens_filtrado["Fornecedor"].astype(str).str.lower().str.contains(termo) |
+                    df_itens_filtrado["NC"].astype(str).str.lower().str.contains(termo) |
+                    df_itens_filtrado["Pregão"].astype(str).str.lower().str.contains(termo)
+                ]
+
+            df_itens_exibir = df_itens_filtrado.copy()
+            df_itens_exibir["Valor Unitário (R$)"] = df_itens_exibir["Valor Unitário"].apply(lambda x: f"R$ {x:,.2f}")
+            df_itens_exibir["Total (R$)"] = df_itens_exibir["Total"].apply(lambda x: f"R$ {x:,.2f}")
+            
+            colunas_itens_view = ["Item", "NC", "ND", "Subitem", "Nome", "Qtd", "Valor Unitário (R$)", "Total (R$)", "Situação", "Fornecedor", "CNPJ", "Pregão", "Ata"]
+            if "Seção" in df_itens_exibir.columns and tipo_perfil == "Fiscal":
+                colunas_itens_view.insert(2, "Seção")
+            
+            st.dataframe(df_itens_exibir[colunas_itens_view], use_container_width=True, hide_index=True)
+
+            # Totalizador de quantidades e valores
+            qtd_filtrada = int(df_itens_filtrado["Qtd"].sum())
+            total_filtrado = float(df_itens_filtrado["Total"].sum())
+            st.markdown(f"""
+            <div style="display: flex; justify-content: flex-end; gap: 24px; background: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: 8px; padding: 12px 20px; margin-top: 10px; margin-bottom: 20px;">
+                <div><span style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total de Itens:</span> <span style="font-size: 16px; font-weight: 800; color: #0f172a;">{len(df_itens_filtrado)} itens</span></div>
+                <div><span style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total de Quantidades (Unidades):</span> <span style="font-size: 16px; font-weight: 800; color: #0f172a;">{qtd_filtrada:,} unid.</span></div>
+                <div><span style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase;">Valor Total Financeiro:</span> <span style="font-size: 16px; font-weight: 800; color: #1e3a29;">R$ {total_filtrado:,.2f}</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.info("Nenhum item adquirido foi lançado para o exercício selecionado.")
+
+        # Quadro 4: Termo de Encerramento e Assinaturas Oficiais
+        config_req_atual = banco_dados.get("CONFIG_REQUISICAO", {}) if isinstance(banco_dados, dict) else {}
+        nome_chefe = config_req_atual.get("assinatura_nome", "Chefe da Seção")
+        funcao_chefe = config_req_atual.get("assinatura_funcao", f"Chefe da {secao_ativa}")
+        nome_od = config_req_atual.get("od_nome", "Ordenador de Despesas")
+        funcao_od = config_req_atual.get("od_funcao", "Ordenador de Despesas")
+
+        st.markdown(f"""
+        <div style="background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 30px; margin-top: 25px; margin-bottom: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
+            <div style="text-align: center; margin-bottom: 40px;">
+                <p style="font-size: 13px; color: #475569; margin: 0;">Certifico que as informações financeiras e a listagem de materiais/serviços acima consolidados refletem fielmente a execução dos créditos orçamentários do Exercício {ano_selecionado}.</p>
+                <p style="font-size: 12px; color: #64748b; margin-top: 6px;">Quartel em {config_req_atual.get('cidade_om', 'Sede da OM')}, em {data_hora_emissao}.</p>
+            </div>
+            <div style="display: flex; justify-content: space-around; flex-wrap: wrap; gap: 40px; margin-top: 50px;">
+                <div style="text-align: center; min-width: 250px;">
+                    <div style="border-top: 1.5px solid #0f172a; width: 260px; margin: 0 auto 8px auto;"></div>
+                    <div style="font-weight: 700; font-size: 13px; color: #0f172a;">{nome_chefe}</div>
+                    <div style="font-size: 11px; color: #64748b;">{funcao_chefe}</div>
+                </div>
+                <div style="text-align: center; min-width: 250px;">
+                    <div style="border-top: 1.5px solid #0f172a; width: 260px; margin: 0 auto 8px auto;"></div>
+                    <div style="font-weight: 700; font-size: 13px; color: #0f172a;">{nome_od}</div>
+                    <div style="font-size: 11px; color: #64748b;">{funcao_od}</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+    # =========================================================================
+    # PAINEL GERAL (CARDS, GRÁFICOS E TABELAS EXECUTIVAS)
+    # =========================================================================
+    if not df_itens_ano.empty or not df_ncs_ano.empty:
+        # Cards de Indicadores
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Total Concedido em NCs", f"R$ {total_recebido_ano:,.2f}", f"{len(df_ncs_ano)} NCs ativas")
+        with c2:
+            st.metric("Total Empenhado / Requisitado", f"R$ {total_empenhado_ano:,.2f}", f"{total_itens_cadastrados} itens lançados")
+        with c3:
+            st.metric("Saldo Remanescente", f"R$ {saldo_ano:,.2f}", f"{pct_exec:.1f}% executado", delta_color="normal" if saldo_ano >= 0 else "inverse")
+        with c4:
+            st.metric("Unidades Físicas Adquiridas", f"{total_qtd_unidades:,}", f"{total_itens_cadastrados} descrições distintas")
+
+        st.markdown("---")
+
+        # Gráfico por Natureza de Despesa
+        st.markdown("#### 📊 Distribuição Orçamentária por Natureza de Despesa (ND)")
+        df_agrupado = df_itens_ano.groupby(["ND", "Situação"])["Total"].sum().reset_index()
         
         escala_cores = alt.Scale(domain=["Recebido", "Planejamento", "Aguardando entrega"], range=["#28a745", "#007bff", "#dc3545"])
         grafico_anual = alt.Chart(df_agrupado).mark_bar().encode(
             x=alt.X("ND:N", title="Natureza de Despesa (ND)"),
-            y=alt.Y("Valor Total:Q", title="Total (R$)"),
+            y=alt.Y("Total:Q", title="Total (R$)"),
             color=alt.Color("Situação:N", scale=escala_cores, title="Status do Recurso"),
-            tooltip=[alt.Tooltip("ND:N"), alt.Tooltip("Situação:N"), alt.Tooltip("Valor Total:Q", format=",.2f")]
-        ).properties(height=450)
+            tooltip=[alt.Tooltip("ND:N"), alt.Tooltip("Situação:N"), alt.Tooltip("Total:Q", format=",.2f")]
+        ).properties(height=380)
         st.altair_chart(grafico_anual, use_container_width=True)
+
+        # Tabela consolidada de Notas de Crédito
+        st.markdown("#### 📑 Notas de Crédito do Exercício")
+        if not df_ncs_ano.empty:
+            df_nc_tab = df_ncs_ano.copy()
+            df_nc_tab["% Exec."] = df_nc_tab.apply(lambda r: f"{(r['Total Empenhado'] / r['Valor Recebido'] * 100):.1f}%" if r["Valor Recebido"] > 0 else "0.0%", axis=1)
+            df_nc_tab["Valor Recebido"] = df_nc_tab["Valor Recebido"].apply(lambda x: f"R$ {x:,.2f}")
+            df_nc_tab["Total Empenhado"] = df_nc_tab["Total Empenhado"].apply(lambda x: f"R$ {x:,.2f}")
+            df_nc_tab["Saldo"] = df_nc_tab["Saldo"].apply(lambda x: f"R$ {x:,.2f}")
+            cols_show = ["NC", "ND", "PI", "Qtd Itens", "Valor Recebido", "Total Empenhado", "Saldo", "% Exec."]
+            if tipo_perfil == "Fiscal" and "Seção" in df_nc_tab.columns:
+                cols_show.insert(1, "Seção")
+            st.dataframe(df_nc_tab[cols_show], use_container_width=True, hide_index=True)
+
+        # Listagem Completa de Itens Adquiridos no Ano
+        st.markdown(f"#### 📦 Todos os Itens Adquiridos no Ano ({total_itens_cadastrados} itens • {total_qtd_unidades} unidades)")
+        filtro_item_painel = st.text_input("Filtrar itens adquiridos (nome, fornecedor, CNPJ, ata):", key="busca_itens_painel_global")
         
-        total_geral_ano = df_agrupado["Valor Total"].sum()
-        st.markdown(f"""
-        <div style="display: flex; justify-content: flex-end; margin-top: 14px; margin-bottom: 20px;">
-            <div style="background: #ffffff; border: 1.5px solid #cbd5e1; border-radius: 10px; padding: 12px 24px; box-shadow: 0 2px 6px rgba(0,0,0,0.04); display: flex; gap: 14px; align-items: baseline;">
-                <span style="font-size: 14px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">Total Geral Cadastrado em {ano_selecionado}:</span>
-                <span style="font-size: 24px; font-weight: 800; color: #1e3a29;">R$ {total_geral_ano:,.2f}</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        df_itens_view_painel = df_itens_ano.copy()
+        if filtro_item_painel.strip():
+            t = filtro_item_painel.strip().lower()
+            df_itens_view_painel = df_itens_view_painel[
+                df_itens_view_painel["Nome"].astype(str).str.lower().str.contains(t) |
+                df_itens_view_painel["Fornecedor"].astype(str).str.lower().str.contains(t) |
+                df_itens_view_painel["NC"].astype(str).str.lower().str.contains(t)
+            ]
+
+        df_itens_view_painel["Valor Unitário"] = df_itens_view_painel["Valor Unitário"].apply(lambda x: f"R$ {x:,.2f}")
+        df_itens_view_painel["Total"] = df_itens_view_painel["Total"].apply(lambda x: f"R$ {x:,.2f}")
         
-        st.markdown("---")
-        df_pivot = df_agrupado.pivot_table(index="ND", columns="Situação", values="Valor Total", aggfunc="sum").fillna(0)
-        df_pivot["Total Geral por ND"] = df_pivot.sum(axis=1)
-        for col in df_pivot.columns:
-            df_pivot[col] = df_pivot[col].apply(lambda x: f"R$ {x:,.2f}")
-        st.dataframe(df_pivot, use_container_width=True)
+        cols_it_show = ["Item", "NC", "ND", "Subitem", "Nome", "Qtd", "Valor Unitário", "Total", "Situação", "Fornecedor", "Pregão", "Ata"]
+        if tipo_perfil == "Fiscal" and "Seção" in df_itens_view_painel.columns:
+            cols_it_show.insert(2, "Seção")
+        
+        st.dataframe(df_itens_view_painel[cols_it_show], use_container_width=True, hide_index=True)
     else:
-        st.info("Não há itens registrados para exibição no painel global.")
+        st.info(f"Nenhum item ou Nota de Crédito registrados para exibição no exercício {ano_selecionado}.")
 
 # =====================================================================
 # ABA 4: CONSULTA DE PREGÕES & IMPORTAÇÃO DIRETA PARA NOTA DE CRÉDITO
@@ -4411,7 +5422,12 @@ with tab_consulta_pregoes:
                                         v_sug = float(item_alvo.get("Valor Unitario Sugerido", 0.0))
                                         valor_unit_imp = st.number_input("Valor Unitário (R$):", min_value=0.0, value=v_sug, step=0.01)
 
-                                    opcoes_sub_imp, idx_sub_imp, mapa_sub_imp = montar_opcoes_subitem(nd_dest, item_alvo.get("Descrição", ""))
+                                    sugestao_ia_imp = _cache_classificacao_ia.get(f"{nd_dest}_{item_alvo.get('Descrição', '').strip().lower()}")
+                                    opcoes_sub_imp, idx_sub_imp, mapa_sub_imp = montar_opcoes_subitem(
+                                        nd_dest, 
+                                        item_alvo.get("Descrição", ""),
+                                        sugestao_ia=sugestao_ia_imp
+                                    )
 
                                     c_imp4, c_imp5, c_imp6 = st.columns(3)
                                     with c_imp4:
