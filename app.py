@@ -2216,9 +2216,99 @@ injetar_estilos_customizados()
 # =====================================================================
 # 2. CONSTANTES E CONEXÃO SUPABASE
 # =====================================================================
-URL = "https://oxneqoegehufjksvupji.supabase.co"
-KEY = "sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX"
-supabase: Client = create_client(URL, KEY)
+DEFAULT_SUPABASE_URL = "https://oxneqoegehufjksvupji.supabase.co"
+DEFAULT_SUPABASE_KEY = "sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX"
+
+def obter_credenciais_supabase() -> Tuple[str, str]:
+    # 1. Variáveis de ambiente (Render, Docker, etc.)
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    key = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_ANON_KEY", "")).strip()
+
+    # 2. Secrets do Streamlit
+    if not url or not key:
+        try:
+            if hasattr(st, "secrets"):
+                if not url and "SUPABASE_URL" in st.secrets:
+                    url = str(st.secrets["SUPABASE_URL"]).strip()
+                if not key and "SUPABASE_KEY" in st.secrets:
+                    key = str(st.secrets["SUPABASE_KEY"]).strip()
+                if not key and "SUPABASE_ANON_KEY" in st.secrets:
+                    key = str(st.secrets["SUPABASE_ANON_KEY"]).strip()
+        except Exception:
+            pass
+
+    # 3. Session state (ajuste dinâmico na tela de login)
+    if "custom_supabase_url" in st.session_state and st.session_state["custom_supabase_url"]:
+        url = str(st.session_state["custom_supabase_url"]).strip()
+    if "custom_supabase_key" in st.session_state and st.session_state["custom_supabase_key"]:
+        key = str(st.session_state["custom_supabase_key"]).strip()
+
+    # 4. Fallback padrão do projeto
+    if not url:
+        url = DEFAULT_SUPABASE_URL
+    if not key:
+        key = DEFAULT_SUPABASE_KEY
+
+    return url, key
+
+URL, KEY = obter_credenciais_supabase()
+
+def inicializar_cliente_supabase(url_sb: str, key_sb: str) -> Optional[Client]:
+    try:
+        return create_client(url_sb, key_sb)
+    except Exception:
+        return None
+
+supabase: Optional[Client] = inicializar_cliente_supabase(URL, KEY)
+
+def testar_conexao_supabase(client_sb: Optional[Client]) -> Tuple[bool, str]:
+    if client_sb is None:
+        return False, "Cliente Supabase não pôde ser instanciado com as credenciais atuais."
+    try:
+        client_sb.table("usuarios").select("id").limit(1).execute()
+        return True, "Conexão com o banco de dados Supabase ativa e respondendo perfeitamente."
+    except Exception as e:
+        msg = str(e)
+        if "Name or service not known" in msg or "ConnectError" in msg or "gaierror" in msg:
+            return False, f"Servidor não encontrado no DNS ({msg}). O projeto pode estar pausado por inatividade no painel do Supabase."
+        return False, msg
+
+def formatar_erro_supabase(e: Exception, contexto: str = "operação") -> str:
+    msg = str(e)
+    if "Name or service not known" in msg or "ConnectError" in msg or "gaierror" in msg:
+        return (
+            f"🚨 **Falha de Conexão com o Supabase:** O servidor do banco de dados (`{URL}`) não pôde ser localizado (DNS / Name or service not known).\n\n"
+            "**Causa provável:** O projeto no Supabase foi **pausado por inatividade** (comum no plano gratuito após 7 dias sem uso).\n\n"
+            "👉 **Como resolver agora:**\n"
+            "1. Acesse o painel do [Supabase Dashboard](https://supabase.com/dashboard)\n"
+            "2. Localize seu projeto e clique no botão **'Restore Project'** (Restaurar Projeto)\n"
+            "3. Aguarde 1 a 2 minutos para que o DNS e os serviços voltem a responder\n"
+            "4. Recarregue esta página e faça o login normalmente.\n\n"
+            "*Se você criou um novo projeto com outra URL e Chave, você pode informá-las no painel 'Configurações de Conexão' abaixo ou nas variáveis `SUPABASE_URL` e `SUPABASE_KEY` do Render.*"
+        )
+    return f"Erro ao realizar {contexto}: {msg}"
+
+# Rotina de Keep-Alive em segundo plano (evita inatividade de 7 dias do Supabase)
+import threading
+
+def _iniciar_keep_alive_background():
+    def _loop():
+        while True:
+            try:
+                time.sleep(43200) # Ping a cada 12 horas
+                url_k, key_k = obter_credenciais_supabase()
+                sb_k = inicializar_cliente_supabase(url_k, key_k)
+                if sb_k:
+                    sb_k.table("usuarios").select("id").limit(1).execute()
+            except Exception:
+                pass
+
+    if not getattr(st, "_keep_alive_thread_ativa", False):
+        st._keep_alive_thread_ativa = True
+        th = threading.Thread(target=_loop, daemon=True)
+        th.start()
+
+_iniciar_keep_alive_background()
 
 SIASG_BASE = "https://www2.comprasnet.gov.br/siasgnet-atasrp/public"
 URL_PESQUISA_SIASG = f"{SIASG_BASE}/pesquisarLicitacaoSRP.do"
@@ -3454,20 +3544,28 @@ if st.session_state.usuario_logado is None:
             if btn_login:
                 if not usuario_login or not senha_login:
                     st.warning("Preencha usuário e senha.")
+                elif supabase is None:
+                    st.error("⚠️ Cliente Supabase não pôde ser inicializado. Verifique a URL e Chave no painel de configurações abaixo.")
                 else:
-                    resposta = supabase.table("usuarios").select("*").eq("id", usuario_login).execute()
-                    if len(resposta.data) > 0:
-                        usuario_db = resposta.data[0]
-                        if checar_senha(senha_login, usuario_db.get("senha", "")):
-                            if usuario_db.get("senha") == senha_login:
-                                supabase.table("usuarios").update({"senha": hash_senha(senha_login)}).eq("id", usuario_login).execute()
-                            
-                            st.session_state.usuario_logado = usuario_login
-                            st.rerun()
+                    try:
+                        resposta = supabase.table("usuarios").select("*").eq("id", usuario_login).execute()
+                        if resposta.data and len(resposta.data) > 0:
+                            usuario_db = resposta.data[0]
+                            if checar_senha(senha_login, usuario_db.get("senha", "")):
+                                if usuario_db.get("senha") == senha_login:
+                                    try:
+                                        supabase.table("usuarios").update({"senha": hash_senha(senha_login)}).eq("id", usuario_login).execute()
+                                    except Exception:
+                                        pass
+                                
+                                st.session_state.usuario_logado = usuario_login
+                                st.rerun()
+                            else:
+                                st.error("Senha incorreta!")
                         else:
-                            st.error("Senha incorreta!")
-                    else:
-                        st.error("Usuário não encontrado!")
+                            st.error("Usuário não encontrado!")
+                    except Exception as err:
+                        st.error(formatar_erro_supabase(err, "autenticação de usuário"))
                 
     with col_divisor:
         st.write("")
@@ -3497,32 +3595,77 @@ if st.session_state.usuario_logado is None:
             if btn_cadastrar:
                 if not novo_user or not nova_senha or not novo_nome or not nova_om or not nova_secao:
                     st.warning("Preencha todos os campos obrigatórios.")
+                elif supabase is None:
+                    st.error("⚠️ Cliente Supabase não pôde ser inicializado. Verifique a URL e Chave no painel de configurações abaixo.")
                 else:
-                    verifica_user = supabase.table("usuarios").select("id").eq("id", novo_user).execute()
-                    if len(verifica_user.data) > 0:
-                        st.error("Este nome de usuário já está em uso.")
-                    else:
-                        verifica_fiscal = supabase.table("usuarios").select("id").eq("om", nova_om).eq("perfil", "Fiscal").execute()
-                        
-                        if len(verifica_fiscal.data) > 0:
-                            st.error("⛔ Esta OM já possui um Fiscal cadastrado no sistema. Solicite a ele a criação da sua conta.")
+                    try:
+                        verifica_user = supabase.table("usuarios").select("id").eq("id", novo_user).execute()
+                        if verifica_user.data and len(verifica_user.data) > 0:
+                            st.error("Este nome de usuário já está em uso.")
                         else:
-                            supabase.table("usuarios").insert({
-                                "id": novo_user, 
-                                "senha": hash_senha(nova_senha), 
-                                "nome": novo_nome, 
-                                "om": nova_om, 
-                                "secao": nova_secao, 
-                                "perfil": novo_perfil
-                            }).execute()
+                            verifica_fiscal = supabase.table("usuarios").select("id").eq("om", nova_om).eq("perfil", "Fiscal").execute()
                             
-                            id_secao = f"{nova_om}_{nova_secao}"
-                            verifica_banco = supabase.table("dados").select("id").eq("id", id_secao).execute()
-                            if len(verifica_banco.data) == 0:
-                                supabase.table("dados").insert({"id": id_secao, "ncs": {}}).execute()
+                            if verifica_fiscal.data and len(verifica_fiscal.data) > 0:
+                                st.error("⛔ Esta OM já possui um Fiscal cadastrado no sistema. Solicite a ele a criação da sua conta.")
+                            else:
+                                supabase.table("usuarios").insert({
+                                    "id": novo_user, 
+                                    "senha": hash_senha(nova_senha), 
+                                    "nome": novo_nome, 
+                                    "om": nova_om, 
+                                    "secao": nova_secao, 
+                                    "perfil": novo_perfil
+                                }).execute()
                                 
-                            st.success("✅ Conta de Fiscal criada com sucesso! Faça o login ao lado.")
-    
+                                id_secao = f"{nova_om}_{nova_secao}"
+                                verifica_banco = supabase.table("dados").select("id").eq("id", id_secao).execute()
+                                if not verifica_banco.data or len(verifica_banco.data) == 0:
+                                    supabase.table("dados").insert({"id": id_secao, "ncs": {}}).execute()
+                                    
+                                st.success("✅ Conta de Fiscal criada com sucesso! Faça o login ao lado.")
+                    except Exception as err:
+                        st.error(formatar_erro_supabase(err, "cadastro de militar"))
+
+    st.markdown("---")
+
+    # Painel de diagnóstico e configuração do Supabase
+    with st.expander("🔧 Diagnóstico e Configuração de Conexão com o Supabase", expanded=False):
+        st.markdown(f"**URL Configurada:** `{URL}`")
+        st.markdown(f"**Chave Configurada:** `{KEY[:16]}...{KEY[-6:] if len(KEY) > 22 else ''}`")
+        
+        col_test_btn, _ = st.columns([1.5, 3])
+        with col_test_btn:
+            if st.button("🔄 Testar Conexão com Supabase", key="btn_test_conexao_sb_ui", use_container_width=True):
+                ok_con, msg_con = testar_conexao_supabase(supabase)
+                if ok_con:
+                    st.success(f"✅ {msg_con}")
+                else:
+                    st.error(f"❌ {msg_con}")
+        
+        st.markdown("---")
+        st.markdown("##### ✏️ Atualizar URL e Chave do Supabase (Novo Projeto)")
+        st.caption("Caso seu projeto anterior tenha sido desativado ou você tenha criado uma nova instância do Supabase:")
+        with st.form("form_atualizar_sb_cred"):
+            input_url_sb = st.text_input("Supabase Project URL (Ex: https://xyzcompany.supabase.co):", value=URL)
+            input_key_sb = st.text_input("Supabase Anon Public Key:", value=KEY, type="password")
+            btn_aplicar_sb = st.form_submit_button("Salvar e Reconectar", type="primary")
+            if btn_aplicar_sb:
+                if input_url_sb.strip() and input_key_sb.strip():
+                    st.session_state["custom_supabase_url"] = input_url_sb.strip()
+                    st.session_state["custom_supabase_key"] = input_key_sb.strip()
+                    st.success("Configurações atualizadas com sucesso! Reconectando...")
+                    st.rerun()
+                else:
+                    st.warning("Preencha a URL e a Chave.")
+
+        st.info("""
+        💡 **Configuração Definitiva no Render:**
+        No painel do Render (**Dashboard > Seu Serviço > Environment Variables**), adicione ou edite:
+        - `SUPABASE_URL`: A URL do seu projeto no Supabase
+        - `SUPABASE_KEY`: A chave anônima (anon key) do seu projeto
+        Dessa forma, o Render sempre iniciará o sistema apontando diretamente para o seu banco.
+        """)
+
     st.markdown("---")
     st.markdown(
         "<div style='text-align: center; color: gray; font-size: 14px;'>"
@@ -3538,8 +3681,25 @@ if st.session_state.usuario_logado is None:
 # =====================================================================
 usuario_atual = st.session_state.usuario_logado
 
-resp_perfil = supabase.table("usuarios").select("*").eq("id", usuario_atual).execute()
-if not resp_perfil.data:
+if not supabase:
+    st.error("Serviço de banco de dados não inicializado. Verifique a URL do Supabase.")
+    if st.button("Voltar ao Login"):
+        st.session_state.usuario_logado = None
+        st.rerun()
+    st.stop()
+
+try:
+    resp_perfil = supabase.table("usuarios").select("*").eq("id", usuario_atual).execute()
+except Exception as e:
+    st.error(formatar_erro_supabase(e, "carregamento dos dados do usuário"))
+    if st.button("🔄 Tentar novamente"):
+        st.rerun()
+    if st.button("🚪 Sair"):
+        st.session_state.usuario_logado = None
+        st.rerun()
+    st.stop()
+
+if not resp_perfil or not resp_perfil.data:
     st.session_state.usuario_logado = None
     st.rerun()
     st.stop()
@@ -3577,8 +3737,11 @@ with st.sidebar.expander("⚙️ Alterar Minha Senha"):
             elif nova_senha_input != confirma_senha_input:
                 st.error("As senhas não coincidem.")
             else:
-                supabase.table("usuarios").update({"senha": hash_senha(nova_senha_input)}).eq("id", usuario_atual).execute()
-                st.success("✅ Senha atualizada com sucesso!")
+                try:
+                    supabase.table("usuarios").update({"senha": hash_senha(nova_senha_input)}).eq("id", usuario_atual).execute()
+                    st.success("✅ Senha atualizada com sucesso!")
+                except Exception as e:
+                    st.error(formatar_erro_supabase(e, "atualização de senha"))
 
 st.sidebar.markdown("---")
 if st.sidebar.button("Sair da Conta (Logout)", use_container_width=True):
@@ -3601,9 +3764,16 @@ st.sidebar.markdown(
 # =====================================================================
 OPCAO_TODAS_SECOES = "🌟 TODAS AS SEÇÕES DA OM"
 
-# Recupera as seções cadastradas da OM
-resp_secoes = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
-secoes_da_om = sorted(list(set([r["secao"] for r in resp_secoes.data if r.get("secao")])))
+# Recupera as seções cadastradas da OM com tolerância a falhas
+secoes_da_om = []
+try:
+    if supabase:
+        resp_secoes = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
+        if resp_secoes and resp_secoes.data:
+            secoes_da_om = sorted(list(set([r["secao"] for r in resp_secoes.data if r.get("secao")])))
+except Exception:
+    pass
+
 if not secoes_da_om:
     secoes_da_om = [secao_user]
 
@@ -3631,24 +3801,33 @@ with col_topo_sec:
 if tipo_perfil == "Fiscal" and secao_ativa == OPCAO_TODAS_SECOES:
     id_banco = f"{om_user}_TODAS"
     def carregar_dados_banco():
-        resp = supabase.table("dados").select("*").like("id", f"{om_user}_%").execute()
-        banco_unificado = {}
-        for linha in resp.data:
-            ncs_sec = linha.get("ncs", {})
-            if isinstance(ncs_sec, dict):
-                for nc, val in ncs_sec.items():
-                    if nc != "CONFIG_REQUISICAO":
-                        banco_unificado[nc] = val
-                    else:
-                        if "CONFIG_REQUISICAO" not in banco_unificado:
-                            banco_unificado["CONFIG_REQUISICAO"] = val
-        return banco_unificado
+        try:
+            if not supabase: return {}
+            resp = supabase.table("dados").select("*").like("id", f"{om_user}_%").execute()
+            banco_unificado = {}
+            for linha in (resp.data or []):
+                ncs_sec = linha.get("ncs", {})
+                if isinstance(ncs_sec, dict):
+                    for nc, val in ncs_sec.items():
+                        if nc != "CONFIG_REQUISICAO":
+                            banco_unificado[nc] = val
+                        else:
+                            if "CONFIG_REQUISICAO" not in banco_unificado:
+                                banco_unificado["CONFIG_REQUISICAO"] = val
+            return banco_unificado
+        except Exception as e:
+            st.error(formatar_erro_supabase(e, "carregamento das notas de crédito da OM"))
+            return {}
 else:
     id_banco = f"{om_user}_{secao_ativa}"
     def carregar_dados_banco():
-        resp_dados = supabase.table("dados").select("ncs").eq("id", id_banco).execute()
-        if len(resp_dados.data) > 0:
-            return resp_dados.data[0].get("ncs", {})
+        try:
+            if not supabase: return {}
+            resp_dados = supabase.table("dados").select("ncs").eq("id", id_banco).execute()
+            if resp_dados and resp_dados.data and len(resp_dados.data) > 0:
+                return resp_dados.data[0].get("ncs", {})
+        except Exception as e:
+            st.error(formatar_erro_supabase(e, "carregamento dos dados da seção"))
         return {}
 
 if "banco" not in st.session_state or st.session_state.get("secao_carregada") != id_banco:
@@ -3660,7 +3839,11 @@ banco_dados = st.session_state.banco
 def salvar_dados(dados_para_salvar):
     if tipo_perfil == "Fiscal" and secao_ativa == OPCAO_TODAS_SECOES:
         return
-    supabase.table("dados").update({"ncs": dados_para_salvar}).eq("id", id_banco).execute()
+    try:
+        if supabase:
+            supabase.table("dados").update({"ncs": dados_para_salvar}).eq("id", id_banco).execute()
+    except Exception as e:
+        st.error(formatar_erro_supabase(e, "salvamento de dados no banco"))
 
 # Abertura inicial garantida no ano corrente
 ano_atual_sistema = str(datetime.datetime.now().year)
@@ -5744,14 +5927,19 @@ with tab_acessos:
         st.subheader("👥 Gestão de Acessos, Equipe e Transferência de Funções")
         
         # Recupera usuários do Supabase de acordo com a hierarquia
-        if tipo_perfil == "Chefe":
-            st.info(f"👑 **Painel do Chefe de Seção ({secao_user}):** Você visualiza os integrantes da sua seção, pode cadastrar novos Operadores e transferir a Chefia da Seção.")
-            resp_membros = supabase.table("usuarios").select("id, nome, perfil, secao, om").eq("om", om_user).eq("secao", secao_user).execute()
-        else:
-            st.info(f"🛡️ **Painel do Fiscal da OM ({om_user}):** Você tem visão corporativa completa de todas as seções, pode cadastrar Chefes/Operadores e transferir a função de Fiscal Administrativo.")
-            resp_membros = supabase.table("usuarios").select("id, nome, perfil, secao, om").eq("om", om_user).execute()
-        
-        membros_raw = resp_membros.data if resp_membros.data else []
+        membros_raw = []
+        try:
+            if supabase:
+                if tipo_perfil == "Chefe":
+                    st.info(f"👑 **Painel do Chefe de Seção ({secao_user}):** Você visualiza os integrantes da sua seção, pode cadastrar novos Operadores e transferir a Chefia da Seção.")
+                    resp_membros = supabase.table("usuarios").select("id, nome, perfil, secao, om").eq("om", om_user).eq("secao", secao_user).execute()
+                else:
+                    st.info(f"🛡️ **Painel do Fiscal da OM ({om_user}):** Você tem visão corporativa completa de todas as seções, pode cadastrar Chefes/Operadores e transferir a função de Fiscal Administrativo.")
+                    resp_membros = supabase.table("usuarios").select("id, nome, perfil, secao, om").eq("om", om_user).execute()
+                membros_raw = resp_membros.data if resp_membros and resp_membros.data else []
+        except Exception as e:
+            st.error(formatar_erro_supabase(e, "consulta de militares da OM"))
+            membros_raw = []
         
         # Abas internas para organização exemplar
         aba_equipe_vis, aba_transferir, aba_cadastrar_user = st.tabs([
@@ -5988,8 +6176,14 @@ with tab_acessos:
                 st.info(f"Como **Fiscal**, você pode cadastrar **Chefes** e **Operadores** para qualquer seção do **{om_user}**.")
                 opcoes_perfil_novo = ["Chefe", "Operador"]
                 
-                resp_secoes_gerais = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
-                secoes_permitidas = sorted(list(set([r["secao"] for r in resp_secoes_gerais.data if r.get("secao")])))
+                secoes_permitidas = [secao_user]
+                try:
+                    if supabase:
+                        resp_secoes_gerais = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
+                        if resp_secoes_gerais and resp_secoes_gerais.data:
+                            secoes_permitidas = sorted(list(set([r["secao"] for r in resp_secoes_gerais.data if r.get("secao")])))
+                except Exception:
+                    pass
                 if not secoes_permitidas:
                     secoes_permitidas = [secao_user]
                 secoes_permitidas.append("NOVA SEÇÃO...")
@@ -6015,25 +6209,30 @@ with tab_acessos:
                 if st.form_submit_button("Cadastrar Novo Militar", type="primary", use_container_width=True):
                     if not novo_int_user or not novo_int_senha or not novo_int_nome or not secao_final:
                         st.warning("Preencha todos os campos para cadastrar o militar.")
+                    elif not supabase:
+                        st.error("Serviço de banco de dados não está conectado.")
                     else:
-                        verifica_existencia = supabase.table("usuarios").select("id").eq("id", novo_int_user).execute()
-                        if len(verifica_existencia.data) > 0:
-                            st.error("Este usuário já existe no sistema.")
-                        else:
-                            supabase.table("usuarios").insert({
-                                "id": novo_int_user, 
-                                "senha": hash_senha(novo_int_senha), 
-                                "nome": novo_int_nome, 
-                                "om": om_user, 
-                                "secao": secao_final, 
-                                "perfil": novo_int_perfil
-                            }).execute()
-                            
-                            id_cofre = f"{om_user}_{secao_final}"
-                            verifica_cofre = supabase.table("dados").select("id").eq("id", id_cofre).execute()
-                            if len(verifica_cofre.data) == 0:
-                                supabase.table("dados").insert({"id": id_cofre, "ncs": {}}).execute()
-                            
-                            st.success(f"✅ Conta criada com senha criptografada para {novo_int_nome} na Seção {secao_final}!")
-                            st.toast("Militar cadastrado com sucesso!")
-                            st.rerun()
+                        try:
+                            verifica_existencia = supabase.table("usuarios").select("id").eq("id", novo_int_user).execute()
+                            if verifica_existencia.data and len(verifica_existencia.data) > 0:
+                                st.error("Este usuário já existe no sistema.")
+                            else:
+                                supabase.table("usuarios").insert({
+                                    "id": novo_int_user, 
+                                    "senha": hash_senha(novo_int_senha), 
+                                    "nome": novo_int_nome, 
+                                    "om": om_user, 
+                                    "secao": secao_final, 
+                                    "perfil": novo_int_perfil
+                                }).execute()
+                                
+                                id_cofre = f"{om_user}_{secao_final}"
+                                verifica_cofre = supabase.table("dados").select("id").eq("id", id_cofre).execute()
+                                if not verifica_cofre.data or len(verifica_cofre.data) == 0:
+                                    supabase.table("dados").insert({"id": id_cofre, "ncs": {}}).execute()
+                                
+                                st.success(f"✅ Conta criada com senha criptografada para {novo_int_nome} na Seção {secao_final}!")
+                                st.toast("Militar cadastrado com sucesso!")
+                                st.rerun()
+                        except Exception as e_reg:
+                            st.error(formatar_erro_supabase(e_reg, "cadastro de novo integrante"))

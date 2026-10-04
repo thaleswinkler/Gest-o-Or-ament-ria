@@ -1,0 +1,7 @@
+{
+  "name": "Gerenciador de Recursos e Pregões",
+  "description": "Sistema de gestão de Notas de Crédito, recursos orçamentários, requisições de compra e pesquisa de pregões do SIASG.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

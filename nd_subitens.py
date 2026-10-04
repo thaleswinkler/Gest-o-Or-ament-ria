@@ -1,0 +1,1603 @@
+# =====================================================================
+# BANCO DE DADOS E LOGICA DE SUBITENS DA NATUREZA DE DESPESA (ND)
+# Baseado no Manual SIAFI / MCASP / Orcamento Federal
+# =====================================================================
+import re
+import unicodedata
+from typing import Dict, List, Tuple, Optional
+
+def _normalizar_texto(texto: str) -> str:
+    if not texto:
+        return ""
+    nfkd = unicodedata.normalize('NFKD', str(texto))
+    sem_acento = "".join([c for c in nfkd if not unicodedata.combining(c)])
+    limpo = re.sub(r'[^a-zA-Z0-9\s]', ' ', sem_acento.lower())
+    return " ".join(limpo.split())
+
+STOPWORDS_SUBITEM = {
+    "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas", "para", "pra", "com",
+    "sem", "por", "e", "ou", "o", "a", "os", "as", "um", "uma", "uns", "umas", "sob",
+    "sobre", "item", "marca", "tipo", "modelo", "unidade", "und", "un", "cx", "pct",
+    "peca", "pecas", "kg", "mm", "cm", "m", "lt", "l", "ml", "cor", "tamanho", "padrao",
+    "conf", "conforme", "especificacao", "edital", "objeto", "aquisicao", "fornecimento", "valor"
+}
+
+def extrair_palavras_chave(texto: str) -> List[str]:
+    norm = _normalizar_texto(texto)
+    return [p for p in norm.split() if len(p) >= 3 and p not in STOPWORDS_SUBITEM]
+
+def extrair_codigo_subitem(opcao_texto: str) -> str:
+    """Extrai os 2 dígitos do subitem a partir do texto formatado da opção."""
+    if not opcao_texto:
+        return ""
+    m = re.search(r'\b(\d{2})\b', str(opcao_texto))
+    return m.group(1) if m else ""
+
+# =====================================================================
+# BANCO DE DADOS OFICIAL DE SUBITENS COM FUNCAO SIAFI, PALAVRAS-CHAVE E EMENTAS
+# =====================================================================
+CATALOGO_SUBITENS: Dict[str, List[Dict]] = {   '339030': [   {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM COMBUSTIVEIS PARA MOTORES A COMBUSTAO INTERNA DE '
+                                'VEICULOS RODOVIARIOS, TRATORES EM GERAL, EMBARCACOES DIVERSAS E GRUPOS GERADORES '
+                                'ESTACIONADOS OU TRANSPORTAVEIS, E TODOS OS OLEOS LUBRIFICANTES DESTINADOS AOS '
+                                'SISTEMAS HIDRAULICOS, HIDRAMATICOS, DE CAIXA DE TRANSMISSAO DE FORCA E GRAXAS '
+                                'GRAFITADAS PARA ALTAS E BAIXAS TEMPERATURAS. ADITIVOS - ALCOOL HIDRATADO - FLUIDO '
+                                'PARA AMORTECEDOR - FLUIDO PARA TRANSMISSAO HIDRAULICA - GASOLINA - GRAXAS - OLEO '
+                                'DIESEL - OLEO PARA CARTER - OLEO PARA FREIO HIDRAULICO E OUTROS.',
+                      'keywords': [   'combustivel',
+                                      'gasolina',
+                                      'diesel',
+                                      'oleo diesel',
+                                      'alcool hidratado',
+                                      'etanol',
+                                      'lubrificante',
+                                      'oleo lubrificante',
+                                      'graxa',
+                                      'fluido freio',
+                                      'oleo carter',
+                                      'fluido transmissao',
+                                      'fluido amortecedor',
+                                      'aditivo radiador',
+                                      'aditivo'],
+                      'nd_completa': '33903001',
+                      'nome': 'COMBUSTIVEIS E LUBRIFICANTES AUTOMOTIVOS',
+                      'subitem': '01'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM COMBUSTIVEIS E LUBRIFICANTES DESTINADOS A QUALQUER '
+                                'TIPO DE AERONAVE. ADITIVOS - GASOLINA - GRAXAS - OLEOS E FLUIDOS EM GERAL - QUEROSENE '
+                                'E OUTROS.',
+                      'keywords': ['aviacao', 'aeronave', 'querosene aviacao', 'gasolina aviacao', 'oleo aviacao'],
+                      'nd_completa': '33903002',
+                      'nome': 'COMBUSTIVEIS E LUBRIFICANTES DE AVIACAO',
+                      'subitem': '02'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM COMBUSTIVEIS E LUBRIFICANTES PARA OUTRAS '
+                                'FINALIDADES QUE NAO SE ENQUADRAM EM ITENS ANTERIORES. CARBURETO - CARVAO MINERAL - '
+                                'CARVAO VEGETAL - LENHA - QUEROSENE COMUM - COMBUSTIVEIS E LUBRIFICANTES DE USO '
+                                'FERROVIARIO E OUTROS.',
+                      'keywords': [   'carbureto',
+                                      'carvao mineral',
+                                      'carvao vegetal',
+                                      'lenha',
+                                      'querosene comum',
+                                      'ferroviario'],
+                      'nd_completa': '33903003',
+                      'nome': 'COMBUSTIVEIS E LUBRIF. P/ OUTRAS FINALIDADES',
+                      'subitem': '03'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM GAS LIQUEFEITO DE PETROLEO (GLP), GAS DE COZINHA, '
+                                'ACETILENO, OXIGENIO, NITROGENIO, HELIO, FREON, GAS CARBONICO, RECARGA DE EXTINTORES '
+                                'DE INCENDIO E PO QUIMICO.',
+                      'keywords': [   'gas',
+                                      'glp',
+                                      'gas liquefeito',
+                                      'botijao',
+                                      'gas de cozinha',
+                                      'acetileno',
+                                      'oxigenio',
+                                      'nitrogenio',
+                                      'helio',
+                                      'argon',
+                                      'freon',
+                                      'gas carbico',
+                                      'extintor',
+                                      'recarga extintor',
+                                      'po quimico'],
+                      'nd_completa': '33903004',
+                      'nome': 'GAS E OUTROS MATERIAIS ENGARRAFADOS',
+                      'subitem': '04'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM ARTEFATOS EXPLOSIVOS E MUNICOES. BALAS, PROJETEIS, '
+                                'CAPSULAS, ESTOPINS, ESPOLETAS, DINAMITES, GRANADAS, POLVORA E ARTIGOS PIROTECNICOS.',
+                      'keywords': [   'municao',
+                                      'bala',
+                                      'projetil',
+                                      'capsula',
+                                      'estopim',
+                                      'espoleta',
+                                      'explosivo',
+                                      'dinamite',
+                                      'granada',
+                                      'polvora',
+                                      'fogos artificio',
+                                      'artigo pirotecnico'],
+                      'nd_completa': '33903005',
+                      'nome': 'EXPLOSIVOS E MUNICOES',
+                      'subitem': '05'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM ALIMENTOS PARA ANIMAIS. RACOES CANINAS, RACOES '
+                                'EQUINAS, ALFAFA, ALPISTE, FARELO, FUBA, MILHO EM GRAO, SAL MINERAL E SUPLEMENTOS '
+                                'ANIMAIS.',
+                      'keywords': [   'racao',
+                                      'racao canina',
+                                      'racao equina',
+                                      'alfafa',
+                                      'alpiste',
+                                      'capim',
+                                      'farelo',
+                                      'fuba',
+                                      'milho grao',
+                                      'sal mineral',
+                                      'suplemento animal',
+                                      'alimento animal'],
+                      'nd_completa': '33903006',
+                      'nome': 'ALIMENTOS PARA ANIMAIS',
+                      'subitem': '06'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM GENEROS DE ALIMENTACAO. ACUCAR, ADOCANTE, AGUA '
+                                'MINERAL, CAFE, CARNE, FRANGO, BOVINO, SUINO, PEIXE, CEREAL, ARROZ, FEIJAO, CHA, '
+                                'CONDIMENTOS, FRUTAS, GELO, LEGUMES, REFRIGERANTES, SUCOS, TEMPEROS, VERDURAS, LEITE, '
+                                'PAO, QUEIJO, MANTEIGA, BISCOITOS, BOLACHAS, FARINHA, MACARRAO, MASSA, OLEO DE SOJA, '
+                                'VINAGRE, SAL E ALIMENTOS EM GERAL.',
+                      'keywords': [   'acucar',
+                                      'adocante',
+                                      'agua mineral',
+                                      'cafe',
+                                      'carne',
+                                      'frango',
+                                      'bovino',
+                                      'suino',
+                                      'peixe',
+                                      'cereal',
+                                      'arroz',
+                                      'feijao',
+                                      'cha',
+                                      'condimento',
+                                      'fruta',
+                                      'gelo',
+                                      'legume',
+                                      'refrigerante',
+                                      'suco',
+                                      'tempero',
+                                      'verdura',
+                                      'leite',
+                                      'pao',
+                                      'queijo',
+                                      'manteiga',
+                                      'biscoito',
+                                      'bolacha',
+                                      'farinha',
+                                      'macarrao',
+                                      'massa',
+                                      'oleo soja',
+                                      'vinagre',
+                                      'sal',
+                                      'molho',
+                                      'achocolatado',
+                                      'iogurte',
+                                      'generos alimenticios',
+                                      'alimento'],
+                      'nd_completa': '33903007',
+                      'nome': 'GENEROS DE ALIMENTACAO',
+                      'subitem': '07'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM ANIMAIS PARA PESQUISA E ABATE. ITENS E EXEMPLOS: '
+                                'COBAIA, CAMUNDONGO, RATO, PEIXE VIVO, ABELHA, BOI ABATE.',
+                      'keywords': ['cobaia', 'camundongo', 'rato', 'peixe vivo', 'abelha', 'boi abate'],
+                      'nd_completa': '33903008',
+                      'nome': 'ANIMAIS PARA PESQUISA E ABATE',
+                      'subitem': '08'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MEDICAMENTOS, REMEDIOS, DROGAS, SOROS FISIOLOGICOS, '
+                                'VACINAS, FARMACOS, ANTIBIOTICOS, ANALGESICOS, ANTI-INFLAMATORIOS, ANTISEPTICOS E '
+                                'POMADAS.',
+                      'keywords': [   'medicamento',
+                                      'remedio',
+                                      'droga',
+                                      'soro fisiologico',
+                                      'vacina',
+                                      'farmaco',
+                                      'antibiotico',
+                                      'analgesico',
+                                      'antiinflamatorio',
+                                      'antisseptico',
+                                      'pomada'],
+                      'nd_completa': '33903009',
+                      'nome': 'MATERIAL FARMACOLOGICO',
+                      'subitem': '09'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAIS PARA ATENDIMENTO DENTARIO. RESINAS, '
+                                'AMALGAMAS, ANESTESICOS ODONTOLOGICOS, BROCAS DENTARIAS, AGULHAS GENGIVAIS, DENTES '
+                                'ARTIFICIAIS, MOLDEIRAS E MATERIAIS ODONTOLOGICOS.',
+                      'keywords': [   'odontologico',
+                                      'dente',
+                                      'dentista',
+                                      'amalgama',
+                                      'anestesico dental',
+                                      'broca dental',
+                                      'cimento odontologico',
+                                      'espatula odontologica',
+                                      'filme raio x dental',
+                                      'sugador cirurgico'],
+                      'nd_completa': '33903010',
+                      'nome': 'MATERIAL ODONTOLOGICO',
+                      'subitem': '10'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM PRODUTOS QUIMICOS PARA LABORATORIOS, ANALISES, '
+                                'TRATAMENTO DE AGUA E PISCINAS. ACIDOS, BASES, REAGENTES, CLORO, SOLVENTES E '
+                                'TAMPONADORES.',
+                      'keywords': [   'quimico',
+                                      'acido',
+                                      'inseticida',
+                                      'reagente quimico',
+                                      'solvente',
+                                      'sulfato',
+                                      'cloreto',
+                                      'hidroxido',
+                                      'formol',
+                                      'formicida',
+                                      'raticida'],
+                      'nd_completa': '33903011',
+                      'nome': 'MATERIAL QUIMICO',
+                      'subitem': '11'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAL DE COUDELARIA OU DE USO ZOOTECNICO. ITENS '
+                                'E EXEMPLOS: COUDELARIA, ARREAMETO, CABRESTO, FERRADURA, ESTRIBO, BRIDAO, ESPORA, '
+                                'MANTA CAVALO, CINCHA, ADESTRAMENTO, COLEIRA CAO.',
+                      'keywords': [   'coudelaria',
+                                      'arreameto',
+                                      'cabresto',
+                                      'ferradura',
+                                      'estribo',
+                                      'bridao',
+                                      'espora',
+                                      'manta cavalo',
+                                      'cincha',
+                                      'adestramento',
+                                      'coleira cao'],
+                      'nd_completa': '33903012',
+                      'nome': 'MATERIAL DE COUDELARIA OU DE USO ZOOTECNICO',
+                      'subitem': '12'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAL DE CACA E PESCA. ITENS E EXEMPLOS: PESCA, '
+                                'ANZOL, REDE PESCA, ISCA, LINHA NYLON PESCA, MOLINETE, VARA PESCA, MERGULHO.',
+                      'keywords': [   'pesca',
+                                      'anzol',
+                                      'rede pesca',
+                                      'isca',
+                                      'linha nylon pesca',
+                                      'molinete',
+                                      'vara pesca',
+                                      'mergulho'],
+                      'nd_completa': '33903013',
+                      'nome': 'MATERIAL DE CACA E PESCA',
+                      'subitem': '13'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAIS PARA EDUCACAO FISICA, TREINAMENTO E '
+                                'PRATICA DE ESPORTES. BOLAS, REDES, CONES, TATAMES, COLETES, CRONOMETROS, TROFEUS, '
+                                'MEDALHAS E ARTIGOS ESPORTIVOS.',
+                      'keywords': [   'esportivo',
+                                      'educativo',
+                                      'bola',
+                                      'bola futebol',
+                                      'bola volei',
+                                      'bola basquete',
+                                      'apito',
+                                      'chuteira',
+                                      'tenis esporte',
+                                      'quimono',
+                                      'rede volei',
+                                      'rede futebol',
+                                      'raquete',
+                                      'patins',
+                                      'joelheira',
+                                      'caneleira',
+                                      'esteira yoga',
+                                      'bone esporte',
+                                      'trofeu',
+                                      'medalha',
+                                      'jogo educativo',
+                                      'brinquedo',
+                                      'tatame'],
+                      'nd_completa': '33903014',
+                      'nome': 'MATERIAL EDUCATIVO E ESPORTIVO',
+                      'subitem': '14'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAL P/ FESTIVIDADES E HOMENAGENS. ITENS E '
+                                'EXEMPLOS: FESTIVIDADE, HOMENAGEM, ARRANJO FLORES, COROA FLORES, BUFFET, DOCES FESTA, '
+                                'SALGADOS FESTA, PLACA COMEMORATIVA, DECORACAO EVENTO.',
+                      'keywords': [   'festividade',
+                                      'homenagem',
+                                      'arranjo flores',
+                                      'coroa flores',
+                                      'buffet',
+                                      'doces festa',
+                                      'salgados festa',
+                                      'placa comemorativa',
+                                      'decoracao evento'],
+                      'nd_completa': '33903015',
+                      'nome': 'MATERIAL P/ FESTIVIDADES E HOMENAGENS',
+                      'subitem': '15'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAL DE ESCRITORIO E EXPEDIENTE EM GERAL. PAPEL '
+                                'A4, SULFITE, CANETAS ESFEROGRAFICAS, LAPIS, BORRACHAS, CLIPS, GRAMPOS, GRAMPEADORES, '
+                                'PERFURADORES, ENVELOPES, PASTAS, BLOCOS DE NOTAS, FITAS ADESIVAS, COLA, CORRETIVOS, '
+                                'TESOURAS E ARTIGOS DE PAPELARIA.',
+                      'keywords': [   'expediente',
+                                      'papel',
+                                      'papel a4',
+                                      'sulfite',
+                                      'resma',
+                                      'caneta',
+                                      'lapis',
+                                      'borracha',
+                                      'apontador',
+                                      'caderno',
+                                      'bloco',
+                                      'bloco rascunho',
+                                      'pasta',
+                                      'pasta a-z',
+                                      'pasta suspensa',
+                                      'pasta aba',
+                                      'pasta canaleta',
+                                      'pasta plastico',
+                                      'envelope',
+                                      'clipe',
+                                      'grampo',
+                                      'grampeador',
+                                      'extrator grampo',
+                                      'perfurador',
+                                      'fita adesiva',
+                                      'durex',
+                                      'fita crepe',
+                                      'fita dupla face',
+                                      'corretivo',
+                                      'tesoura',
+                                      'estilete',
+                                      'regua',
+                                      'carimbo',
+                                      'almofada carimbo',
+                                      'tinta carimbo',
+                                      'cola bastao',
+                                      'cola branca',
+                                      'grafite',
+                                      'lapiseira',
+                                      'porta lapis',
+                                      'organizador mesa',
+                                      'envelope pardo',
+                                      'etiqueta',
+                                      'etiqueta adesiva',
+                                      'marcador texto',
+                                      'pincel atomico',
+                                      'quadro branco',
+                                      'apagador quadro',
+                                      'post-it',
+                                      'bloco adesivo'],
+                      'nd_completa': '33903016',
+                      'nome': 'MATERIAL DE EXPEDIENTE',
+                      'subitem': '16'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SUPRIMENTOS DE INFORMATICA E PROCESSAMENTO DE '
+                                'DADOS. CARTUCHOS DE TINTA, TONERS PARA IMPRESSORA, PENDRIVES, MIDIAS GRAVAVEIS, '
+                                'FITAS, ETIQUETAS, CABOS USB, FILTROS DE LINHA E COMPONENTES DE CONSUMO DE TIC.',
+                      'keywords': [   'toner',
+                                      'cartucho',
+                                      'cartucho tinta',
+                                      'tinta impressora',
+                                      'fita impressora',
+                                      'mouse',
+                                      'mouse pad',
+                                      'teclado',
+                                      'pendrive',
+                                      'pen drive',
+                                      'cabo rede',
+                                      'cabo patch',
+                                      'rj45',
+                                      'conector rj',
+                                      'filtro linha',
+                                      'cd',
+                                      'dvd',
+                                      'midia',
+                                      'pilha recarregavel'],
+                      'nd_completa': '33903017',
+                      'nome': 'MATERIAL DE TIC - MATERIAL DE CONSUMO',
+                      'subitem': '17'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAIS E MEDICAMENTOS P/ USO VETERINARIO. ITENS '
+                                'E EXEMPLOS: VETERINARIO, MEDICAMENTO VETERINARIO, VACINA VETERINARIA, VERMIFUGO, '
+                                'ANTIPARASITARIO.',
+                      'keywords': [   'veterinario',
+                                      'medicamento veterinario',
+                                      'vacina veterinaria',
+                                      'vermifugo',
+                                      'antiparasitario'],
+                      'nd_completa': '33903018',
+                      'nome': 'MATERIAIS E MEDICAMENTOS P/ USO VETERINARIO',
+                      'subitem': '18'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAIS DE EMBALAGEM, EMPACOTAMENTO E LACRACAO. '
+                                'CAIXAS DE PAPELAO, SACOS PLASTICOS, FITAS ADESIVAS, PLASTICO BOLHA, CORDOES, '
+                                'BARBANTES, FITAS GOMADAS E LACRES.',
+                      'keywords': [   'embalagem',
+                                      'acondicionamento',
+                                      'caixa papelao',
+                                      'caixa plastica',
+                                      'isopor',
+                                      'caixa isopor',
+                                      'papel bolha',
+                                      'plastico bolha',
+                                      'filme stretch',
+                                      'fitilho',
+                                      'fita gomada',
+                                      'arame',
+                                      'barbante',
+                                      'saco plastico',
+                                      'sacola',
+                                      'corda amarracao'],
+                      'nd_completa': '33903019',
+                      'nome': 'MATERIAL DE ACONDICIONAMENTO E EMBALAGEM',
+                      'subitem': '19'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM ROUPARIA DE CONSUMO PARA ALOJAMENTOS E HOTÉIS DE '
+                                'TRANSITO. LENCOIS, FRONHAS, COBERTORES, COLCHAS, TOALHAS DE BANHO, TOALHAS DE ROSTO, '
+                                'TOALHAS DE MESA E TRAVESSEIROS.',
+                      'keywords': [   'cama',
+                                      'mesa e banho',
+                                      'lencol',
+                                      'fronha',
+                                      'cobertor',
+                                      'colcha',
+                                      'travesseiro',
+                                      'toalha banho',
+                                      'toalha rosto',
+                                      'toalha mesa',
+                                      'guardanapo tecido',
+                                      'capa colchao'],
+                      'nd_completa': '33903020',
+                      'nome': 'MATERIAL DE CAMA, MESA E BANHO',
+                      'subitem': '20'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM UTENSILIOS E ARTIGOS DESCARTAVEIS OU DE CONSUMO '
+                                'PARA COPA E COZINHA. COPOS DESCARTAVEIS, PRATOS, TALHERES, GUARDANAPOS, PANELAS, '
+                                'BACIAS, JARRAS, GARRAFAS TERMICAS, ESPONJAS E ARTIGOS CULINARIOS.',
+                      'keywords': [   'copa',
+                                      'cozinha',
+                                      'copo',
+                                      'copo descartavel',
+                                      'prato',
+                                      'prato descartavel',
+                                      'talher',
+                                      'garfo',
+                                      'faca',
+                                      'colher',
+                                      'xicara',
+                                      'pires',
+                                      'garrafa termica',
+                                      'bule',
+                                      'panela',
+                                      'frigideira',
+                                      'assadeira',
+                                      'bandeja',
+                                      'filme aluminio',
+                                      'papel aluminio',
+                                      'filme pvc',
+                                      'coador cafe',
+                                      'filtro cafe',
+                                      'pano prato',
+                                      'pano copa',
+                                      'tigela',
+                                      'refratario',
+                                      'abridor lata',
+                                      'concha cozinha',
+                                      'escumadeira'],
+                      'nd_completa': '33903021',
+                      'nome': 'MATERIAL DE COPA E COZINHA',
+                      'subitem': '21'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM PRODUTOS E MATERIAIS DE LIMPEZA E HIGIENE. AGUA '
+                                'SANITARIA, DESINFETANTE, SABAO EM PO, SABAO EM BARRA, DETERGENTE, AMACIANTE, CERA, '
+                                'DESENGORDURANTE, VASSOURAS, RODOS, PANOS DE CHAO, BALDES, PAPEL HIGIENICO, SABONETE E '
+                                'ALCOOL 70%.',
+                      'keywords': [   'limpeza',
+                                      'higienizacao',
+                                      'sabao',
+                                      'sabao po',
+                                      'sabao barra',
+                                      'sabonete',
+                                      'sabonete liquido',
+                                      'detergente',
+                                      'desinfetante',
+                                      'agua sanitaria',
+                                      'cloro',
+                                      'alcool',
+                                      'alcool 70',
+                                      'alcool em gel',
+                                      'vassoura',
+                                      'rodo',
+                                      'pa lixo',
+                                      'saco lixo',
+                                      'saco para lixo',
+                                      'palha aco',
+                                      'bombril',
+                                      'esponja',
+                                      'esponja dupla face',
+                                      'pano chao',
+                                      'pano limpeza',
+                                      'flanela',
+                                      'papel higienico',
+                                      'papel toalha',
+                                      'toalha papel',
+                                      'creme dental',
+                                      'pasta dente',
+                                      'escova dente',
+                                      'lustra moveis',
+                                      'multiuso',
+                                      'limpa vidro',
+                                      'cera',
+                                      'desodorizador',
+                                      'aromatizador',
+                                      'odorizador',
+                                      'soda caustica'],
+                      'nd_completa': '33903022',
+                      'nome': 'MATERIAL DE LIMPEZA E PROD. DE HIGIENIZACAO',
+                      'subitem': '22'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM FARDAMENTOS, UNIFORMES MILITARES, ROUPAS CIVIS, '
+                                'TECIDOS E AVIAMENTOS. FARDAS, CAMISAS, CALCAS, GANDOLAS, COBERTURAS, BONES, BOINAS, '
+                                'GORROS, MEIAS, BOTOES, ZIPERES, LINHAS E VELCROS.',
+                      'keywords': [   'uniforme',
+                                      'farda',
+                                      'fardamento',
+                                      'gandola',
+                                      'camuflado',
+                                      'tecido',
+                                      'costura',
+                                      'linha costura',
+                                      'ziper',
+                                      'botao',
+                                      'cadarco',
+                                      'elastico',
+                                      'camisa',
+                                      'camiseta',
+                                      'calca',
+                                      'agasalho',
+                                      'avental',
+                                      'chapeu',
+                                      'bone farda',
+                                      'boina',
+                                      'cinto',
+                                      'gavata',
+                                      'meia',
+                                      'coturno',
+                                      'bota militar',
+                                      'sapato militar'],
+                      'nd_completa': '33903023',
+                      'nome': 'UNIFORMES, TECIDOS E AVIAMENTOS',
+                      'subitem': '23'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAIS DE CONSTRUCAO CIVIL E MANUTENCAO PREDIAL '
+                                'DE IMOVEIS. CIMENTO, AREIA, BRITA, TIJOLOS, TINTAS, SELADORES, VERNIZES, SOLVENTES, '
+                                'CAL, PISOS, AZULEJOS, TELHAS, PORTAS, FECHADURAS, TORNEIRAS, TUBOS E CONEXOES DE PVC '
+                                'E VALVULAS.',
+                      'keywords': [   'manutencao imovel',
+                                      'construcao',
+                                      'cimento',
+                                      'areia',
+                                      'brita',
+                                      'cal',
+                                      'tijolo',
+                                      'telha',
+                                      'tinta',
+                                      'tinta acrilica',
+                                      'tinta latex',
+                                      'esmalte sintetico',
+                                      'verniz',
+                                      'massa corrida',
+                                      'selador',
+                                      'trincha',
+                                      'pincel',
+                                      'rolo la',
+                                      'rolo pintura',
+                                      'lixa massa',
+                                      'lixa ferro',
+                                      'tubo pvc',
+                                      'cano pvc',
+                                      'conexao pvc',
+                                      'joelho pvc',
+                                      'curva pvc',
+                                      'luva pvc',
+                                      'registro',
+                                      'valvula descarga',
+                                      'sifao',
+                                      'torneira',
+                                      'piso',
+                                      'ceramica',
+                                      'azulejo',
+                                      'argamassa',
+                                      'rejunte',
+                                      'porta',
+                                      'fechadura',
+                                      'dobradica',
+                                      'parafuso',
+                                      'bucha',
+                                      'prego',
+                                      'arame liso',
+                                      'arame farpado',
+                                      'impermeabilizante',
+                                      'vidro',
+                                      'silicone'],
+                      'nd_completa': '33903024',
+                      'nome': 'MATERIAL P/ MANUT.DE BENS IMOVEIS/INSTALACOES',
+                      'subitem': '24'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM PECAS, COMPONENTES E INSUMOS PARA REPARO DE MOVEIS, '
+                                'ELETRODOMESTICOS E MAQUINAS EM GERAL. PARAFUSOS, PORCAS, ARRUELAS, DOBRADICAS, '
+                                'CORREDICAS, PUXADORES, RODINHAS, RESISTENCIAS E BORRACHAS DE VEDACAO.',
+                      'keywords': [   'peca reposicao movel',
+                                      'cilindro maquina',
+                                      'peca compressor',
+                                      'mola movel',
+                                      'rodizio cadeira'],
+                      'nd_completa': '33903025',
+                      'nome': 'MATERIAL P/ MANUTENCAO DE BENS MOVEIS',
+                      'subitem': '25'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM COMPONENTES, FIOS E MATERIAIS PARA INSTALACOES '
+                                'ELETRICAS E ELETRONICAS. LAMPADAS LED, REATORES, DISJUNTORES, FIOS E CABOS ELETRICOS, '
+                                'TOMADAS, INTERRUPTORES, FITAS ISOLANTES, FUSIVEIS, SENSORES, CONDULETES E CANALETAS.',
+                      'keywords': [   'eletrico',
+                                      'lampada',
+                                      'lampada led',
+                                      'luminaria',
+                                      'painel led',
+                                      'refletor led',
+                                      'disjuntor',
+                                      'fio',
+                                      'fio eletrico',
+                                      'cabo flexivel',
+                                      'cabo eletrico',
+                                      'tomada',
+                                      'interruptor',
+                                      'espelho tomada',
+                                      'placa cega',
+                                      'fita isolante',
+                                      'reator',
+                                      'sensor presenca',
+                                      'canaleta',
+                                      'fusivel',
+                                      'benjamim',
+                                      'adaptador tomada',
+                                      'bocal',
+                                      'soquete',
+                                      'calha eletrica',
+                                      'chave teste',
+                                      'conector eletrico'],
+                      'nd_completa': '33903026',
+                      'nome': 'MATERIAL ELETRICO E ELETRONICO',
+                      'subitem': '26'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAL DE MANOBRA E PATRULHAMENTO. ITENS E '
+                                'EXEMPLOS: MANOBRA, PATRULHAMENTO, BINOCULO, CANTIL, MARMITA MILITAR, LANTERNA '
+                                'MILITAR, MOCHILA MILITAR, SACO DORMIR, FLAMULA, PIQUETE, CARTA NAUTICA.',
+                      'keywords': [   'manobra',
+                                      'patrulhamento',
+                                      'binoculo',
+                                      'cantil',
+                                      'marmita militar',
+                                      'lanterna militar',
+                                      'mochila militar',
+                                      'saco dormir',
+                                      'flamula',
+                                      'piquete',
+                                      'carta nautica'],
+                      'nd_completa': '33903027',
+                      'nome': 'MATERIAL DE MANOBRA E PATRULHAMENTO',
+                      'subitem': '27'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIPAMENTOS DE PROTECAO INDIVIDUAL (EPI) E '
+                                'SEGURANCA. CAPACETES DE PROTECAO, LUVAS DE VAQUETA OU LATEX, OCULOS DE PROTECAO, '
+                                'MASCARAS RESPIRATORIAS, PROTETORES AURICULARES, BOTAS DE BORRACHA E CINTOS DE '
+                                'SEGURANCA.',
+                      'keywords': [   'epi',
+                                      'protecao',
+                                      'seguranca',
+                                      'capacete',
+                                      'oculos protecao',
+                                      'luva protecao',
+                                      'luva vaqueta',
+                                      'luva pigmentada',
+                                      'bota borracha',
+                                      'bota pvc',
+                                      'mascara protecao',
+                                      'protetor auricular',
+                                      'abafador',
+                                      'cinto seguranca',
+                                      'trava quedas',
+                                      'cadeado',
+                                      'lona',
+                                      'capa chuva',
+                                      'colete reflexivo'],
+                      'nd_completa': '33903028',
+                      'nome': 'MATERIAL DE PROTECAO E SEGURANCA',
+                      'subitem': '28'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAL P/ AUDIO, VIDEO E FOTO. ITENS E EXEMPLOS: '
+                                'AUDIO, VIDEO, FOTO, FILME FOTO, PAPEL FOTOGRAFICO, PILHA AUDIO, MOLDURA.',
+                      'keywords': [   'audio',
+                                      'video',
+                                      'foto',
+                                      'filme foto',
+                                      'papel fotografico',
+                                      'pilha audio',
+                                      'moldura'],
+                      'nd_completa': '33903029',
+                      'nome': 'MATERIAL P/ AUDIO, VIDEO E FOTO',
+                      'subitem': '29'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAIS E INSUMOS PARA TELECOMUNICACOES E RADIOS. '
+                                'ANTENAS, CABOS COAXIAIS, CONECTORES, HEADSETS, BATERIAS DE RADIO TRANSMISSOR E '
+                                'ACESSORIOS DE COMUNICACAO.',
+                      'keywords': [   'comunicacao',
+                                      'antena radio',
+                                      'conector bnc',
+                                      'circuito impresso',
+                                      'fio telefonico'],
+                      'nd_completa': '33903030',
+                      'nome': 'MATERIAL PARA COMUNICACOES',
+                      'subitem': '30'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAIS PARA JARDINAGEM E AGRICULTURA. SEMENTES, '
+                                'MUDAS, ADUBOS, FERTILIZANTES, DEFENSIVOS AGRICOLAS, TERRA VEGETAL E VASOS.',
+                      'keywords': [   'semente',
+                                      'muda',
+                                      'planta',
+                                      'adubo',
+                                      'fertilizante',
+                                      'terra vegetal',
+                                      'substrato',
+                                      'jardinagem'],
+                      'nd_completa': '33903031',
+                      'nome': 'SEMENTES, MUDAS DE PLANTAS E INSUMOS',
+                      'subitem': '31'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAL LABORATORIAL. ITENS E EXEMPLOS: '
+                                'LABORATORIO, LABORATORIAL, TUBO ENSAIO, BEQUER, PIPETA, PROVETA, LAMINA MICROSCOPIO, '
+                                'PLACA PETRI, VIDRARIA LABORATORIO.',
+                      'keywords': [   'laboratorio',
+                                      'laboratorial',
+                                      'tubo ensaio',
+                                      'bequer',
+                                      'pipeta',
+                                      'proveta',
+                                      'lamina microscopio',
+                                      'placa petri',
+                                      'vidraria laboratorio'],
+                      'nd_completa': '33903035',
+                      'nome': 'MATERIAL LABORATORIAL',
+                      'subitem': '35'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAL HOSPITALAR. ITENS E EXEMPLOS: HOSPITALAR, '
+                                'SAUDE, AGULHA, SERINGA, GAZE, COMPRESSA, ESPARADRAPO, ALGODAO, FIO SUTURA, CATETER, '
+                                'LUVA PROCEDIMENTO, LUVA CIRURGICA, LAMINA BISTURI, TERMOMETRO CLINICO, MASCARA '
+                                'DESCARTAVEL.',
+                      'keywords': [   'hospitalar',
+                                      'saude',
+                                      'agulha',
+                                      'seringa',
+                                      'gaze',
+                                      'compressa',
+                                      'esparadrapo',
+                                      'algodao',
+                                      'fio sutura',
+                                      'cateter',
+                                      'luva procedimento',
+                                      'luva cirurgica',
+                                      'lamina bisturi',
+                                      'termometro clinico',
+                                      'mascara descartavel'],
+                      'nd_completa': '33903036',
+                      'nome': 'MATERIAL HOSPITALAR',
+                      'subitem': '36'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SOBRESSALENTES E PECAS EXCLUSIVAS PARA ARMAS E '
+                                'ARMAMENTOS. PERCURSORES, MOLAS DE RECUO, CARREGADORES, EXTRATORES, CANOS DE REPOSICAO '
+                                'E OLEO PARA ARMAS.',
+                      'keywords': [   'sobressalente armamento',
+                                      'peca fuzil',
+                                      'peca pistola',
+                                      'carregador fuzil',
+                                      'mola armamento'],
+                      'nd_completa': '33903037',
+                      'nome': 'SOBRESSALENTES DE ARMAMENTO',
+                      'subitem': '37'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM PECAS, PNEUS E COMPONENTES PARA CONSERTO E '
+                                'MANUTENCAO DE VEICULOS E VIATURAS AUTOMOTORAS. PNEUS, CAMARAS DE AR, FILTROS DE OLEO, '
+                                'FILTROS DE AR, FILTROS DE COMBUSTIVEL, PASTILHAS DE FREIO, DISCOS DE FREIO, '
+                                'AMORTECEDORES, BATERIAS AUTOMOTIVAS, VELAS DE IGNICAO, CORREIAS, JUNTAS, FAROIS E '
+                                'LANTERNAS.',
+                      'keywords': [   'veiculo',
+                                      'viatura',
+                                      'automotivo',
+                                      'pneu',
+                                      'camara ar',
+                                      'bateria veiculo',
+                                      'bateria automotiva',
+                                      'amortecedor',
+                                      'pastilha freio',
+                                      'disco freio',
+                                      'filtro oleo',
+                                      'filtro ar',
+                                      'filtro combustivel',
+                                      'palheta parabrisa',
+                                      'vela ignicao',
+                                      'correia dentada',
+                                      'lampada automotiva',
+                                      'farol veiculo'],
+                      'nd_completa': '33903039',
+                      'nome': 'MATERIAL P/ MANUTENCAO DE VEICULOS',
+                      'subitem': '39'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM FERRAMENTAS MANUAIS E DE DESGASTE RAPIDO. ALICATES, '
+                                'CHAVES DE FENDA, CHAVES PHILIPS, CHAVES DE BOCA, MARTELOS, SERRAS, BROCAS, DISCOS DE '
+                                'CORTE E DESBASTE, LIXAS E ESCOVAS DE ACO.',
+                      'keywords': [   'ferramenta',
+                                      'alicate',
+                                      'chave fenda',
+                                      'chave philips',
+                                      'chave combinada',
+                                      'chave biela',
+                                      'chave inglesa',
+                                      'martelo',
+                                      'marreta',
+                                      'serrote',
+                                      'arco serra',
+                                      'lamina serra',
+                                      'trena',
+                                      'nivel',
+                                      'lima',
+                                      'torques',
+                                      'pa',
+                                      'enxada',
+                                      'picareta',
+                                      'machado',
+                                      'foice',
+                                      'ferro solda'],
+                      'nd_completa': '33903042',
+                      'nome': 'FERRAMENTAS',
+                      'subitem': '42'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM PLACAS DE SINALIZACAO, CAVALETES, FITAS ZEBRADAS, '
+                                'CONES DE TRANSITO, ADESIVOS REFLETIVOS E MATERIAIS DE SINALIZACAO VISUAL.',
+                      'keywords': [   'sinalizacao',
+                                      'placa sinalizacao',
+                                      'cone transito',
+                                      'fita zebrada',
+                                      'cracha',
+                                      'cordao cracha'],
+                      'nd_completa': '33903044',
+                      'nome': 'MATERIAL DE SINALIZACAO VISUAL E OUTROS',
+                      'subitem': '44'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM BANDEIRAS, FLAMULAS E INSIGNIAS. ITENS E EXEMPLOS: '
+                                'BANDEIRA, BANDEIRA BRASIL, FLAMULA, INSIGNIA, BRASAO.',
+                      'keywords': ['bandeira', 'bandeira brasil', 'flamula', 'insignia', 'brasao'],
+                      'nd_completa': '33903050',
+                      'nome': 'BANDEIRAS, FLAMULAS E INSIGNIAS',
+                      'subitem': '50'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MATERIAL PARA DIVULGACAO. ITENS E EXEMPLOS: BANNER, '
+                                'FAIXA DIVULGACAO, CARTAZ, PAINEL INFORMATIVO.',
+                      'keywords': ['banner', 'faixa divulgacao', 'cartaz', 'painel informativo'],
+                      'nd_completa': '33903059',
+                      'nome': 'MATERIAL PARA DIVULGACAO',
+                      'subitem': '59'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM OUTROS MATERIAIS DE CONSUMO QUE NAO POSSUEM '
+                                'CLASSIFICACAO ESPECIFICA NOS ITENS ANTERIORES.',
+                      'keywords': ['outro material consumo', 'consumo diverso'],
+                      'nd_completa': '33903099',
+                      'nome': 'OUTROS MATERIAIS DE CONSUMO',
+                      'subitem': '99'}],
+    '339039': [   {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM ASSINATURAS DE PERIODICOS E ANUIDADES. ITENS E '
+                                'EXEMPLOS: ASSINATURA JORNAL, ASSINATURA REVISTA, TV CABO, ANUIDADE.',
+                      'keywords': ['assinatura jornal', 'assinatura revista', 'tv cabo', 'anuidade'],
+                      'nd_completa': '33903901',
+                      'nome': 'ASSINATURAS DE PERIODICOS E ANUIDADES',
+                      'subitem': '01'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SERVICOS GRAFICOS, IMPRESSAO, REPROGRAFIA, '
+                                'PLOTAGEM, ENCADERNACAO E COPIAS.',
+                      'keywords': [   'servico advocacia',
+                                      'servico engenharia',
+                                      'servico arquitetura',
+                                      'servico contabilidade',
+                                      'laudo pericial'],
+                      'nd_completa': '33903905',
+                      'nome': 'SERVICOS TECNICOS PROFISSIONAIS',
+                      'subitem': '05'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MANUTENCAO DE SOFTWARE. ITENS E EXEMPLOS: '
+                                'MANUTENCAO SOFTWARE, SUPORTE SOFTWARE, SUSTENTACAO SOFTWARE.',
+                      'keywords': ['manutencao software', 'suporte software', 'sustentacao software'],
+                      'nd_completa': '33903908',
+                      'nome': 'MANUTENCAO DE SOFTWARE',
+                      'subitem': '08'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM LOCACAO DE MAQUINAS E EQUIPAMENTOS. ITENS E '
+                                'EXEMPLOS: LOCACAO MAQUINA, ALUGUEL GERADOR, ALUGUEL MAQUINA, ALUGUEL EQUIPAMENTO.',
+                      'keywords': ['locacao maquina', 'aluguel gerador', 'aluguel maquina', 'aluguel equipamento'],
+                      'nd_completa': '33903912',
+                      'nome': 'LOCACAO DE MAQUINAS E EQUIPAMENTOS',
+                      'subitem': '12'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SERVICOS DE MANUTENCAO E CONSERVACAO PREDIAL E DE '
+                                'BENS IMOVEIS. PINTURA, REPAROS ELETRICOS, HIDRAULICOS, ALVENARIA E REFORMAS.',
+                      'keywords': [   'servico reforma',
+                                      'pintura predial',
+                                      'servico pedreiro',
+                                      'manutencao eletrica predial',
+                                      'manutencao hidraulica predial',
+                                      'conserto telhado',
+                                      'limpeza fossa',
+                                      'manutencao elevador'],
+                      'nd_completa': '33903916',
+                      'nome': 'MANUTENCAO E CONSERV. DE BENS IMOVEIS',
+                      'subitem': '16'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SERVICOS DE MANUTENCAO E CONSERVACAO DE MAQUINAS E '
+                                'EQUIPAMENTOS INDUSTRIAIS OU DE OFICINA.',
+                      'keywords': [   'conserto maquina',
+                                      'manutencao ar condicionado',
+                                      'instalacao ar condicionado',
+                                      'manutencao gerador',
+                                      'revisao equipamento',
+                                      'calibracao balanca'],
+                      'nd_completa': '33903917',
+                      'nome': 'MANUT. E CONSERV. DE MAQUINAS E EQUIPAMENTOS',
+                      'subitem': '17'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SERVICOS DE MANUTENCAO E CONSERVACAO DE VEICULOS E '
+                                'VIATURAS. MECANICA, ELETRICA AUTOMOTIVA, LATARIA, PINTURA, ALINHAMENTO E '
+                                'BALANCEAMENTO.',
+                      'keywords': [   'manutencao viatura',
+                                      'manutencao veiculo',
+                                      'revisao veicular',
+                                      'revisao viatura',
+                                      'funilaria',
+                                      'lanternagem',
+                                      'pintura veiculo',
+                                      'mecanica veiculo',
+                                      'mecanica viatura',
+                                      'viatura',
+                                      'veiculo',
+                                      'alinhamento balanceamento',
+                                      'troca pneus servico',
+                                      'eletrica automotiva'],
+                      'nd_completa': '33903919',
+                      'nome': 'MANUTENCAO E CONSERV. DE VEICULOS',
+                      'subitem': '19'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SERVICOS DE MANUTENCAO DE MOVEIS, ESTOFADOS, '
+                                'CADEIRAS E BENS MOVEIS.',
+                      'keywords': ['reforma cadeira', 'estofamento', 'conserto movel', 'reforma estofado'],
+                      'nd_completa': '33903920',
+                      'nome': 'MANUT.E CONS.DE B.MOVEIS DE OUTRAS NATUREZAS',
+                      'subitem': '20'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM FORNECIMENTO DE ALIMENTACAO PREPARADA, BUFFET, '
+                                'REFEICOES COLETIVAS E LANCHES.',
+                      'keywords': ['fornecimento alimentacao', 'refeicao pronta', 'buffet', 'coffee break', 'lanche'],
+                      'nd_completa': '33903941',
+                      'nome': 'FORNECIMENTO DE ALIMENTACAO',
+                      'subitem': '41'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SERVICO DE SELECAO E TREINAMENTO. ITENS E EXEMPLOS: '
+                                'CURSO, TREINAMENTO, CAPACITACAO, PALESTRA, SEMINARIO, WORKSHOP.',
+                      'keywords': ['curso', 'treinamento', 'capacitacao', 'palestra', 'seminario', 'workshop'],
+                      'nd_completa': '33903948',
+                      'nome': 'SERVICO DE SELECAO E TREINAMENTO',
+                      'subitem': '48'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SERVICOS DE TELECOMUNICACOES. ITENS E EXEMPLOS: '
+                                'TELEFONIA, TELEFONIA CELULAR, TELEFONIA FIXA, LINK INTERNET.',
+                      'keywords': ['telefonia', 'telefonia celular', 'telefonia fixa', 'link internet'],
+                      'nd_completa': '33903958',
+                      'nome': 'SERVICOS DE TELECOMUNICACOES',
+                      'subitem': '58'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SERVICOS GRAFICOS E EDITORIAIS. ITENS E EXEMPLOS: '
+                                'SERVICO GRAFICO, IMPRESSAO BANNER, IMPRESSAO FOLDER, ENCADERNACAO, CONFECCAO CRACHA.',
+                      'keywords': [   'servico grafico',
+                                      'impressao banner',
+                                      'impressao folder',
+                                      'encadernacao',
+                                      'confeccao cracha'],
+                      'nd_completa': '33903963',
+                      'nome': 'SERVICOS GRAFICOS E EDITORIAIS',
+                      'subitem': '63'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM CONFECCAO DE UNIFORMES, BANDEIRAS E FLAMULAS. ITENS '
+                                'E EXEMPLOS: CONFECCAO UNIFORME, CONFECCAO FARDA, BORDADO, CONFECCAO BANDEIRA.',
+                      'keywords': ['confeccao uniforme', 'confeccao farda', 'bordado', 'confeccao bandeira'],
+                      'nd_completa': '33903970',
+                      'nome': 'CONFECCAO DE UNIFORMES, BANDEIRAS E FLAMULAS',
+                      'subitem': '70'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM FRETES E TRANSPORTES DE ENCOMENDAS. ITENS E '
+                                'EXEMPLOS: FRETE, TRANSPORTE ENCOMENDA, CARRETO, MUDANCA, TRANSPORTADORA.',
+                      'keywords': ['frete', 'transporte encomenda', 'carreto', 'mudanca', 'transportadora'],
+                      'nd_completa': '33903974',
+                      'nome': 'FRETES E TRANSPORTES DE ENCOMENDAS',
+                      'subitem': '74'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM VIGILANCIA OSTENSIVA/MONITORADA/RASTREAMENTO. ITENS '
+                                'E EXEMPLOS: VIGILANCIA, SEGURANCA ARMADA, MONITORAMENTO ALARME, RASTREAMENTO '
+                                'VEICULAR.',
+                      'keywords': ['vigilancia', 'seguranca armada', 'monitoramento alarme', 'rastreamento veicular'],
+                      'nd_completa': '33903977',
+                      'nome': 'VIGILANCIA OSTENSIVA/MONITORADA/RASTREAMENTO',
+                      'subitem': '77'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SERVICOS DE LIMPEZA, CONSERVACAO E HIGIENIZACAO COM '
+                                'FORNECIMENTO DE MAO DE OBRA.',
+                      'keywords': [   'servico limpeza',
+                                      'asseio e conservacao',
+                                      'dedetizacao',
+                                      'desinsetizacao',
+                                      'desratizacao',
+                                      'coleta lixo',
+                                      'lavagem veiculo'],
+                      'nd_completa': '33903978',
+                      'nome': 'LIMPEZA E CONSERVACAO',
+                      'subitem': '78'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM SERVICOS DE VIGILANCIA OSTENSIVA, SEGURANCA PRIVADA '
+                                'E MONITORAMENTO ELETRONICO.',
+                      'keywords': [   'apoio administrativo',
+                                      'recepcionista',
+                                      'portaria',
+                                      'copeiragem',
+                                      'jardinagem servico',
+                                      'motorista terceirizado'],
+                      'nd_completa': '33903979',
+                      'nome': 'SERV. DE APOIO ADMIN., TECNICO E OPERACIONAL',
+                      'subitem': '79'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM HOSPEDAGENS. ITENS E EXEMPLOS: HOSPEDAGEM, HOTEL, '
+                                'DIARIA HOTEL, POUSADA.',
+                      'keywords': ['hospedagem', 'hotel', 'diaria hotel', 'pousada'],
+                      'nd_completa': '33903980',
+                      'nome': 'HOSPEDAGENS',
+                      'subitem': '80'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MANUT.CONS.EQUIP. DE PROCESSAMENTO DE DADOS. ITENS '
+                                'E EXEMPLOS: MANUTENCAO COMPUTADOR, MANUTENCAO IMPRESSORA, MANUTENCAO SERVIDOR, REPARO '
+                                'PLACA MAE.',
+                      'keywords': [   'manutencao computador',
+                                      'manutencao impressora',
+                                      'manutencao servidor',
+                                      'reparo placa mae'],
+                      'nd_completa': '33903995',
+                      'nome': 'MANUT.CONS.EQUIP. DE PROCESSAMENTO DE DADOS',
+                      'subitem': '95'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM OUTROS SERVICOS DE TERCEIROS - PESSOA JURIDICA.',
+                      'keywords': ['outro servico terceiro', 'servico pessoa juridica'],
+                      'nd_completa': '33903999',
+                      'nome': 'OUTROS SERVICOS DE TERCEIROS-PESSOA JURIDICA',
+                      'subitem': '99'}],
+    '449052': [   {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM ARMAS DE FOGO E ARMAMENTOS DE CARATER PERMANENTE. '
+                                'FUZIS, PISTOLAS, METRALHADORAS, CANHOES E CARABINAS.',
+                      'keywords': [   'medicao',
+                                      'balanca',
+                                      'balanca digital',
+                                      'bussola',
+                                      'cronometro',
+                                      'gps',
+                                      'navegador gps',
+                                      'paquimetro digital',
+                                      'osciloscopio',
+                                      'multimetro',
+                                      'amperimetro'],
+                      'nd_completa': '44905204',
+                      'nome': 'APARELHOS DE MEDICAO E ORIENTACAO',
+                      'subitem': '04'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM APARELHOS E EQUIPAMENTOS PERMANENTES DE '
+                                'COMUNICACAO. RADIOS TRANSCEPTORES, ESTACOES DE RADIO, ANTENAS FIXAS E REPETIDORAS.',
+                      'keywords': [   'comunicacao',
+                                      'radio amador',
+                                      'radio comunicador',
+                                      'transmissor',
+                                      'receptor',
+                                      'pabx',
+                                      'interfone',
+                                      'central telefonica'],
+                      'nd_completa': '44905206',
+                      'nome': 'APARELHOS E EQUIPAMENTOS DE COMUNICACAO',
+                      'subitem': '06'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM APARELHOS DE MEDICAO E ORIENTACAO. GPS, BUSSOLAS, '
+                                'TEODOLITOS, MULTIMETROS, TRENAS A LASER E BALANCAS.',
+                      'keywords': [   'aparelho medico',
+                                      'raio x',
+                                      'cadeira dentista',
+                                      'maca hospitalar',
+                                      'autoclave',
+                                      'estufa hospitalar',
+                                      'desfibrilador',
+                                      'microscopio',
+                                      'esfigmomanometro pedestal'],
+                      'nd_completa': '44905208',
+                      'nome': 'APAR.EQUIP.UTENS.MED.,ODONT,LABOR.HOSPIT.',
+                      'subitem': '08'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM APARELHOS E EQUIP. P/ ESPORTES E DIVERSOES. ITENS E '
+                                'EXEMPLOS: APARELHO ESPORTE, BICICLETA ERGOMETRICA, ESTEIRA ERGOMETRICA, MESA TENIS, '
+                                'MESA PING PONG, HALTERES PERMANENTE, TRAVE FUTEBOL, TABELA BASQUETE.',
+                      'keywords': [   'aparelho esporte',
+                                      'bicicleta ergometrica',
+                                      'esteira ergometrica',
+                                      'mesa tenis',
+                                      'mesa ping pong',
+                                      'halteres permanente',
+                                      'trave futebol',
+                                      'tabela basquete'],
+                      'nd_completa': '44905210',
+                      'nome': 'APARELHOS E EQUIP. P/ ESPORTES E DIVERSOES',
+                      'subitem': '10'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM APARELHOS ELETRODOMESTICOS E UTENSILIOS '
+                                'PERMANENTES. GELADEIRAS, FOGOES, FORNOS MICRO-ONDAS, LIQUIDIFICADORES INDUSTRIAIS, '
+                                'BEBEDOUROS E FREEZERS.',
+                      'keywords': [   'eletrodomestico',
+                                      'ar condicionado',
+                                      'split',
+                                      'geladeira',
+                                      'refrigerador',
+                                      'freezer',
+                                      'fogao',
+                                      'fogao industrial',
+                                      'forno microondas',
+                                      'microondas',
+                                      'lavadora roupa',
+                                      'maquina lavar',
+                                      'secadora roupa',
+                                      'aspirador po',
+                                      'liquidificador industrial',
+                                      'batedeira',
+                                      'cafeteira eletrica',
+                                      'ventilador',
+                                      'ventilador parede',
+                                      'ventilador teto',
+                                      'circulador ar',
+                                      'bebedouro',
+                                      'purificador agua'],
+                      'nd_completa': '44905212',
+                      'nome': 'APARELHOS E UTENSILIOS DOMESTICOS',
+                      'subitem': '12'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM ARMAMENTOS. ITENS E EXEMPLOS: ARMA, ARMAMENTO, '
+                                'FUZIL, PISTOLA, REVOLVER, METRALHADORA.',
+                      'keywords': ['arma', 'armamento', 'fuzil', 'pistola', 'revolver', 'metralhadora'],
+                      'nd_completa': '44905214',
+                      'nome': 'ARMAMENTOS',
+                      'subitem': '14'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM COLECOES E MATERIAIS BIBLIOGRAFICOS. ITENS E '
+                                'EXEMPLOS: LIVRO PERMANENTE, ENCICLOPEDIA, DICIONARIO BIBLIOTECA, COLECAO '
+                                'BIBLIOGRAFICA.',
+                      'keywords': [   'livro permanente',
+                                      'enciclopedia',
+                                      'dicionario biblioteca',
+                                      'colecao bibliografica'],
+                      'nd_completa': '44905218',
+                      'nome': 'COLECOES E MATERIAIS BIBLIOGRAFICOS',
+                      'subitem': '18'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EMBARCACOES. ITENS E EXEMPLOS: EMBARCACAO, BARCO, '
+                                'LANCHA, BOTE, CANOA, MOTOR POPA.',
+                      'keywords': ['embarcacao', 'barco', 'lancha', 'bote', 'canoa', 'motor popa'],
+                      'nd_completa': '44905220',
+                      'nome': 'EMBARCACOES',
+                      'subitem': '20'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIPAMENTOS DE MANOBRA E PATRULHAMENTO. ITENS E '
+                                'EXEMPLOS: BARRACA CAMPANHA, CAMA CAMPANHA, FAROL BUSCA, SIRENE VIATURA.',
+                      'keywords': ['barraca campanha', 'cama campanha', 'farol busca', 'sirene viatura'],
+                      'nd_completa': '44905222',
+                      'nome': 'EQUIPAMENTOS DE MANOBRA E PATRULHAMENTO',
+                      'subitem': '22'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIPAMENTOS PERMANENTES DE PROTECAO, SEGURANCA E '
+                                'SOCORRO. EXTINTORES DE INCENDIO PERMANENTES, COLETES BALISTICOS, ESCADAS E SISTEMAS '
+                                'DE ALARME.',
+                      'keywords': [   'cofre',
+                                      'cofre aco',
+                                      'extintor permanente',
+                                      'catraca',
+                                      'camera seguranca',
+                                      'cftv',
+                                      'alarme seguranca',
+                                      'sistema alarme',
+                                      'cerca eletrica'],
+                      'nd_completa': '44905224',
+                      'nome': 'EQUIPAMENTO DE PROTECAO, SEGURANCA E SOCORRO',
+                      'subitem': '24'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM INSTRUMENTOS MUSICAIS E ARTISTICOS. ITENS E '
+                                'EXEMPLOS: INSTRUMENTO MUSICAL, VIOLAO, GUITARRA, TECLADO MUSICAL, SAXOFONE, TROMPETE, '
+                                'BATERIA MUSICAL, CAIXA FANFARRA, CLARINETE.',
+                      'keywords': [   'instrumento musical',
+                                      'violao',
+                                      'guitarra',
+                                      'teclado musical',
+                                      'saxofone',
+                                      'trompete',
+                                      'bateria musical',
+                                      'caixa fanfarra',
+                                      'clarinete'],
+                      'nd_completa': '44905226',
+                      'nome': 'INSTRUMENTOS MUSICAIS E ARTISTICOS',
+                      'subitem': '26'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MAQUINAS E EQUIPAMENTOS DE NATUREZA INDUSTRIAL. '
+                                'ITENS E EXEMPLOS: MAQUINA INDUSTRIAL, BETONEIRA, TORNO MECANICO, PRENSA INDUSTRIAL.',
+                      'keywords': ['maquina industrial', 'betoneira', 'torno mecanico', 'prensa industrial'],
+                      'nd_completa': '44905228',
+                      'nome': 'MAQUINAS E EQUIPAMENTOS DE NATUREZA INDUSTRIAL',
+                      'subitem': '28'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MAQUINAS E EQUIPAMENTOS ENERGETICOS. GRUPOS '
+                                'GERADORES DE ENERGIA, TRANSFORMADORES ELETRICOS, PAINEIS SOLARES E NOBREAKS DE GRANDE '
+                                'PORTE.',
+                      'keywords': [   'gerador',
+                                      'gerador energia',
+                                      'gerador diesel',
+                                      'nobreak',
+                                      'no-break',
+                                      'transformador',
+                                      'estabilizador industrial'],
+                      'nd_completa': '44905230',
+                      'nome': 'MAQUINAS E EQUIPAMENTOS ENERGETICOS',
+                      'subitem': '30'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MAQUINAS E EQUIPAMENTOS GRAFICOS. ITENS E EXEMPLOS: '
+                                'GUILHOTINA PAPEL, PLASTIFICADORA, ENCADERNADORA, COPIADORA.',
+                      'keywords': ['guilhotina papel', 'plastificadora', 'encadernadora', 'copiadora'],
+                      'nd_completa': '44905232',
+                      'nome': 'MAQUINAS E EQUIPAMENTOS GRAFICOS',
+                      'subitem': '32'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIPAMENTOS DE AUDIO, VIDEO E FOTO. CAMERAS '
+                                'FOTOGRAFICAS, FILMADORAS, CAIXAS DE SOM ACUSTICAS, PROJETORES MULTIMIDIA E MESAS DE '
+                                'SOM.',
+                      'keywords': [   'camera',
+                                      'camera digital',
+                                      'camera fotografica',
+                                      'filmadora',
+                                      'projetor',
+                                      'projetor multimidia',
+                                      'datashow',
+                                      'data show',
+                                      'tela projecao',
+                                      'caixa som',
+                                      'caixa acustica',
+                                      'amplificador som',
+                                      'microfone sem fio',
+                                      'televisor',
+                                      'tv led',
+                                      'smart tv',
+                                      'mesa som'],
+                      'nd_completa': '44905233',
+                      'nome': 'EQUIPAMENTOS PARA AUDIO, VIDEO E FOTO',
+                      'subitem': '33'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MAQUINAS E EQUIPAMENTOS DIVERSOS. COMPRESSORES DE '
+                                'AR, LAVADORAS DE ALTA PRESSAO, BETONEIRAS E MOTORES ESTACIONARIOS.',
+                      'keywords': [   'lavadora alta pressao',
+                                      'vap',
+                                      'furadeira bancada',
+                                      'cortador grama',
+                                      'aparador grama'],
+                      'nd_completa': '44905234',
+                      'nome': 'MAQUINAS, UTENSILIOS E EQUIPAMENTOS DIVERSOS',
+                      'subitem': '34'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIPAMENTOS DE PROCESSAMENTO DE DADOS. '
+                                'COMPUTADORES DESKTOP, NOTEBOOKS, SERVIDORES, IMPRESSORAS A LASER, SCANNERS E '
+                                'MONITORES.',
+                      'keywords': ['material tic permanente', 'equipamento informatica'],
+                      'nd_completa': '44905235',
+                      'nome': 'MATERIAL DE TIC (PERMANENTE)',
+                      'subitem': '35'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MAQUINAS, INSTALACOES E UTENS. DE ESCRITORIO. ITENS '
+                                'E EXEMPLOS: RELOGIO PONTO, CALCULADORA MESA, ROTULADOR ELETRONICO, FRAGMENTADORA '
+                                'PAPEL.',
+                      'keywords': ['relogio ponto', 'calculadora mesa', 'rotulador eletronico', 'fragmentadora papel'],
+                      'nd_completa': '44905236',
+                      'nome': 'MAQUINAS, INSTALACOES E UTENS. DE ESCRITORIO',
+                      'subitem': '36'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIPAMENTOS DE TIC - ATIVOS DE REDE. ITENS E '
+                                'EXEMPLOS: SWITCH, SWITCH REDE, ROTEADOR, FIREWALL, ACCESS POINT, RACK SERVIDOR.',
+                      'keywords': ['switch', 'switch rede', 'roteador', 'firewall', 'access point', 'rack servidor'],
+                      'nd_completa': '44905237',
+                      'nome': 'EQUIPAMENTOS DE TIC - ATIVOS DE REDE',
+                      'subitem': '37'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MAQ., FERRAMENTAS E UTENSILIOS DE OFICINA. ITENS E '
+                                'EXEMPLOS: COMPRESSOR AR, COMPRESSOR, ESMERIL, MOTOESMERIL, MACACO JACARE, ELEVADOR '
+                                'VEICULAR, FURADEIRA IMPACTO, LIXADEIRA ANGULAR, SERRA CIRCULAR, SERRA FITA, MAQUINA '
+                                'SOLDA.',
+                      'keywords': [   'compressor ar',
+                                      'compressor',
+                                      'esmeril',
+                                      'motoesmeril',
+                                      'macaco jacare',
+                                      'elevador veicular',
+                                      'furadeira impacto',
+                                      'lixadeira angular',
+                                      'serra circular',
+                                      'serra fita',
+                                      'maquina solda'],
+                      'nd_completa': '44905238',
+                      'nome': 'MAQ., FERRAMENTAS E UTENSILIOS DE OFICINA',
+                      'subitem': '38'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIP. E UTENSILIOS HIDRAULICOS E ELETRICOS. ITENS '
+                                'E EXEMPLOS: BOMBA DAGUA, MOTOBOMBA, BOMBA POCO, BOMBA SUBMERSA.',
+                      'keywords': ['bomba dagua', 'motobomba', 'bomba poco', 'bomba submersa'],
+                      'nd_completa': '44905239',
+                      'nome': 'EQUIP. E UTENSILIOS HIDRAULICOS E ELETRICOS',
+                      'subitem': '39'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MAQUINAS E EQUIPAMENTOS AGRIC. E RODOVIARIOS. ITENS '
+                                'E EXEMPLOS: TRATOR, ROCADEIRA, ROCADEIRA GASOLINA, MOTOSSERRA, MOTO SERRA.',
+                      'keywords': ['trator', 'rocadeira', 'rocadeira gasolina', 'motosserra', 'moto serra'],
+                      'nd_completa': '44905240',
+                      'nome': 'MAQUINAS E EQUIPAMENTOS AGRIC. E RODOVIARIOS',
+                      'subitem': '40'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIPAMENTOS DE TIC - COMPUTADORES, NOTEBOOKS, '
+                                'TERMINAIS E ESTACOES DE TRABALHO.',
+                      'keywords': ['computador', 'desktop', 'notebook', 'laptop', 'monitor', 'monitor led', 'tablet'],
+                      'nd_completa': '44905241',
+                      'nome': 'EQUIPAMENTOS DE TIC - COMPUTADORES',
+                      'subitem': '41'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM MOBILIARIO EM GERAL. ARMARIOS DE ACO, MESAS DE '
+                                'ESCRITORIO, CADEIRAS ERGONOMICAS, ESTANTES DE ACO, ARQUIVOS DESLIZANTES, BALCOES E '
+                                'POLTRONAS.',
+                      'keywords': [   'mobiliario',
+                                      'movel',
+                                      'moveis',
+                                      'armario',
+                                      'armario aco',
+                                      'armario madeira',
+                                      'arquivo aco',
+                                      'cadeira',
+                                      'cadeira giratoria',
+                                      'cadeira fixa',
+                                      'cadeira escritorio',
+                                      'cadeira presidente',
+                                      'cadeira diretor',
+                                      'poltrona',
+                                      'mesa',
+                                      'mesa escritorio',
+                                      'mesa reuniao',
+                                      'mesa l',
+                                      'mesa computador',
+                                      'estante',
+                                      'estante aco',
+                                      'estante madeira',
+                                      'gaveteiro',
+                                      'gaveteiro volante',
+                                      'sofa',
+                                      'balcao',
+                                      'banco',
+                                      'banqueta',
+                                      'beliche',
+                                      'cama',
+                                      'colchao',
+                                      'escrivaninha',
+                                      'roupeiro aco',
+                                      'vestiario',
+                                      'prateleira aco',
+                                      'prancheta desenho',
+                                      'mapoteca',
+                                      'criado mudo'],
+                      'nd_completa': '44905242',
+                      'nome': 'MOBILIARIO EM GERAL',
+                      'subitem': '42'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIPAMENTOS DE TIC - SERVIDORES/STORAGE. ITENS E '
+                                'EXEMPLOS: SERVIDOR, SERVIDOR REDE, STORAGE, NAS STORAGE.',
+                      'keywords': ['servidor', 'servidor rede', 'storage', 'nas storage'],
+                      'nd_completa': '44905243',
+                      'nome': 'EQUIPAMENTOS DE TIC - SERVIDORES/STORAGE',
+                      'subitem': '43'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIPAMENTOS DE TIC - IMPRESSORAS. ITENS E '
+                                'EXEMPLOS: IMPRESSORA, MULTIFUNCIONAL, IMPRESSORA LASER, IMPRESSORA TERMICA, SCANNER, '
+                                'PLOTTER.',
+                      'keywords': [   'impressora',
+                                      'multifuncional',
+                                      'impressora laser',
+                                      'impressora termica',
+                                      'scanner',
+                                      'plotter'],
+                      'nd_completa': '44905245',
+                      'nome': 'EQUIPAMENTOS DE TIC - IMPRESSORAS',
+                      'subitem': '45'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM EQUIPAMENTOS DE TIC - TELEFONIA. ITENS E EXEMPLOS: '
+                                'APARELHO TELEFONICO, TELEFONE IP, TERMINAL TELEFONICO, VIDEOCONFERENCIA.',
+                      'keywords': ['aparelho telefonico', 'telefone ip', 'terminal telefonico', 'videoconferencia'],
+                      'nd_completa': '44905247',
+                      'nome': 'EQUIPAMENTOS DE TIC - TELEFONIA',
+                      'subitem': '47'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM VEICULOS DIVERSOS. AUTOMOVEIS, CAMINHOES, VIATURAS '
+                                'OPERACIONAIS, MOTOCICLETAS, AMBULANCIAS E ONIBUS.',
+                      'keywords': ['bicicleta', 'carrinho mao', 'empilhadeira', 'paleteira'],
+                      'nd_completa': '44905248',
+                      'nome': 'VEICULOS DIVERSOS',
+                      'subitem': '48'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM PECAS E EQUIPAMENTOS NAO INCORPORAVEIS A IMOVEIS. '
+                                'APARELHOS DE AR CONDICIONADO SPLIT, VENTILADORES DE TETO E CORTINAS DE AR.',
+                      'keywords': ['persiana', 'cortina', 'tapete', 'toldos', 'biombo', 'divisoria removivel'],
+                      'nd_completa': '44905251',
+                      'nome': 'PECAS NAO INCORPORAVEIS A IMOVEIS',
+                      'subitem': '51'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM VEICULOS DE TRACAO MECANICA. ITENS E EXEMPLOS: '
+                                'VIATURA, AUTOMOVEL, CARRO, CAMINHAO, ONIBUS, MICROONIBUS, AMBULANCIA, CAMIONETE, VAN.',
+                      'keywords': [   'viatura',
+                                      'automovel',
+                                      'carro',
+                                      'caminhao',
+                                      'onibus',
+                                      'microonibus',
+                                      'ambulancia',
+                                      'camionete',
+                                      'van'],
+                      'nd_completa': '44905252',
+                      'nome': 'VEICULOS DE TRACAO MECANICA',
+                      'subitem': '52'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM AQUISICAO DE SOFTWARE PRONTO. ITENS E EXEMPLOS: '
+                                'SOFTWARE, LICENCA SOFTWARE, LICENCA PERPETUA, SISTEMA OPERACIONAL.',
+                      'keywords': ['software', 'licenca software', 'licenca perpetua', 'sistema operacional'],
+                      'nd_completa': '44905255',
+                      'nome': 'AQUISICAO DE SOFTWARE PRONTO',
+                      'subitem': '55'},
+                  {   'funcao': 'REGISTRA O VALOR DAS DESPESAS COM OUTROS EQUIPAMENTOS E MATERIAL PERMANENTE NAO '
+                                'ESPECIFICADOS.',
+                      'keywords': ['outro material permanente', 'equipamento permanente diverso'],
+                      'nd_completa': '44905299',
+                      'nome': 'OUTROS MATERIAIS PERMANENTES',
+                      'subitem': '99'}]}
+
+def identificar_grupo_nd(nd: str) -> str:
+    """Identifica se a ND pertence ao grupo 339030, 449052 ou 339039."""
+    if not nd:
+        return "339030"
+    nd_limpa = re.sub(r'\D', '', str(nd))
+    for grupo in ["339030", "449052", "339039"]:
+        if grupo in nd_limpa:
+            return grupo
+    if "30" in nd_limpa and ("3390" in nd_limpa or "9030" in nd_limpa):
+        return "339030"
+    if "52" in nd_limpa and ("4490" in nd_limpa or "9052" in nd_limpa):
+        return "449052"
+    if "39" in nd_limpa and ("3390" in nd_limpa or "9039" in nd_limpa):
+        return "339039"
+    return "339030"
+
+def buscar_correspondencias_subitens(nd: str, descricao_item: str) -> List[Dict]:
+    """
+    Busca todas as correspondências de subitens para uma dada ND com base na FUNÇÃO oficial
+    e no nome do subitem, extraindo os termos coincidentes.
+    Retorna uma lista de dicionários ordenada por relevância (score decrescente).
+    """
+    if not descricao_item:
+        return []
+
+    grupo = identificar_grupo_nd(nd)
+    if not grupo or grupo not in CATALOGO_SUBITENS:
+        desc_norm = _normalizar_texto(descricao_item)
+        if any(w in desc_norm for w in ["armario", "cadeira", "mesa", "computador", "notebook", "estante", "servidor"]):
+            grupo = "449052"
+        elif any(w in desc_norm for w in ["servico", "manutencao preventiva", "reparo em", "locacao"]):
+            grupo = "339039"
+        else:
+            grupo = "339030"
+
+    desc_norm = _normalizar_texto(descricao_item)
+    palavras_desc = extrair_palavras_chave(descricao_item)
+    if not palavras_desc:
+        palavras_desc = [p for p in desc_norm.split() if len(p) >= 2]
+
+    correspondencias = []
+
+    for item in CATALOGO_SUBITENS[grupo]:
+        funcao_norm = _normalizar_texto(item.get("funcao", ""))
+        nome_norm = _normalizar_texto(item.get("nome", ""))
+        keywords_norm = [_normalizar_texto(k) for k in item.get("keywords", [])]
+
+        score = 0
+        termos_coincidentes = []
+
+        # 1. Match de frase inteira na FUNCAO ou NOME
+        if len(desc_norm) > 4:
+            if desc_norm in funcao_norm:
+                score += 35
+                termos_coincidentes.append(descricao_item[:35])
+            elif desc_norm in nome_norm:
+                score += 30
+                termos_coincidentes.append(descricao_item[:30])
+
+        # 2. Match de n-grams (pares de palavras consecutivas)
+        tokens_desc = desc_norm.split()
+        for i in range(len(tokens_desc) - 1):
+            par = f"{tokens_desc[i]} {tokens_desc[i+1]}"
+            if len(par) >= 6 and (tokens_desc[i] not in STOPWORDS_SUBITEM or tokens_desc[i+1] not in STOPWORDS_SUBITEM):
+                if par in funcao_norm:
+                    score += 18
+                    if par not in termos_coincidentes:
+                        termos_coincidentes.append(par)
+                elif par in nome_norm:
+                    score += 15
+                    if par not in termos_coincidentes:
+                        termos_coincidentes.append(par)
+
+        # 3. Match de termos individuais na FUNÇÃO
+        for p in palavras_desc:
+            # Palavra inteira na FUNÇÃO
+            if re.search(r'\b' + re.escape(p) + r'\b', funcao_norm):
+                score += 8
+                if p not in termos_coincidentes:
+                    termos_coincidentes.append(p)
+            elif p in funcao_norm:
+                score += 4
+                if p not in termos_coincidentes:
+                    termos_coincidentes.append(p)
+
+            # Palavra no NOME
+            if re.search(r'\b' + re.escape(p) + r'\b', nome_norm):
+                score += 7
+                if p not in termos_coincidentes:
+                    termos_coincidentes.append(p)
+
+            # Palavra nas keywords
+            for kw in keywords_norm:
+                if p == kw or (len(p) >= 4 and p in kw):
+                    score += 6
+                    if p not in termos_coincidentes:
+                        termos_coincidentes.append(p)
+                    break
+
+        if score > 0:
+            correspondencias.append({
+                "subitem": item["subitem"],
+                "nd_completa": item["nd_completa"],
+                "nome": item["nome"],
+                "funcao": item.get("funcao", ""),
+                "score": score,
+                "termos": termos_coincidentes
+            })
+
+    correspondencias.sort(key=lambda x: x["score"], reverse=True)
+    return correspondencias
+
+def determinar_subitem(nd: str, descricao_item: str) -> str:
+    """Retorna o código de 2 dígitos do subitem de maior pontuação ou vazio."""
+    corrs = buscar_correspondencias_subitens(nd, descricao_item)
+    if corrs:
+        return corrs[0]["subitem"]
+    return ""
+
+def obter_nome_subitem(nd: str, subitem: str) -> str:
+    """Retorna o nome por extenso do subitem."""
+    if not subitem:
+        return ""
+    grupo = identificar_grupo_nd(nd)
+    if grupo in CATALOGO_SUBITENS:
+        sub_busca = str(subitem).strip().zfill(2)
+        for cand in CATALOGO_SUBITENS[grupo]:
+            if cand["subitem"] == sub_busca:
+                return cand["nome"]
+    return ""
+
+def obter_funcao_subitem(nd: str, subitem: str) -> str:
+    """Retorna a redação oficial da FUNÇÃO do subitem (SIAFI/MCASP)."""
+    if not subitem:
+        return ""
+    grupo = identificar_grupo_nd(nd)
+    if grupo in CATALOGO_SUBITENS:
+        sub_busca = str(subitem).strip().zfill(2)
+        for cand in CATALOGO_SUBITENS[grupo]:
+            if cand["subitem"] == sub_busca:
+                return cand.get("funcao", "")
+    return ""
+
+def listar_subitens_por_nd(nd: str) -> List[Dict]:
+    """Retorna a lista completa de subitens de uma determinada ND."""
+    grupo = identificar_grupo_nd(nd)
+    return CATALOGO_SUBITENS.get(grupo, [])
+
+def montar_opcoes_subitem(nd: str, descricao_item: str, subitem_atual: str = "") -> Tuple[List[str], int, Dict[str, str]]:
+    """
+    Gera a lista completa de opções para o selectbox, colocando as correspondências
+    encontradas na FUNÇÃO no topo com os termos encontrados em destaque.
+    Retorna: (opcoes, index_padrao, mapa_opcao_para_codigo)
+    """
+    correspondencias = buscar_correspondencias_subitens(nd, descricao_item)
+    todos_subitens = listar_subitens_por_nd(nd)
+
+    opcoes = []
+    mapa_codigos = {}
+    subitens_incluidos = set()
+
+    # 1. Correspondências identificadas na FUNÇÃO oficial
+    for c in correspondencias:
+        sub = c["subitem"]
+        nome = c["nome"]
+        termos_str = ", ".join(c.get("termos", [])[:3])
+        if termos_str:
+            rotulo = f"🎯 {sub} - {nome} [Correspondência na Função: {termos_str}]"
+        else:
+            rotulo = f"🎯 {sub} - {nome}"
+        opcoes.append(rotulo)
+        mapa_codigos[rotulo] = sub
+        subitens_incluidos.add(sub)
+
+    # 2. Outros subitens da ND para seleção livre
+    for s in todos_subitens:
+        sub = s["subitem"]
+        if sub not in subitens_incluidos:
+            rotulo = f"📋 {sub} - {s['nome']}"
+            opcoes.append(rotulo)
+            mapa_codigos[rotulo] = sub
+            subitens_incluidos.add(sub)
+
+    # 3. Opção manual
+    rotulo_manual = "✏️ Digitar outro código manualmente..."
+    opcoes.append(rotulo_manual)
+    mapa_codigos[rotulo_manual] = ""
+
+    # Determina o índice padrão
+    idx_selecionado = 0
+    if subitem_atual:
+        sub_alvo = str(subitem_atual).strip().zfill(2)
+        for i, op in enumerate(opcoes):
+            if mapa_codigos.get(op) == sub_alvo:
+                idx_selecionado = i
+                break
+
+    return opcoes, idx_selecionado, mapa_codigos
