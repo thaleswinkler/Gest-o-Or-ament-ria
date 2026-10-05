@@ -61,8 +61,8 @@ exec streamlit run app.py \
   --server.enableCORS false \
   --server.enableXsrfProtection false \
   --browser.gatherUsageStats false \
-  --theme.base "light" \
-  --theme.primaryColor "#2d6a4f" \
-  --theme.backgroundColor "#f8fafc" \
-  --theme.secondaryBackgroundColor "#ffffff" \
-  --theme.textColor "#0f172a"
+  --theme.base "dark" \
+  --theme.primaryColor "#22c55e" \
+  --theme.backgroundColor "#0f172a" \
+  --theme.secondaryBackgroundColor "#1e293b" \
+  --theme.textColor "#f8fafc"

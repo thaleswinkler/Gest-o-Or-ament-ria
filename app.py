@@ -1780,20 +1780,20 @@ def injetar_estilos_customizados():
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
     /* =========================================================================
-       COMPATIBILIDADE UNIVERSAL DE CORES (MOZILLA FIREFOX, CHROME, OPERA, SAFARI)
-       Previne que temas escuros do navegador ou SO deixem textos e inputs apagados
+       TEMA DARK SLATE EXECUTIVO MILITAR (ALTA VISIBILIDADE E CONFORTO VISUAL)
+       Compatibilidade total com Firefox, Chrome, Opera, Safari e Edge
        ========================================================================= */
     :root, html, body, .stApp {
-        color-scheme: light !important;
-        background-color: #f8fafc !important;
-        color: #0f172a !important;
+        color-scheme: dark !important;
+        background-color: #0f172a !important;
+        color: #f8fafc !important;
         -webkit-font-smoothing: antialiased !important;
         -moz-osx-font-smoothing: grayscale !important;
         text-rendering: optimizeLegibility !important;
-        --text-color: #0f172a !important;
-        --background-color: #f8fafc !important;
-        --secondary-background-color: #ffffff !important;
-        --primary-color: #2d6a4f !important;
+        --text-color: #f8fafc !important;
+        --background-color: #0f172a !important;
+        --secondary-background-color: #1e293b !important;
+        --primary-color: #22c55e !important;
     }
 
     html, body, [class*="css"], .stMarkdown, p, h1, h2, h3, h4, h5, h6, input, select, textarea, button {
@@ -1806,7 +1806,7 @@ def injetar_estilos_customizados():
         background: transparent !important;
     }
 
-    /* Botão de abrir/fechar a barra lateral (Sidebar) visível e destacado no desktop e mobile */
+    /* Botão de abrir/fechar a barra lateral (Sidebar) */
     [data-testid="stSidebarCollapsedControl"],
     [data-testid="collapsedControl"],
     button[aria-label*="sidebar" i],
@@ -1817,19 +1817,19 @@ def injetar_estilos_customizados():
     }
 
     [data-testid="stSidebarCollapsedControl"] {
-        background: #ffffff !important;
-        border: 1px solid #cbd5e1 !important;
+        background: #1e293b !important;
+        border: 1px solid #334155 !important;
         border-radius: 8px !important;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.08) !important;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.3) !important;
         padding: 4px !important;
         margin: 6px 0 0 10px !important;
     }
     [data-testid="stSidebarCollapsedControl"] svg {
-        fill: #1b4332 !important;
+        fill: #4ade80 !important;
     }
     
     .stApp {
-        background-color: #f8fafc !important;
+        background-color: #0f172a !important;
     }
 
     .block-container {
@@ -1838,26 +1838,26 @@ def injetar_estilos_customizados():
         max-width: 96% !important;
     }
 
-    /* Sidebar estilizada */
+    /* Sidebar Dark */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%) !important;
-        border-right: 1px solid #e2e8f0;
-        box-shadow: 2px 0 10px rgba(0, 0, 0, 0.03);
+        background: linear-gradient(180deg, #0b1120 0%, #0f172a 100%) !important;
+        border-right: 1px solid #1e293b !important;
+        box-shadow: 4px 0 15px rgba(0, 0, 0, 0.4);
     }
     section[data-testid="stSidebar"] .block-container {
         padding-top: 1.5rem !important;
     }
     section[data-testid="stSidebar"] * {
-        color: #1e293b;
+        color: #e2e8f0;
     }
 
-    /* Abas Modernas Executivas */
+    /* Abas Dark Executivas */
     .stTabs [data-baseweb="tab-list"] {
         gap: 6px;
-        background-color: #f1f5f9;
+        background-color: #1e293b;
         padding: 6px;
         border-radius: 12px;
-        border: 1px solid #e2e8f0;
+        border: 1px solid #334155;
         margin-bottom: 22px;
     }
     .stTabs [data-baseweb="tab"] {
@@ -1866,66 +1866,66 @@ def injetar_estilos_customizados():
         border-radius: 8px;
         font-weight: 600;
         font-size: 13.5px;
-        color: #64748b !important;
-        -webkit-text-fill-color: #64748b !important;
-        -moz-text-fill-color: #64748b !important;
+        color: #94a3b8 !important;
+        -webkit-text-fill-color: #94a3b8 !important;
+        -moz-text-fill-color: #94a3b8 !important;
         border: none !important;
         background-color: transparent;
         transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         white-space: nowrap;
     }
     .stTabs [data-baseweb="tab"]:hover {
-        color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important;
-        -moz-text-fill-color: #0f172a !important;
-        background-color: rgba(255, 255, 255, 0.8);
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
+        background-color: #334155;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #ffffff !important;
-        color: #1b4332 !important;
-        -webkit-text-fill-color: #1b4332 !important;
-        -moz-text-fill-color: #1b4332 !important;
+        background-color: #0f172a !important;
+        color: #4ade80 !important;
+        -webkit-text-fill-color: #4ade80 !important;
+        -moz-text-fill-color: #4ade80 !important;
         font-weight: 700 !important;
-        box-shadow: 0 2px 6px -1px rgba(0, 0, 0, 0.07);
-        border-bottom: 2.5px solid #2d6a4f !important;
+        box-shadow: 0 2px 6px -1px rgba(0, 0, 0, 0.4);
+        border-bottom: 2.5px solid #22c55e !important;
     }
 
     /* Cartões de Métricas */
     div[data-testid="stMetric"] {
-        background: #ffffff !important;
-        border: 1px solid #e2e8f0;
+        background: #1e293b !important;
+        border: 1px solid #334155;
         border-radius: 12px;
         padding: 18px 22px;
-        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
         transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
     }
     div[data-testid="stMetric"]:hover {
         transform: translateY(-2px);
-        border-color: #cbd5e1;
-        box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.08);
+        border-color: #475569;
+        box-shadow: 0 8px 16px -2px rgba(0, 0, 0, 0.35);
     }
     div[data-testid="stMetricLabel"] {
         font-size: 11.5px !important;
         font-weight: 700 !important;
-        color: #64748b !important;
-        -webkit-text-fill-color: #64748b !important;
-        -moz-text-fill-color: #64748b !important;
+        color: #94a3b8 !important;
+        -webkit-text-fill-color: #94a3b8 !important;
+        -moz-text-fill-color: #94a3b8 !important;
         text-transform: uppercase !important;
         letter-spacing: 0.8px !important;
     }
     div[data-testid="stMetricValue"] {
         font-size: 26px !important;
         font-weight: 800 !important;
-        color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important;
-        -moz-text-fill-color: #0f172a !important;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
         letter-spacing: -0.5px !important;
     }
 
-    /* Botões Primários - Verde Exército */
+    /* Botões Primários - Verde Exército Militar */
     .stButton button[kind="primary"], .stButton button[data-testid="baseButton-primary"] {
-        background: linear-gradient(180deg, #2d6a4f 0%, #1b4332 100%) !important;
-        border: 1px solid #143527 !important;
+        background: linear-gradient(180deg, #15803d 0%, #166534 100%) !important;
+        border: 1px solid #22c55e !important;
         color: #ffffff !important;
         -webkit-text-fill-color: #ffffff !important;
         -moz-text-fill-color: #ffffff !important;
@@ -1933,50 +1933,50 @@ def injetar_estilos_customizados():
         border-radius: 8px !important;
         padding: 9px 20px !important;
         font-size: 14px !important;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
         transition: all 0.15s ease !important;
     }
     .stButton button[kind="primary"]:hover, .stButton button[data-testid="baseButton-primary"]:hover {
-        background: linear-gradient(180deg, #387c5d 0%, #24553f 100%) !important;
-        box-shadow: 0 4px 12px -1px rgba(27, 67, 50, 0.3) !important;
+        background: linear-gradient(180deg, #16a34a 0%, #15803d 100%) !important;
+        box-shadow: 0 4px 14px rgba(34, 197, 94, 0.35) !important;
         transform: translateY(-1px);
     }
 
     /* Botões Secundários */
     .stButton button[kind="secondary"], .stButton button[data-testid="baseButton-secondary"] {
-        background-color: #ffffff !important;
-        border: 1px solid #cbd5e1 !important;
-        color: #334155 !important;
-        -webkit-text-fill-color: #334155 !important;
-        -moz-text-fill-color: #334155 !important;
+        background-color: #1e293b !important;
+        border: 1px solid #475569 !important;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
         font-weight: 600 !important;
         border-radius: 8px !important;
         padding: 9px 20px !important;
         font-size: 14px !important;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03) !important;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
         transition: all 0.15s ease !important;
     }
     .stButton button[kind="secondary"]:hover, .stButton button[data-testid="baseButton-secondary"]:hover {
-        background-color: #f8fafc !important;
-        border-color: #94a3b8 !important;
-        color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important;
-        -moz-text-fill-color: #0f172a !important;
-        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.06) !important;
+        background-color: #334155 !important;
+        border-color: #64748b !important;
+        color: #ffffff !important;
+        -webkit-text-fill-color: #ffffff !important;
+        -moz-text-fill-color: #ffffff !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3) !important;
     }
 
     /* Formulários e Containers */
     div[data-testid="stForm"] {
-        background-color: #ffffff !important;
-        border: 1px solid #e2e8f0;
+        background-color: #1e293b !important;
+        border: 1px solid #334155;
         border-radius: 12px;
         padding: 24px;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
     }
 
     /* =========================================================================
        BLINDAGEM TOTAL DE ENTRADAS DE TEXTO (INPUTS, TEXTAREAS, SENHAS, SELECTS)
-       Garante visibilidade máxima e alto contraste ao digitar no Mozilla Firefox e demais navegadores
+       Garante contraste impecável, fundo escuro harmonioso e digitação legível
        ========================================================================= */
     input,
     textarea,
@@ -1995,15 +1995,15 @@ def injetar_estilos_customizados():
     input[type="number"],
     input[type="search"],
     input[type="email"] {
-        color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important;
-        -moz-text-fill-color: #0f172a !important;
-        background-color: #ffffff !important;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
+        background-color: #0f172a !important;
         border-radius: 8px !important;
-        border: 1px solid #cbd5e1 !important;
+        border: 1px solid #475569 !important;
         font-size: 14px !important;
         font-weight: 500 !important;
-        caret-color: #1b4332 !important;
+        caret-color: #4ade80 !important;
         opacity: 1 !important;
     }
 
@@ -2016,12 +2016,12 @@ def injetar_estilos_customizados():
     .stTextArea textarea:focus,
     [data-baseweb="input"]:focus-within,
     [data-baseweb="base-input"]:focus-within {
-        border-color: #2d6a4f !important;
-        box-shadow: 0 0 0 3px rgba(45, 106, 79, 0.15) !important;
-        color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important;
-        -moz-text-fill-color: #0f172a !important;
-        background-color: #ffffff !important;
+        border-color: #22c55e !important;
+        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25) !important;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
+        background-color: #0f172a !important;
     }
 
     /* Autofill compatível em Mozilla Firefox, Chrome, Opera, Safari */
@@ -2029,21 +2029,21 @@ def injetar_estilos_customizados():
     input:-webkit-autofill:hover,
     input:-webkit-autofill:focus,
     input:-webkit-autofill:active {
-        -webkit-box-shadow: 0 0 0 30px #ffffff inset !important;
-        -webkit-text-fill-color: #0f172a !important;
-        caret-color: #1b4332 !important;
+        -webkit-box-shadow: 0 0 0 30px #0f172a inset !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        caret-color: #4ade80 !important;
         transition: background-color 5000s ease-in-out 0s !important;
     }
     input:-moz-autofill,
     input:-moz-autofill:hover,
     input:-moz-autofill:focus {
         filter: none !important;
-        background-color: #ffffff !important;
-        color: #0f172a !important;
-        -moz-text-fill-color: #0f172a !important;
+        background-color: #0f172a !important;
+        color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
     }
 
-    /* Placeholders visíveis e legíveis (sem esmaecimento excessivo) */
+    /* Placeholders visíveis e legíveis */
     ::placeholder,
     ::-webkit-input-placeholder,
     ::-moz-placeholder,
@@ -2056,15 +2056,15 @@ def injetar_estilos_customizados():
         font-weight: 400 !important;
     }
 
-    /* Rótulos de campos (Labels) escuros e nítidos */
+    /* Rótulos de campos (Labels) nítidos */
     label,
     [data-testid="stWidgetLabel"],
     [data-testid="stWidgetLabel"] label,
     [data-testid="stWidgetLabel"] p,
     [data-testid="stWidgetLabel"] span {
-        color: #1e293b !important;
-        -webkit-text-fill-color: #1e293b !important;
-        -moz-text-fill-color: #1e293b !important;
+        color: #e2e8f0 !important;
+        -webkit-text-fill-color: #e2e8f0 !important;
+        -moz-text-fill-color: #e2e8f0 !important;
         font-weight: 600 !important;
         font-size: 13.5px !important;
         opacity: 1 !important;
@@ -2073,17 +2073,17 @@ def injetar_estilos_customizados():
     /* Menus suspensos (Selectbox / Multiselect) */
     .stSelectbox [data-baseweb="select"],
     .stMultiselect [data-baseweb="select"] {
-        background-color: #ffffff !important;
+        background-color: #0f172a !important;
         border-radius: 8px !important;
-        border: 1px solid #cbd5e1 !important;
+        border: 1px solid #475569 !important;
     }
     .stSelectbox [data-baseweb="select"] *,
     .stMultiselect [data-baseweb="select"] *,
     [data-baseweb="select"] span,
     [data-baseweb="select"] div {
-        color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important;
-        -moz-text-fill-color: #0f172a !important;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
         font-weight: 500 !important;
     }
 
@@ -2092,41 +2092,41 @@ def injetar_estilos_customizados():
     [data-baseweb="menu"],
     div[role="listbox"],
     ul[role="listbox"] {
-        background-color: #ffffff !important;
-        color: #0f172a !important;
-        border: 1px solid #cbd5e1 !important;
+        background-color: #1e293b !important;
+        color: #f8fafc !important;
+        border: 1px solid #475569 !important;
         border-radius: 8px !important;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4) !important;
     }
     li[role="option"] {
-        background-color: #ffffff !important;
-        color: #0f172a !important;
+        background-color: #1e293b !important;
+        color: #f8fafc !important;
     }
     li[role="option"] span,
     li[role="option"] div,
     li[role="option"] * {
-        color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important;
-        -moz-text-fill-color: #0f172a !important;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
     }
     li[role="option"]:hover,
     li[role="option"][aria-selected="true"] {
-        background-color: #f1f5f9 !important;
-        color: #1b4332 !important;
+        background-color: #334155 !important;
+        color: #4ade80 !important;
     }
     li[role="option"][aria-selected="true"] * {
-        color: #1b4332 !important;
-        -webkit-text-fill-color: #1b4332 !important;
-        -moz-text-fill-color: #1b4332 !important;
+        color: #4ade80 !important;
+        -webkit-text-fill-color: #4ade80 !important;
+        -moz-text-fill-color: #4ade80 !important;
         font-weight: 700 !important;
     }
 
     /* Tipografia geral, títulos, parágrafos e markdown legíveis */
     h1, h2, h3, h4, h5, h6,
     .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4, .stMarkdown h5, .stMarkdown h6 {
-        color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important;
-        -moz-text-fill-color: #0f172a !important;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
     }
 
     p, span, li,
@@ -2134,7 +2134,7 @@ def injetar_estilos_customizados():
     [data-testid="stMarkdownContainer"] p,
     [data-testid="stMarkdownContainer"] span,
     [data-testid="stMarkdownContainer"] li {
-        color: #1e293b;
+        color: #cbd5e1;
         opacity: 1 !important;
     }
 
@@ -2142,16 +2142,16 @@ def injetar_estilos_customizados():
     .stMarkdown strong, .stMarkdown b,
     [data-testid="stMarkdownContainer"] strong,
     [data-testid="stMarkdownContainer"] b {
-        color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important;
-        -moz-text-fill-color: #0f172a !important;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
         font-weight: 700 !important;
     }
 
     .stCaption, [data-testid="stCaptionContainer"], small {
-        color: #64748b !important;
-        -webkit-text-fill-color: #64748b !important;
-        -moz-text-fill-color: #64748b !important;
+        color: #94a3b8 !important;
+        -webkit-text-fill-color: #94a3b8 !important;
+        -moz-text-fill-color: #94a3b8 !important;
         opacity: 1 !important;
     }
 
@@ -2160,53 +2160,56 @@ def injetar_estilos_customizados():
     [data-testid="stCheckbox"] label,
     [data-testid="stRadio"] label span,
     [data-testid="stCheckbox"] label span {
-        color: #1e293b !important;
-        -webkit-text-fill-color: #1e293b !important;
-        -moz-text-fill-color: #1e293b !important;
+        color: #e2e8f0 !important;
+        -webkit-text-fill-color: #e2e8f0 !important;
+        -moz-text-fill-color: #e2e8f0 !important;
         font-weight: 500 !important;
     }
 
-    /* Expander estilizado */
+    /* Expander estilizado Dark */
     div[data-testid="stExpander"] {
-        background-color: #ffffff !important;
-        border: 1px solid #e2e8f0;
+        background-color: #1e293b !important;
+        border: 1px solid #334155 !important;
         border-radius: 10px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         overflow: hidden;
     }
     div[data-testid="stExpander"] summary,
     div[data-testid="stExpander"] summary span,
     div[data-testid="stExpander"] summary p {
         font-weight: 600 !important;
-        color: #1e293b !important;
-        -webkit-text-fill-color: #1e293b !important;
-        -moz-text-fill-color: #1e293b !important;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        -moz-text-fill-color: #f8fafc !important;
         font-size: 14.5px !important;
     }
     div[data-testid="stExpander"] summary svg {
-        fill: #1e293b !important;
+        fill: #94a3b8 !important;
     }
 
     /* Alertas */
     div[data-testid="stAlert"] {
         border-radius: 10px !important;
-        border: 1px solid rgba(0, 0, 0, 0.05) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
     }
 
     /* Tabelas e Dataframes */
     [data-testid="stDataFrame"], [data-testid="stDataEditor"], [data-testid="stTable"] {
-        border: 1px solid #e2e8f0 !important;
+        border: 1px solid #334155 !important;
         border-radius: 10px !important;
-        background: #ffffff !important;
-        color: #0f172a !important;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02) !important;
+        background: #1e293b !important;
+        color: #f8fafc !important;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2) !important;
     }
     [data-testid="stDataFrame"] canvas,
     [data-testid="stDataEditor"] canvas {
-        color-scheme: light !important;
+        color-scheme: dark !important;
     }
     table, th, td {
-        color: #0f172a !important;
+        color: #f8fafc !important;
+    }
+    hr {
+        border-color: #334155 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -3520,10 +3523,10 @@ if "usuario_logado" not in st.session_state:
 if st.session_state.usuario_logado is None:
     st.markdown("""
     <div style="text-align: center; margin-top: 15px; margin-bottom: 30px;">
-        <div style="display: inline-flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 16px; background: linear-gradient(135deg, #1e3a29 0%, #2d6a4f 100%); box-shadow: 0 4px 12px rgba(27, 67, 50, 0.25); font-size: 32px; margin-bottom: 12px;">🇧🇷</div>
-        <div style="font-size: 11px; font-weight: 800; letter-spacing: 2px; color: #64748b; text-transform: uppercase;">Exército Brasileiro • Comando Militar</div>
-        <h1 style="font-size: 28px; font-weight: 800; color: #0f172a; margin-top: 6px; margin-bottom: 6px; letter-spacing: -0.5px;">Sistema Integrado de Gestão Orçamentária & Pregões</h1>
-        <p style="color: #64748b; font-size: 15px; margin: 0; max-width: 600px; margin-left: auto; margin-right: auto;">Controle de Recursos, Notas de Crédito, Aquisições e Atas de Registro de Preços</p>
+        <div style="display: inline-flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 16px; background: linear-gradient(135deg, #15803d 0%, #166534 100%); box-shadow: 0 4px 14px rgba(34, 197, 94, 0.3); font-size: 32px; margin-bottom: 12px;">🇧🇷</div>
+        <div style="font-size: 11px; font-weight: 800; letter-spacing: 2px; color: #4ade80; text-transform: uppercase;">Exército Brasileiro • Comando Militar</div>
+        <h1 style="font-size: 28px; font-weight: 800; color: #f8fafc; margin-top: 6px; margin-bottom: 6px; letter-spacing: -0.5px;">Sistema Integrado de Gestão Orçamentária & Pregões</h1>
+        <p style="color: #94a3b8; font-size: 15px; margin: 0; max-width: 600px; margin-left: auto; margin-right: auto;">Controle de Recursos, Notas de Crédito, Aquisições e Atas de Registro de Preços</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -3532,8 +3535,8 @@ if st.session_state.usuario_logado is None:
     with col_login:
         st.markdown("""
         <div style="margin-bottom: 12px;">
-            <h3 style="font-size: 18px; font-weight: 700; color: #0f172a; margin: 0;">🔑 Acesso ao Sistema</h3>
-            <p style="font-size: 13px; color: #64748b; margin: 2px 0 0 0;">Informe suas credenciais autorizadas para ingressar</p>
+            <h3 style="font-size: 18px; font-weight: 700; color: #f8fafc; margin: 0;">🔑 Acesso ao Sistema</h3>
+            <p style="font-size: 13px; color: #94a3b8; margin: 2px 0 0 0;">Informe suas credenciais autorizadas para ingressar</p>
         </div>
         """, unsafe_allow_html=True)
         with st.form("form_login"):
@@ -3545,7 +3548,7 @@ if st.session_state.usuario_logado is None:
                 if not usuario_login or not senha_login:
                     st.warning("Preencha usuário e senha.")
                 elif supabase is None:
-                    st.error("⚠️ Cliente Supabase não pôde ser inicializado. Verifique a URL e Chave no painel de configurações abaixo.")
+                    st.error("⚠️ Banco de dados indisponível no momento. Tente novamente em instantes.")
                 else:
                     try:
                         resposta = supabase.table("usuarios").select("*").eq("id", usuario_login).execute()
@@ -3573,8 +3576,8 @@ if st.session_state.usuario_logado is None:
     with col_cadastro:
         st.markdown("""
         <div style="margin-bottom: 12px;">
-            <h3 style="font-size: 18px; font-weight: 700; color: #0f172a; margin: 0;">🛡️ Cadastrar Conta Matriz da OM</h3>
-            <p style="font-size: 13px; color: #64748b; margin: 2px 0 0 0;">Apenas para o Fiscal Administrativo da Organização Militar</p>
+            <h3 style="font-size: 18px; font-weight: 700; color: #f8fafc; margin: 0;">🛡️ Cadastrar Conta Matriz da OM</h3>
+            <p style="font-size: 13px; color: #94a3b8; margin: 2px 0 0 0;">Apenas para o Fiscal Administrativo da Organização Militar</p>
         </div>
         """, unsafe_allow_html=True)
         st.info("⚠️ **Acesso Restrito:** Apenas o **Fiscal Administrativo** pode criar a primeira conta da OM. Contas de **Chefe** e **Operador** devem ser criadas pelo Fiscal internamente.")
@@ -3596,7 +3599,7 @@ if st.session_state.usuario_logado is None:
                 if not novo_user or not nova_senha or not novo_nome or not nova_om or not nova_secao:
                     st.warning("Preencha todos os campos obrigatórios.")
                 elif supabase is None:
-                    st.error("⚠️ Cliente Supabase não pôde ser inicializado. Verifique a URL e Chave no painel de configurações abaixo.")
+                    st.error("⚠️ Banco de dados indisponível no momento. Tente novamente em instantes.")
                 else:
                     try:
                         verifica_user = supabase.table("usuarios").select("id").eq("id", novo_user).execute()
@@ -3627,50 +3630,11 @@ if st.session_state.usuario_logado is None:
                         st.error(formatar_erro_supabase(err, "cadastro de militar"))
 
     st.markdown("---")
-
-    # Painel de diagnóstico e configuração do Supabase
-    with st.expander("🔧 Diagnóstico e Configuração de Conexão com o Supabase", expanded=False):
-        st.markdown(f"**URL Configurada:** `{URL}`")
-        st.markdown(f"**Chave Configurada:** `{KEY[:16]}...{KEY[-6:] if len(KEY) > 22 else ''}`")
-        
-        col_test_btn, _ = st.columns([1.5, 3])
-        with col_test_btn:
-            if st.button("🔄 Testar Conexão com Supabase", key="btn_test_conexao_sb_ui", use_container_width=True):
-                ok_con, msg_con = testar_conexao_supabase(supabase)
-                if ok_con:
-                    st.success(f"✅ {msg_con}")
-                else:
-                    st.error(f"❌ {msg_con}")
-        
-        st.markdown("---")
-        st.markdown("##### ✏️ Atualizar URL e Chave do Supabase (Novo Projeto)")
-        st.caption("Caso seu projeto anterior tenha sido desativado ou você tenha criado uma nova instância do Supabase:")
-        with st.form("form_atualizar_sb_cred"):
-            input_url_sb = st.text_input("Supabase Project URL (Ex: https://xyzcompany.supabase.co):", value=URL)
-            input_key_sb = st.text_input("Supabase Anon Public Key:", value=KEY, type="password")
-            btn_aplicar_sb = st.form_submit_button("Salvar e Reconectar", type="primary")
-            if btn_aplicar_sb:
-                if input_url_sb.strip() and input_key_sb.strip():
-                    st.session_state["custom_supabase_url"] = input_url_sb.strip()
-                    st.session_state["custom_supabase_key"] = input_key_sb.strip()
-                    st.success("Configurações atualizadas com sucesso! Reconectando...")
-                    st.rerun()
-                else:
-                    st.warning("Preencha a URL e a Chave.")
-
-        st.info("""
-        💡 **Configuração Definitiva no Render:**
-        No painel do Render (**Dashboard > Seu Serviço > Environment Variables**), adicione ou edite:
-        - `SUPABASE_URL`: A URL do seu projeto no Supabase
-        - `SUPABASE_KEY`: A chave anônima (anon key) do seu projeto
-        Dessa forma, o Render sempre iniciará o sistema apontando diretamente para o seu banco.
-        """)
-
-    st.markdown("---")
     st.markdown(
-        "<div style='text-align: center; color: gray; font-size: 14px;'>"
-        "Criado e Desenvolvido por:<br><b>2º Sgt Com Equipe Técnica</b><br><br>"
-        "<i>Este sistema está em constante evolução. Para suporte ou envio de sugestões, entre em contato: <a href='mailto:suporte@eb.mil.br'>suporte@eb.mil.br</a></i>"
+        "<div style='text-align: center; color: #94a3b8; font-size: 13px; padding-top: 15px; padding-bottom: 25px;'>"
+        "Criado e Desenvolvido por:<br><b style='color: #f1f5f9; font-size: 15px;'>2º Sgt Com Thales Winkler</b><br><br>"
+        "<i>Sistema em constante evolução. Sugestões e suporte:<br>"
+        "<a href='mailto:winkler.thales@eb.mil.br' style='color: #4ade80; text-decoration: none; font-weight: 600;'>winkler.thales@eb.mil.br</a></i>"
         "</div>", 
         unsafe_allow_html=True
     )
@@ -5476,32 +5440,32 @@ with tab_visao_global:
 
         # Quadro 1: Indicadores e Recursos Concedidos
         st.markdown(f"""
-        <div style="background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 22px; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
-            <div style="border-bottom: 2px solid #1e3a29; padding-bottom: 10px; margin-bottom: 18px;">
-                <h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #1e3a29; text-transform: uppercase; letter-spacing: 0.5px;">
+        <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 22px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2);">
+            <div style="border-bottom: 2px solid #22c55e; padding-bottom: 10px; margin-bottom: 18px;">
+                <h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #4ade80; text-transform: uppercase; letter-spacing: 0.5px;">
                     1. Balanço de Recursos Orçamentários e Créditos Concedidos ({ano_selecionado})
                 </h3>
             </div>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
-                <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; text-align: center;">
-                    <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total Concedido em NCs</span>
-                    <div style="font-size: 20px; font-weight: 800; color: #0f172a; margin-top: 4px;">R$ {total_recebido_ano:,.2f}</div>
-                    <span style="font-size: 11px; color: #64748b;">{len(df_ncs_ano)} Notas de Crédito</span>
+                <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px; text-align: center;">
+                    <span style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Total Concedido em NCs</span>
+                    <div style="font-size: 20px; font-weight: 800; color: #f8fafc; margin-top: 4px;">R$ {total_recebido_ano:,.2f}</div>
+                    <span style="font-size: 11px; color: #94a3b8;">{len(df_ncs_ano)} Notas de Crédito</span>
                 </div>
-                <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; text-align: center;">
-                    <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total Empenhado / Alocado</span>
-                    <div style="font-size: 20px; font-weight: 800; color: #1e3a29; margin-top: 4px;">R$ {total_empenhado_ano:,.2f}</div>
-                    <span style="font-size: 11px; color: #64748b;">{total_itens_cadastrados} itens adquiridos</span>
+                <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px; text-align: center;">
+                    <span style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Total Empenhado / Alocado</span>
+                    <div style="font-size: 20px; font-weight: 800; color: #4ade80; margin-top: 4px;">R$ {total_empenhado_ano:,.2f}</div>
+                    <span style="font-size: 11px; color: #94a3b8;">{total_itens_cadastrados} itens adquiridos</span>
                 </div>
-                <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; text-align: center;">
-                    <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;">Saldo Global Disponível</span>
-                    <div style="font-size: 20px; font-weight: 800; color: {'#dc2626' if saldo_ano < 0 else '#15803d'}; margin-top: 4px;">R$ {saldo_ano:,.2f}</div>
-                    <span style="font-size: 11px; color: #64748b;">Remanescente para empenho</span>
+                <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px; text-align: center;">
+                    <span style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Saldo Global Disponível</span>
+                    <div style="font-size: 20px; font-weight: 800; color: {'#ef4444' if saldo_ano < 0 else '#22c55e'}; margin-top: 4px;">R$ {saldo_ano:,.2f}</div>
+                    <span style="font-size: 11px; color: #94a3b8;">Remanescente para empenho</span>
                 </div>
-                <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px; text-align: center;">
-                    <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase;">Taxa de Execução</span>
-                    <div style="font-size: 20px; font-weight: 800; color: #0284c7; margin-top: 4px;">{pct_exec:.1f}%</div>
-                    <span style="font-size: 11px; color: #64748b;">Índice de aproveitamento orçamentário</span>
+                <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px; text-align: center;">
+                    <span style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Taxa de Execução</span>
+                    <div style="font-size: 20px; font-weight: 800; color: #38bdf8; margin-top: 4px;">{pct_exec:.1f}%</div>
+                    <span style="font-size: 11px; color: #94a3b8;">Índice de aproveitamento orçamentário</span>
                 </div>
             </div>
         </div>
@@ -5522,9 +5486,9 @@ with tab_visao_global:
 
         # Quadro 2: Gráficos e Distribuição de Recursos
         st.markdown(f"""
-        <div style="background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-top: 24px; margin-bottom: 22px; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
-            <div style="border-bottom: 2px solid #1e3a29; padding-bottom: 10px; margin-bottom: 18px;">
-                <h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #1e3a29; text-transform: uppercase; letter-spacing: 0.5px;">
+        <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-top: 24px; margin-bottom: 22px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2);">
+            <div style="border-bottom: 2px solid #22c55e; padding-bottom: 10px; margin-bottom: 18px;">
+                <h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #4ade80; text-transform: uppercase; letter-spacing: 0.5px;">
                     2. Gráficos e Distribuição dos Recursos do Exercício ({ano_selecionado})
                 </h3>
             </div>
@@ -5536,7 +5500,7 @@ with tab_visao_global:
             with col_g1:
                 st.markdown("###### 📊 Alocação por Natureza de Despesa (ND) e Status")
                 df_agrup_nd = df_itens_ano.groupby(["ND", "Situação"])["Total"].sum().reset_index()
-                escala_cores_rel = alt.Scale(domain=["Recebido", "Planejamento", "Aguardando entrega"], range=["#28a745", "#007bff", "#dc3545"])
+                escala_cores_rel = alt.Scale(domain=["Recebido", "Planejamento", "Aguardando entrega"], range=["#22c55e", "#3b82f6", "#ef4444"])
                 graf_nd = alt.Chart(df_agrup_nd).mark_bar().encode(
                     x=alt.X("ND:N", title="Natureza de Despesa"),
                     y=alt.Y("Total:Q", title="Total Alocado (R$)"),
@@ -5548,7 +5512,7 @@ with tab_visao_global:
             with col_g2:
                 st.markdown("###### 🏢 Top Fornecedores / Credores por Volume Financeiro")
                 df_forn = df_itens_ano.groupby("Fornecedor")["Total"].sum().reset_index().sort_values("Total", ascending=False).head(8)
-                graf_forn = alt.Chart(df_forn).mark_bar(color="#1e3a29").encode(
+                graf_forn = alt.Chart(df_forn).mark_bar(color="#22c55e").encode(
                     x=alt.X("Total:Q", title="Valor Total (R$)"),
                     y=alt.Y("Fornecedor:N", sort="-x", title="Fornecedor"),
                     tooltip=[alt.Tooltip("Fornecedor:N"), alt.Tooltip("Total:Q", format=",.2f")]
@@ -5557,9 +5521,9 @@ with tab_visao_global:
 
         # Quadro 3: Listagem Completa de Todos os Itens Adquiridos no Ano (com Quantidades)
         st.markdown(f"""
-        <div style="background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-top: 24px; margin-bottom: 22px; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
-            <div style="border-bottom: 2px solid #1e3a29; padding-bottom: 10px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-                <h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #1e3a29; text-transform: uppercase; letter-spacing: 0.5px;">
+        <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-top: 24px; margin-bottom: 22px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2);">
+            <div style="border-bottom: 2px solid #22c55e; padding-bottom: 10px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <h3 style="margin: 0; font-size: 16px; font-weight: 800; color: #4ade80; text-transform: uppercase; letter-spacing: 0.5px;">
                     3. Listagem Geral de Todos os Itens Adquiridos no Ano ({total_itens_cadastrados} itens • {total_qtd_unidades} unidades)
                 </h3>
             </div>
@@ -5593,10 +5557,10 @@ with tab_visao_global:
             qtd_filtrada = int(df_itens_filtrado["Qtd"].sum())
             total_filtrado = float(df_itens_filtrado["Total"].sum())
             st.markdown(f"""
-            <div style="display: flex; justify-content: flex-end; gap: 24px; background: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: 8px; padding: 12px 20px; margin-top: 10px; margin-bottom: 20px;">
-                <div><span style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total de Itens:</span> <span style="font-size: 16px; font-weight: 800; color: #0f172a;">{len(df_itens_filtrado)} itens</span></div>
-                <div><span style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase;">Total de Quantidades (Unidades):</span> <span style="font-size: 16px; font-weight: 800; color: #0f172a;">{qtd_filtrada:,} unid.</span></div>
-                <div><span style="font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase;">Valor Total Financeiro:</span> <span style="font-size: 16px; font-weight: 800; color: #1e3a29;">R$ {total_filtrado:,.2f}</span></div>
+            <div style="display: flex; justify-content: flex-end; gap: 24px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px 20px; margin-top: 10px; margin-bottom: 20px;">
+                <div><span style="font-size: 12px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Total de Itens:</span> <span style="font-size: 16px; font-weight: 800; color: #f8fafc;">{len(df_itens_filtrado)} itens</span></div>
+                <div><span style="font-size: 12px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Total de Quantidades (Unidades):</span> <span style="font-size: 16px; font-weight: 800; color: #f8fafc;">{qtd_filtrada:,} unid.</span></div>
+                <div><span style="font-size: 12px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Valor Total Financeiro:</span> <span style="font-size: 16px; font-weight: 800; color: #4ade80;">R$ {total_filtrado:,.2f}</span></div>
             </div>
             """, unsafe_allow_html=True)
         else:
@@ -5610,21 +5574,21 @@ with tab_visao_global:
         funcao_od = config_req_atual.get("od_funcao", "Ordenador de Despesas")
 
         st.markdown(f"""
-        <div style="background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 30px; margin-top: 25px; margin-bottom: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
+        <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 30px; margin-top: 25px; margin-bottom: 30px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2);">
             <div style="text-align: center; margin-bottom: 40px;">
-                <p style="font-size: 13px; color: #475569; margin: 0;">Certifico que as informações financeiras e a listagem de materiais/serviços acima consolidados refletem fielmente a execução dos créditos orçamentários do Exercício {ano_selecionado}.</p>
-                <p style="font-size: 12px; color: #64748b; margin-top: 6px;">Quartel em {config_req_atual.get('cidade_om', 'Sede da OM')}, em {data_hora_emissao}.</p>
+                <p style="font-size: 13px; color: #cbd5e1; margin: 0;">Certifico que as informações financeiras e a listagem de materiais/serviços acima consolidados refletem fielmente a execução dos créditos orçamentários do Exercício {ano_selecionado}.</p>
+                <p style="font-size: 12px; color: #94a3b8; margin-top: 6px;">Quartel em {config_req_atual.get('cidade_om', 'Sede da OM')}, em {data_hora_emissao}.</p>
             </div>
             <div style="display: flex; justify-content: space-around; flex-wrap: wrap; gap: 40px; margin-top: 50px;">
                 <div style="text-align: center; min-width: 250px;">
-                    <div style="border-top: 1.5px solid #0f172a; width: 260px; margin: 0 auto 8px auto;"></div>
-                    <div style="font-weight: 700; font-size: 13px; color: #0f172a;">{nome_chefe}</div>
-                    <div style="font-size: 11px; color: #64748b;">{funcao_chefe}</div>
+                    <div style="border-top: 1.5px solid #475569; width: 260px; margin: 0 auto 8px auto;"></div>
+                    <div style="font-weight: 700; font-size: 13px; color: #f8fafc;">{nome_chefe}</div>
+                    <div style="font-size: 11px; color: #94a3b8;">{funcao_chefe}</div>
                 </div>
                 <div style="text-align: center; min-width: 250px;">
-                    <div style="border-top: 1.5px solid #0f172a; width: 260px; margin: 0 auto 8px auto;"></div>
-                    <div style="font-weight: 700; font-size: 13px; color: #0f172a;">{nome_od}</div>
-                    <div style="font-size: 11px; color: #64748b;">{funcao_od}</div>
+                    <div style="border-top: 1.5px solid #475569; width: 260px; margin: 0 auto 8px auto;"></div>
+                    <div style="font-weight: 700; font-size: 13px; color: #f8fafc;">{nome_od}</div>
+                    <div style="font-size: 11px; color: #94a3b8;">{funcao_od}</div>
                 </div>
             </div>
         </div>
