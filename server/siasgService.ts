@@ -109,6 +109,15 @@ export interface ItemPregaoSIASG {
   'Qtd Registrada': string;
   'Qtd Empenhada': string;
   'Saldo p/ Empenho': string;
+  'Qtd para Adesão'?: string;
+  'Saldo para Adesão'?: string;
+  'Adesões Aprovadas'?: string;
+  'Aceita Adesão'?: string;
+  adesoes_solicitacoes?: Array<{
+    unidade: string;
+    data: string;
+    quantidade: string;
+  }>;
   'Ata Vinculada': string;
   Fornecedor: string;
   'Fornecedor Puro'?: string;
@@ -479,6 +488,15 @@ export async function consultarItensPregao(
         'Qtd Registrada': fmtQtd(regFinal),
         'Qtd Empenhada': fmtQtd(empFinal),
         'Saldo p/ Empenho': fmtQtd(salFinal),
+        'Qtd para Adesão': fmtQtd(itemContratos.qtdLimiteAdesao || 0),
+        'Saldo para Adesão': fmtQtd(itemContratos.saldoAdesao || 0),
+        'Adesões Aprovadas': fmtQtd(itemContratos.qtdAprovadaAdesao || 0),
+        'Aceita Adesão': itemContratos.aceitaAdesao || 'Não',
+        adesoes_solicitacoes: (itemContratos.solicitacoesAdesao || []).map(s => ({
+          unidade: s.unidade,
+          data: s.data,
+          quantidade: fmtQtd(s.quantidade)
+        })),
         'Ata Vinculada': itemContratos.numeroAta || arpOficial?.numeroAtaRegistroPreco || '-',
         Fornecedor: fornDisplay,
         'Fornecedor Puro': fornNome,
@@ -516,6 +534,11 @@ export async function consultarItensPregao(
         'Qtd Registrada': fmtQtd(regFinal),
         'Qtd Empenhada': fmtQtd(empFinal),
         'Saldo p/ Empenho': fmtQtd(salFinal),
+        'Qtd para Adesão': '0',
+        'Saldo para Adesão': '0',
+        'Adesões Aprovadas': '0',
+        'Aceita Adesão': 'Não',
+        adesoes_solicitacoes: [],
         'Ata Vinculada': ataNum,
         Fornecedor: fornDisplay,
         'Fornecedor Puro': fornNome,

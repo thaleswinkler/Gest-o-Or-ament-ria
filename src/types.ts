@@ -99,6 +99,12 @@ export interface EmpenhoItemPregao {
   valor?: number;
 }
 
+export interface SolicitacaoAdesao {
+  unidade: string;
+  data: string;
+  quantidade: string;
+}
+
 export interface ItemPregao {
   Item: string;
   Tipo: string;
@@ -107,6 +113,11 @@ export interface ItemPregao {
   'Qtd Registrada': string;
   'Qtd Empenhada': string;
   'Saldo p/ Empenho': string;
+  'Qtd para Adesão'?: string;
+  'Saldo para Adesão'?: string;
+  'Adesões Aprovadas'?: string;
+  'Aceita Adesão'?: string;
+  adesoes_solicitacoes?: SolicitacaoAdesao[];
   'Ata Vinculada': string;
   Fornecedor: string;
   'Fornecedor Puro'?: string;

@@ -683,7 +683,9 @@ export function TabVisaoGlobal({
                 </h2>
 
                 <div className="grid grid-cols-3 gap-4 text-xs">
-                  {Object.entries(estatisticas.porND).filter(([k]) => k !== 'Outras' || estatisticas.porND[k].gasto > 0).map(([nd, val]) => (
+                  {Object.entries(estatisticas.porND).filter(([k]) => k !== 'Outras' || estatisticas.porND[k].gasto > 0).map(([nd, valRaw]) => {
+                    const val = valRaw as { recebido: number; gasto: number };
+                    return (
                     <div key={nd} className="p-3 border border-slate-200 rounded-lg bg-slate-50 space-y-1">
                       <span className="font-mono font-bold text-slate-800 block">ND {nd}</span>
                       <div className="flex justify-between text-[11px] text-slate-600">
@@ -699,7 +701,8 @@ export function TabVisaoGlobal({
                         <span className="text-emerald-700">{formatarMoedaBRL(val.recebido - val.gasto)}</span>
                       </div>
                     </div>
-                  ))}
+                  );
+                })}
                 </div>
               </div>
 

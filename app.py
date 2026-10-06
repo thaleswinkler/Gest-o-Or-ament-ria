@@ -2702,6 +2702,11 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
             "qtd_registrada": "0",
             "qtd_empenhada": "0",
             "saldo_empenho": "0",
+            "qtd_limite_adesao": "0",
+            "qtd_aprovada_adesao": "0",
+            "saldo_adesao": "0",
+            "aceita_adesao": "Não",
+            "adesoes_solicitacoes": [],
             "fornecedor": "Deserto / Fracassado",
             "fornecedor_puro": "Deserto / Fracassado",
             "cnpj_puro": "",
@@ -2718,6 +2723,11 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
         "qtd_registrada": "0",
         "qtd_empenhada": "0",
         "saldo_empenho": "0",
+        "qtd_limite_adesao": "0",
+        "qtd_aprovada_adesao": "0",
+        "saldo_adesao": "0",
+        "aceita_adesao": "Não",
+        "adesoes_solicitacoes": [],
         "fornecedor": "",
         "fornecedor_puro": "",
         "cnpj_puro": "",
@@ -3027,6 +3037,107 @@ def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra:
         resultado["empenhos_resumo"] = " | ".join(empenhos_list) if empenhos_list else "Nenhum"
         resultado["empenhos_lista"] = empenhos_list
 
+        # =========================================================================
+        # E) Detalhamento e Saldos da Aba "Adesões" (Carona na Ata)
+        # =========================================================================
+        limite_adesao = 0.0
+        disponivel_adesao = 0.0
+        aprovado_adesao = 0.0
+        aceita_adesao = "Não"
+        adesoes_lista = []
+
+        try:
+            tab3_elem = soup.find(id=re.compile(r"tab3|ades", re.IGNORECASE))
+            texto_tab3 = tab3_elem.get_text(" ", strip=True) if tab3_elem else ""
+            texto_completo = (texto_tab3 + " " + soup.get_text(" ", strip=True)).strip()
+
+            # 1. Indicador de aceitação de adesão
+            m_aceita = re.search(r"aceita\s*ades[aã]o\s*:\s*(sim|n[aã]o)", texto_completo, re.IGNORECASE)
+            if m_aceita:
+                aceita_adesao = "Sim" if m_aceita.group(1).lower() == "sim" else "Não"
+            elif re.search(r"ades[aã]o\s*permitida|permite\s*ades[aã]o", texto_completo, re.IGNORECASE):
+                aceita_adesao = "Sim"
+
+            # 2. Qtd limite para adesão
+            m_lim = re.search(r"(?:qtd\.?\s*limite\s*(?:informado\s*na\s*compra\s*)?(?:para)?\s*ades[aã]o|limite\s*para\s*ades[aã]o|quantidade\s*limite\s*para\s*ades[aã]o|m[aá]ximo\s*para\s*ades[oõ]es)\s*:\s*([\d\.,]+)", texto_completo, re.IGNORECASE)
+            if m_lim:
+                limite_adesao = converter_para_float(m_lim.group(1))
+
+            # 3. Quantidade disponível para adesão (saldo remanescente de carona)
+            m_disp = re.search(r"(?:quantidade\s*dispon[ií]vel\s*para\s*ades[aã]o|quantidade\s*disponivel\s*para\s*ades[aã]o|saldo\s*(?:dispon[ií]vel\s*)?(?:para|de)\s*ades[aã]o|saldo\s*remanescente\s*(?:para|de)\s*ades[aã]o)\s*:\s*([\d\.,]+)", texto_completo, re.IGNORECASE)
+            if m_disp:
+                disponivel_adesao = converter_para_float(m_disp.group(1))
+
+            # Varredura em tags específicas se não localizado em texto direto
+            if limite_adesao == 0.0 or disponivel_adesao == 0.0:
+                escopo_tags = tab3_elem.find_all(['div', 'p', 'span', 'li', 'td', 'dd', 'tr']) if tab3_elem else soup.find_all(['div', 'p', 'span', 'li', 'td', 'dd', 'tr'])
+                for el in escopo_tags:
+                    el_txt = el.get_text(" ", strip=True)
+                    if "limite" in el_txt.lower() and "ades" in el_txt.lower() and limite_adesao == 0.0:
+                        nums = re.findall(r"\b\d+(?:[\.,]\d+)?\b", el_txt)
+                        if nums:
+                            limite_adesao = converter_para_float(nums[-1])
+                    if "dispon" in el_txt.lower() and "ades" in el_txt.lower() and disponivel_adesao == 0.0:
+                        nums = re.findall(r"\b\d+(?:[\.,]\d+)?\b", el_txt)
+                        if nums:
+                            disponivel_adesao = converter_para_float(nums[-1])
+
+            # 4. Tabela de Solicitações Aprovadas de Adesão
+            tabelas_adesao = tab3_elem.find_all('table') if tab3_elem else leaf_tables
+            if not tabelas_adesao:
+                tabelas_adesao = leaf_tables
+
+            for tbl in tabelas_adesao:
+                hdr_txt = tbl.get_text(" ", strip=True).lower()
+                if any(k in hdr_txt for k in ["aprovação análise", "aprovacao analise", "quantidade aprovada", "solicitações aprovadas", "solicitacoes aprovadas"]):
+                    ths = [th.get_text(" ", strip=True).lower() for th in tbl.find_all(['th', 'td'])]
+                    idx_u_ad = -1
+                    idx_dt_ad = -1
+                    idx_qtd_ad = -1
+                    for ic, h in enumerate(ths):
+                        if "unidade" in h and idx_u_ad == -1: idx_u_ad = ic
+                        elif ("data" in h or "análise" in h or "analise" in h) and idx_dt_ad == -1: idx_dt_ad = ic
+                        elif "quantidade" in h or "aprovada" in h: idx_qtd_ad = ic
+
+                    for tr in tbl.find_all('tr'):
+                        tds = [td.get_text(" ", strip=True) for td in tr.find_all(['td', 'th'], recursive=False)]
+                        if len(tds) < 2: continue
+                        if any("quantidade aprovada" in td.lower() or "unidade" in td.lower() for td in tds):
+                            continue
+                        
+                        unid_solic = tds[idx_u_ad] if idx_u_ad != -1 and idx_u_ad < len(tds) else tds[0]
+                        data_solic = tds[idx_dt_ad] if idx_dt_ad != -1 and idx_dt_ad < len(tds) else (tds[1] if len(tds) > 1 else "")
+                        qtd_solic_str = tds[idx_qtd_ad] if idx_qtd_ad != -1 and idx_qtd_ad < len(tds) else tds[-1]
+                        
+                        qtd_f = converter_para_float(qtd_solic_str)
+                        if qtd_f > 0:
+                            aprovado_adesao += qtd_f
+                            adesoes_lista.append({
+                                "Unidade Solicitante": unid_solic,
+                                "Data Aprovação": data_solic,
+                                "Quantidade Aprovada": fmt_qtd(qtd_f)
+                            })
+
+            # 5. Consolidação Matemática de Adesão (Saldo Adesão = Limite - Aprovadas)
+            if limite_adesao > 0.0:
+                aceita_adesao = "Sim"
+                if disponivel_adesao == 0.0 and aprovado_adesao > 0.0:
+                    disponivel_adesao = max(0.0, limite_adesao - aprovado_adesao)
+                elif disponivel_adesao == 0.0 and aprovado_adesao == 0.0:
+                    disponivel_adesao = limite_adesao
+            elif disponivel_adesao > 0.0:
+                aceita_adesao = "Sim"
+                if limite_adesao == 0.0:
+                    limite_adesao = disponivel_adesao + aprovado_adesao
+
+            resultado["qtd_limite_adesao"] = fmt_qtd(limite_adesao)
+            resultado["qtd_aprovada_adesao"] = fmt_qtd(aprovado_adesao)
+            resultado["saldo_adesao"] = fmt_qtd(disponivel_adesao)
+            resultado["aceita_adesao"] = aceita_adesao
+            resultado["adesoes_solicitacoes"] = adesoes_lista
+        except Exception:
+            pass
+
     except Exception:
         pass
 
@@ -3260,6 +3371,11 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
                     "Qtd Registrada": qtd_registrada_final,
                     "Qtd Empenhada": qtd_empenhada_final,
                     "Saldo p/ Empenho": saldo_empenho_calc,
+                    "Qtd para Adesão": saldo_info.get("qtd_limite_adesao", "0"),
+                    "Saldo para Adesão": saldo_info.get("saldo_adesao", "0"),
+                    "Adesões Aprovadas": saldo_info.get("qtd_aprovada_adesao", "0"),
+                    "Aceita Adesão": saldo_info.get("aceita_adesao", "Não"),
+                    "adesoes_solicitacoes": saldo_info.get("adesoes_solicitacoes", []),
                     "Ata Vinculada": ata_vinculada,
                     "Fornecedor": fornecedor_display,
                     "Fornecedor Puro": saldo_info.get("fornecedor_puro", ""),
@@ -3280,6 +3396,11 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
                     "Qtd Registrada": it.get("Qtd SIASG", "0"),
                     "Qtd Empenhada": "0",
                     "Saldo p/ Empenho": it.get("Qtd SIASG", "0"),
+                    "Qtd para Adesão": "0",
+                    "Saldo para Adesão": "0",
+                    "Adesões Aprovadas": "0",
+                    "Aceita Adesão": "Não",
+                    "adesoes_solicitacoes": [],
                     "Ata Vinculada": "Não identificada",
                     "Fornecedor": "Em apuração",
                     "Fornecedor Puro": "",
@@ -5734,26 +5855,144 @@ with tab_consulta_pregoes:
                     itens_pr = st.session_state['itens_carregados_pregoes'][chave_p]
                     if itens_pr:
                         st.markdown("---")
-                        st.markdown("#### 📊 Itens Disponíveis e Saldos Reais da UASG")
-                        df_it_view = pd.DataFrame(itens_pr)
+                        st.markdown("#### 📊 Consulta de Saldos: Aba de Adesões (Carona) e Aba da UASG")
                         
-                        cols_v = ["Item", "Descrição", "Unidade", "Qtd Registrada", "Qtd Empenhada", "Saldo p/ Empenho", "Ata Vinculada", "Fornecedor", "PDF da Ata"]
-                        st.dataframe(
-                            df_it_view[[c for c in cols_v if c in df_it_view.columns]],
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                "PDF da Ata": st.column_config.LinkColumn(
-                                    "Ata Oficial (PDF)",
-                                    display_text="📥 Abrir Ata (PDF)"
-                                )
-                            }
-                        )
+                        # Métricas resumidas do Pregão
+                        tot_it = len(itens_pr)
+                        tot_aceita_ad = sum(1 for it in itens_pr if str(it.get("Aceita Adesão", "")).strip().lower() == "sim")
+                        tot_saldo_ad = sum(converter_para_float(it.get("Saldo para Adesão", "0")) for it in itens_pr)
+                        tot_saldo_uasg = sum(converter_para_float(it.get("Saldo p/ Empenho", "0")) for it in itens_pr)
+
+                        c_met1, c_met2, c_met3, c_met4 = st.columns(4)
+                        with c_met1:
+                            st.metric("Total de Itens", f"{tot_it}", help="Total de itens apurados no pregão")
+                        with c_met2:
+                            st.metric("Aceitam Adesão", f"{tot_aceita_ad} de {tot_it}", help="Itens que aceitam adesão (carona)")
+                        with c_met3:
+                            st.metric("Saldo Remanescente Adesão", f"{tot_saldo_ad:,.0f} unid.", help="Total remanescente para novas adesões de carona")
+                        with c_met4:
+                            st.metric("Saldo p/ Empenho UASG", f"{tot_saldo_uasg:,.0f} unid.", help="Total de saldo disponível para a UASG")
+
+                        df_it_view = pd.DataFrame(itens_pr)
+
+                        aba_vis_adesao, aba_vis_uasg, aba_vis_completa = st.tabs([
+                            "🤝 Aba de Adesões (Qtd Limite e Saldo Remanescente)",
+                            "🏛️ Aba da UASG (Qtd Registrada e Saldo p/ Empenho)",
+                            "📊 Visão Completa (Todos os Saldos)"
+                        ])
+
+                        with aba_vis_adesao:
+                            st.caption("Visualização extraída da **Aba de Adesões da Ata**: Quantidade Limite Estipulada para Adesão, Adesões Aprovadas e Saldo Remanescente Disponível para Carona.")
+                            cols_ad = [
+                                "Item", "Descrição", "Unidade", 
+                                "Qtd para Adesão", "Adesões Aprovadas", "Saldo para Adesão", "Aceita Adesão",
+                                "Ata Vinculada", "Fornecedor", "PDF da Ata"
+                            ]
+                            st.dataframe(
+                                df_it_view[[c for c in cols_ad if c in df_it_view.columns]],
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "PDF da Ata": st.column_config.LinkColumn(
+                                        "Ata Oficial (PDF)",
+                                        display_text="📥 Abrir Ata (PDF)"
+                                    ),
+                                    "Qtd para Adesão": st.column_config.TextColumn(
+                                        "Qtd Limite Adesão",
+                                        help="Quantidade limite máxima estipulada para adesão (carona)"
+                                    ),
+                                    "Adesões Aprovadas": st.column_config.TextColumn(
+                                        "Adesões Aprovadas",
+                                        help="Quantidade já aprovada em solicitações de adesão"
+                                    ),
+                                    "Saldo para Adesão": st.column_config.TextColumn(
+                                        "Saldo Remanescente Adesão",
+                                        help="Quantidade disponível remanescente para novas adesões de carona"
+                                    ),
+                                    "Aceita Adesão": st.column_config.TextColumn(
+                                        "Aceita Adesão?",
+                                        help="Informa se o item aceita adesão/carona"
+                                    )
+                                }
+                            )
+
+                        with aba_vis_uasg:
+                            st.caption("Visualização extraída da **Aba da UASG Gerenciadora/Participantes**: Quantidade Registrada/Homologada, Empenhada e Saldo Próprio da UASG.")
+                            cols_u = [
+                                "Item", "Descrição", "Unidade", 
+                                "Qtd Registrada", "Qtd Empenhada", "Saldo p/ Empenho", 
+                                "Ata Vinculada", "Fornecedor", "PDF da Ata"
+                            ]
+                            st.dataframe(
+                                df_it_view[[c for c in cols_u if c in df_it_view.columns]],
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "PDF da Ata": st.column_config.LinkColumn(
+                                        "Ata Oficial (PDF)",
+                                        display_text="📥 Abrir Ata (PDF)"
+                                    ),
+                                    "Qtd Registrada": st.column_config.TextColumn(
+                                        "Qtd Registrada",
+                                        help="Quantidade total registrada/homologada para a UASG"
+                                    ),
+                                    "Qtd Empenhada": st.column_config.TextColumn(
+                                        "Qtd Empenhada",
+                                        help="Quantidade já empenhada pela UASG"
+                                    ),
+                                    "Saldo p/ Empenho": st.column_config.TextColumn(
+                                        "Saldo p/ Empenho",
+                                        help="Saldo disponível para empenho pela UASG"
+                                    )
+                                }
+                            )
+
+                        with aba_vis_completa:
+                            st.caption("Tabela unificada com todos os dados: saldos da UASG e saldos da aba de adesões.")
+                            cols_v = [
+                                "Item", "Descrição", "Unidade", 
+                                "Qtd Registrada", "Qtd Empenhada", "Saldo p/ Empenho", 
+                                "Qtd para Adesão", "Adesões Aprovadas", "Saldo para Adesão", "Aceita Adesão",
+                                "Ata Vinculada", "Fornecedor", "PDF da Ata"
+                            ]
+                            st.dataframe(
+                                df_it_view[[c for c in cols_v if c in df_it_view.columns]],
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "PDF da Ata": st.column_config.LinkColumn(
+                                        "Ata Oficial (PDF)",
+                                        display_text="📥 Abrir Ata (PDF)"
+                                    ),
+                                    "Qtd Registrada": st.column_config.TextColumn("Qtd Registrada"),
+                                    "Qtd Empenhada": st.column_config.TextColumn("Qtd Empenhada"),
+                                    "Saldo p/ Empenho": st.column_config.TextColumn("Saldo p/ Empenho"),
+                                    "Qtd para Adesão": st.column_config.TextColumn(
+                                        "Qtd Limite Adesão",
+                                        help="Quantidade limite máxima estipulada para adesão (carona)"
+                                    ),
+                                    "Adesões Aprovadas": st.column_config.TextColumn(
+                                        "Adesões Aprovadas",
+                                        help="Quantidade já aprovada em solicitações de adesão"
+                                    ),
+                                    "Saldo para Adesão": st.column_config.TextColumn(
+                                        "Saldo Remanescente Adesão",
+                                        help="Quantidade disponível remanescente para novas adesões de carona"
+                                    ),
+                                    "Aceita Adesão": st.column_config.TextColumn(
+                                        "Aceita Adesão?",
+                                        help="Informa se o item aceita adesão/carona"
+                                    )
+                                }
+                            )
 
                         st.markdown("---")
                         st.markdown("### 📥 Importar Item Selecionado Diretamente para uma Nota de Crédito")
                         
-                        opcoes_import = [f"Item {it['Item']} - {it['Descrição'][:65]}... (Saldo: {it['Saldo p/ Empenho']})" for it in itens_pr]
+                        opcoes_import = [
+                            f"Item {it['Item']} - {it['Descrição'][:50]}... (Saldo UASG: {it.get('Saldo p/ Empenho', '0')} | Saldo Adesão: {it.get('Saldo para Adesão', '0')})" 
+                            for it in itens_pr
+                        ]
                         it_escolhido_str = st.selectbox("Selecione o Item para Puxar para a NC:", opcoes_import, key=f"sel_import_{chave_p}")
                         
                         if it_escolhido_str:
@@ -5781,21 +6020,43 @@ with tab_consulta_pregoes:
                                 pi_dest = banco_dados.get(nc_destino, {}).get("pi", "") if nc_destino in banco_dados else ""
                                 st.caption(f"📌 **Destino Selecionado:** `{nc_destino}` | **ND:** `{nd_dest or 'Não informada'}` | **PI:** `{pi_dest or 'Não informado'}`")
 
+                                # Exibição de saldos comparativos da UASG e de Adesão
+                                c_sal_info1, c_sal_info2 = st.columns(2)
+                                with c_sal_info1:
+                                    st.info(f"🏛️ **Saldo Próprio da UASG:** `{item_alvo.get('Saldo p/ Empenho', '0')}` (Registrada: `{item_alvo.get('Qtd Registrada', '0')}` | Empenhada: `{item_alvo.get('Qtd Empenhada', '0')}`)")
+                                with c_sal_info2:
+                                    st.success(f"🤝 **Saldo Remanescente para Adesão:** `{item_alvo.get('Saldo para Adesão', '0')}` (Limite: `{item_alvo.get('Qtd para Adesão', '0')}` | Aceita: **{item_alvo.get('Aceita Adesão', 'Sim')}**)")
+
+                                if item_alvo.get("adesoes_solicitacoes"):
+                                    with st.expander(f"📋 Ver Solicitações Aprovadas de Adesão deste Item ({len(item_alvo['adesoes_solicitacoes'])} aprovadas - Total: {item_alvo.get('Adesões Aprovadas', '0')})", expanded=False):
+                                        st.dataframe(pd.DataFrame(item_alvo["adesoes_solicitacoes"]), use_container_width=True, hide_index=True)
+
                                 with st.form(f"form_importar_item_{chave_p}_{item_alvo['Item']}_{nc_destino}"):
                                     st.markdown(f"**Item Selecionado:** `{item_alvo['Item']}` - {item_alvo['Descrição']}")
                                     st.markdown(f"• **Fornecedor Identificado:** `{item_alvo['Fornecedor']}`")
                                     st.markdown(f"• **Ata Vinculada:** `{item_alvo['Ata Vinculada']}` | **Pregão:** `{row_p['Nº da Licitação']}`")
 
+                                    tipo_origem_qtd = st.radio(
+                                        "Modalidade de Aquisição:",
+                                        [
+                                            f"Empenho Ordinário da UASG (Saldo Disponível: {item_alvo.get('Saldo p/ Empenho', '0')})",
+                                            f"Adesão à Ata / Carona (Saldo Remanescente: {item_alvo.get('Saldo para Adesão', '0')})"
+                                        ],
+                                        horizontal=True,
+                                        key=f"origem_saldo_{chave_p}_{item_alvo['Item']}"
+                                    )
+                                    is_carona = "Adesão" in tipo_origem_qtd
+                                    saldo_base = int(converter_para_float(item_alvo.get("Saldo para Adesão" if is_carona else "Saldo p/ Empenho", "0")))
+
                                     c_imp1, c_imp2, c_imp3 = st.columns(3)
                                     with c_imp1:
                                         st.text_input("NC de Destino (Confirmada):", value=nc_destino, disabled=True)
                                     with c_imp2:
-                                        saldo_num = int(converter_para_float(item_alvo.get("Saldo p/ Empenho", "0")))
-                                        if saldo_num <= 0:
-                                            st.caption("⚠️ Item com Saldo 0 (Totalmente Empenhado)")
+                                        if saldo_base <= 0:
+                                            st.caption(f"⚠️ Atenção: Saldo {'de adesão' if is_carona else 'da UASG'} zerado.")
                                             qtd_para_importar = st.number_input("Quantidade a Empenhar / Comprar:", min_value=0, value=0, step=1)
                                         else:
-                                            qtd_para_importar = st.number_input("Quantidade a Empenhar / Comprar:", min_value=1, value=saldo_num, step=1)
+                                            qtd_para_importar = st.number_input("Quantidade a Empenhar / Comprar:", min_value=1, value=saldo_base, step=1)
                                     with c_imp3:
                                         v_sug = float(item_alvo.get("Valor Unitario Sugerido", 0.0))
                                         valor_unit_imp = st.number_input("Valor Unitário (R$):", min_value=0.0, value=v_sug, step=0.01)

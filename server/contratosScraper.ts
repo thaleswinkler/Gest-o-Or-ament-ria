@@ -12,6 +12,12 @@ export interface EmpenhoContratos {
   valor?: number;
 }
 
+export interface SolicitacaoAdesaoContratos {
+  unidade: string;
+  data: string;
+  quantidade: number;
+}
+
 export interface ItemContratos {
   itemNum: number;
   numeroItemRaw: string;
@@ -25,6 +31,11 @@ export interface ItemContratos {
   qtdRegistrada: number;
   qtdEmpenhada: number;
   saldoEmpenho: number;
+  qtdLimiteAdesao?: number;
+  saldoAdesao?: number;
+  qtdAprovadaAdesao?: number;
+  aceitaAdesao?: string;
+  solicitacoesAdesao?: SolicitacaoAdesaoContratos[];
   empenhos: EmpenhoContratos[];
 }
 
@@ -375,6 +386,61 @@ export async function scrapeContratosItens(
               }
             });
 
+            // Extração da Aba Adesões (Carona)
+            let qtdLimiteAdesao = 0;
+            let saldoAdesao = 0;
+            let qtdAprovadaAdesao = 0;
+            let aceitaAdesao = 'Não';
+            const solicitacoesAdesao: SolicitacaoAdesaoContratos[] = [];
+
+            const textoCompletoIt = $it.text();
+            const mAc = textoCompletoIt.match(/aceita\s*ades[aã]o\s*:\s*(sim|n[aã]o)/i);
+            if (mAc) {
+              aceitaAdesao = mAc[1].toLowerCase() === 'sim' ? 'Sim' : 'Não';
+            }
+
+            const mLim = textoCompletoIt.match(/(?:qtd\.?\s*limite\s*(?:informado\s*na\s*compra\s*)?(?:para)?\s*ades[aã]o|limite\s*para\s*ades[aã]o|quantidade\s*limite\s*para\s*ades[aã]o)\s*:\s*([\d\.,]+)/i);
+            if (mLim) {
+              qtdLimiteAdesao = parseNumeroBR(mLim[1]);
+            }
+
+            const mDisp = textoCompletoIt.match(/(?:quantidade\s*dispon[ií]vel\s*para\s*ades[aã]o|quantidade\s*disponivel\s*para\s*ades[aã]o|saldo\s*(?:dispon[ií]vel\s*)?(?:para|de)\s*ades[aã]o)\s*:\s*([\d\.,]+)/i);
+            if (mDisp) {
+              saldoAdesao = parseNumeroBR(mDisp[1]);
+            }
+
+            $it('table').each((_, tbl) => {
+              const ths = $it(tbl).find('th').map((_, th) => $it(th).text().trim().toLowerCase()).get();
+              if (ths.some(h => h.includes('quantidade aprovada') || h.includes('aprovação') || h.includes('aprovacao') || h.includes('solicitações aprovadas'))) {
+                $it(tbl).find('tbody > tr, tr').each((_, tr) => {
+                  const tds = $it(tr).find('td');
+                  if (tds.length >= 2) {
+                    const uSol = $it(tds[0]).text().trim();
+                    const dtSol = tds.length >= 3 ? $it(tds[1]).text().trim() : '';
+                    const qSol = parseNumeroBR($it(tds[tds.length - 1]).text().trim());
+                    if (qSol > 0 && uSol && !uSol.toLowerCase().includes('unidade')) {
+                      qtdAprovadaAdesao += qSol;
+                      solicitacoesAdesao.push({
+                        unidade: uSol,
+                        data: dtSol,
+                        quantidade: qSol
+                      });
+                    }
+                  }
+                });
+              }
+            });
+
+            if (qtdLimiteAdesao > 0) {
+              aceitaAdesao = 'Sim';
+              if (saldoAdesao === 0) {
+                saldoAdesao = Math.max(0, qtdLimiteAdesao - qtdAprovadaAdesao);
+              }
+            } else if (saldoAdesao > 0) {
+              aceitaAdesao = 'Sim';
+              qtdLimiteAdesao = saldoAdesao + qtdAprovadaAdesao;
+            }
+
             const todosEmpenhos = Array.from(empenhosMap.values());
             const empenhosUasg = todosEmpenhos.filter(e => (e.unidade || '').toLowerCase().includes((uasgLimpa || '').toLowerCase()));
 
@@ -414,6 +480,11 @@ export async function scrapeContratosItens(
               qtdRegistrada: regFinal,
               qtdEmpenhada: empFinal,
               saldoEmpenho: salFinal,
+              qtdLimiteAdesao,
+              saldoAdesao,
+              qtdAprovadaAdesao,
+              aceitaAdesao,
+              solicitacoesAdesao,
               empenhos: todosEmpenhos
             });
           } catch (eItem) {

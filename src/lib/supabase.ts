@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { Usuario, BancoNCs, ConfigRequisicao } from '../types';
+import { Usuario, BancoNCs, ConfigRequisicao, PerfilUsuario } from '../types';
 
 export const SUPABASE_URL = 'https://oxneqoegehufjksvupji.supabase.co';
 export const SUPABASE_ANON_KEY = 'sb_publishable_norqoENXSTwzga1rD-vU2A_NDIH7KeX';

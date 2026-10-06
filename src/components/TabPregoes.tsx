@@ -50,6 +50,8 @@ export function TabPregoes({
   // Modal / Importação de Item para NC
   const [itemImportando, setItemImportando] = useState<ItemPregao | null>(null);
   const [pregaoOrigem, setPregaoOrigem] = useState<PregaoLicitacao | null>(null);
+  const [modalidadeImportar, setModalidadeImportar] = useState<'adesao' | 'uasg'>('adesao');
+  const [modoAbaPregao, setModoAbaPregao] = useState<Record<string, 'adesao' | 'uasg' | 'todos'>>({});
   const [ncDestino, setNcDestino] = useState('');
   const [qtdImportar, setQtdImportar] = useState(1);
   const [valorUnitario, setValorUnitario] = useState(0);
@@ -128,9 +130,16 @@ export function TabPregoes({
     const primNC = ncsDisponiveis[0] || '';
     setNcDestino(primNC);
 
-    // Converte saldo
-    const saldoNum = Number(String(item['Saldo p/ Empenho'] || '0').replace(/\./g, '').replace(',', '.')) || 0;
-    setQtdImportar(saldoNum > 0 ? Math.max(1, Math.floor(saldoNum)) : 1);
+    // Converte saldos de Adesão e de Empenho da UASG
+    const saldoAdesaoNum = Number(String(item['Saldo para Adesão'] || '0').replace(/\./g, '').replace(',', '.')) || 0;
+    const saldoUasgNum = Number(String(item['Saldo p/ Empenho'] || '0').replace(/\./g, '').replace(',', '.')) || 0;
+    
+    // Se o item aceita adesão e possui saldo de carona, seleciona Adesão por padrão se saldo UASG for zero
+    const modalidadeInicial: 'adesao' | 'uasg' = (saldoAdesaoNum > 0 && saldoUasgNum <= 0) ? 'adesao' : (saldoAdesaoNum > 0 ? 'adesao' : 'uasg');
+    setModalidadeImportar(modalidadeInicial);
+
+    const saldoAlvo = modalidadeInicial === 'adesao' ? saldoAdesaoNum : saldoUasgNum;
+    setQtdImportar(saldoAlvo > 0 ? Math.max(1, Math.floor(saldoAlvo)) : 1);
     
     const vUnit = item['Valor Unitario Sugerido'] || item['Valor Unitário'] || 0;
     setValorUnitario(vUnit);
@@ -364,135 +373,267 @@ export function TabPregoes({
                           Nenhum item localizado ou o pregão não possui atas homologadas no período.
                         </div>
                       ) : (
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-xs text-left">
-                            <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
-                              <tr>
-                                <th className="p-2.5 w-12 text-center">Item</th>
-                                <th className="p-2.5 min-w-[220px]">Descrição do Material / Serviço</th>
-                                <th className="p-2.5 w-14 text-center">Und</th>
-                                <th className="p-2.5 w-24 text-right">Valor Unitário</th>
-                                <th className="p-2.5 w-20 text-right">Qtd Reg.</th>
-                                <th className="p-2.5 w-20 text-right">Qtd Emp.</th>
-                                <th className="p-2.5 w-20 text-right">Saldo</th>
-                                <th className="p-2.5 min-w-[180px]">Fornecedor / Status</th>
-                                <th className="p-2.5 w-36 min-w-[130px] text-center font-bold text-slate-800">Ação / NC</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200/80 bg-white">
-                              {itens.map(item => {
-                                const vUnit = item['Valor Unitario Sugerido'] || item['Valor Unitário'] || 0;
-                                const saldoNum = Number(String(item['Saldo p/ Empenho'] || '0').replace(/\./g, '').replace(',', '.')) || 0;
-                                const isDeserto = item.Deserto || (item.Fornecedor || '').toLowerCase().includes('deserto') || item['Ata Vinculada'] === '-';
+                        <div className="space-y-3">
+                          {/* Botões de Seleção de Aba / Visualização de Saldos */}
+                          {(() => {
+                            const modoAtual = modoAbaPregao[chave] || 'adesao';
+                            const totAdesao = itens.filter(it => (it['Aceita Adesão'] || '').toLowerCase() === 'sim').length;
+                            const somaSaldoAdesao = itens.reduce((acc, it) => acc + (Number(String(it['Saldo para Adesão'] || '0').replace(/\./g, '').replace(',', '.')) || 0), 0);
+                            const somaSaldoUasg = itens.reduce((acc, it) => acc + (Number(String(it['Saldo p/ Empenho'] || '0').replace(/\./g, '').replace(',', '.')) || 0), 0);
 
-                                return (
-                                  <tr
-                                    key={item.Item}
-                                    className={`transition-colors ${isDeserto ? 'bg-slate-50/60 text-slate-500' : 'hover:bg-slate-50/80'}`}
-                                  >
-                                    <td className="p-2.5 font-mono text-center font-bold text-slate-700">
-                                      {item.Item}
-                                    </td>
-                                    <td className="p-2.5 font-medium text-slate-900">
-                                      <div className="line-clamp-2" title={item.Descrição}>
-                                        {item.Descrição}
-                                      </div>
-                                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                        {item['Ata Vinculada'] && item['Ata Vinculada'] !== '-' ? (
-                                          <span className="text-[10px] text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded font-mono font-medium border border-slate-200">
-                                            Ata: {item['Ata Vinculada']}
-                                          </span>
-                                        ) : (
-                                          <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-medium border border-amber-200">
-                                            Sem ata vinculada
-                                          </span>
+                            return (
+                              <>
+                                <div className="flex flex-wrap items-center justify-between gap-2 p-2 bg-slate-100 rounded-lg border border-slate-200">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <button
+                                      type="button"
+                                      onClick={() => setModoAbaPregao(prev => ({ ...prev, [chave]: 'adesao' }))}
+                                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                                        modoAtual === 'adesao'
+                                          ? 'bg-emerald-700 text-white shadow-xs'
+                                          : 'bg-white text-slate-700 hover:bg-slate-200/80 border border-slate-300'
+                                      }`}
+                                    >
+                                      🤝 Aba de Adesões ({totAdesao} aceitam | {somaSaldoAdesao.toLocaleString('pt-BR')} unid.)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setModoAbaPregao(prev => ({ ...prev, [chave]: 'uasg' }))}
+                                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                                        modoAtual === 'uasg'
+                                          ? 'bg-emerald-700 text-white shadow-xs'
+                                          : 'bg-white text-slate-700 hover:bg-slate-200/80 border border-slate-300'
+                                      }`}
+                                    >
+                                      🏛️ Aba da UASG (Saldo: {somaSaldoUasg.toLocaleString('pt-BR')} unid.)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setModoAbaPregao(prev => ({ ...prev, [chave]: 'todos' }))}
+                                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                                        modoAtual === 'todos'
+                                          ? 'bg-emerald-700 text-white shadow-xs'
+                                          : 'bg-white text-slate-700 hover:bg-slate-200/80 border border-slate-300'
+                                      }`}
+                                    >
+                                      📊 Visão Completa
+                                    </button>
+                                  </div>
+
+                                  <span className="text-[11px] text-slate-500 font-medium">
+                                    {modoAtual === 'adesao' && 'Exibindo limites e saldos remanescentes para carona/adesão'}
+                                    {modoAtual === 'uasg' && 'Exibindo quantidades e saldos de empenho próprio da UASG'}
+                                    {modoAtual === 'todos' && 'Exibindo todos os dados unificados'}
+                                  </span>
+                                </div>
+
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-xs text-left">
+                                    <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
+                                      <tr>
+                                        <th className="p-2.5 w-12 text-center">Item</th>
+                                        <th className="p-2.5 min-w-[200px]">Descrição do Material / Serviço</th>
+                                        <th className="p-2.5 w-12 text-center">Und</th>
+                                        <th className="p-2.5 w-24 text-right">Valor Unitário</th>
+
+                                        {/* Colunas da Aba de Adesões */}
+                                        {(modoAtual === 'adesao' || modoAtual === 'todos') && (
+                                          <>
+                                            <th className="p-2.5 w-24 text-right bg-emerald-50/50 text-emerald-900 border-l border-emerald-100" title="Quantidade limite estipulada para adesão (carona)">
+                                              Qtd Adesão
+                                            </th>
+                                            <th className="p-2.5 w-20 text-right bg-emerald-50/50 text-emerald-900" title="Quantidade já aprovada em solicitações de adesão">
+                                              Aprovadas
+                                            </th>
+                                            <th className="p-2.5 w-28 text-right bg-emerald-50/50 text-emerald-900 font-bold" title="Quantidade disponível remanescente para adesões de carona">
+                                              Saldo Adesão
+                                            </th>
+                                            <th className="p-2.5 w-20 text-center bg-emerald-50/50 text-emerald-900">
+                                              Aceita?
+                                            </th>
+                                          </>
                                         )}
-                                        {item['PDF da Ata'] && (
-                                          <a
-                                            href={item['PDF da Ata']}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded transition-colors shadow-2xs"
-                                            title="Baixar PDF da Ata de Registro de Preços deste item"
+
+                                        {/* Colunas da Aba da UASG */}
+                                        {(modoAtual === 'uasg' || modoAtual === 'todos') && (
+                                          <>
+                                            <th className="p-2.5 w-20 text-right bg-blue-50/40 text-blue-900 border-l border-blue-100">
+                                              Qtd Reg.
+                                            </th>
+                                            <th className="p-2.5 w-20 text-right bg-blue-50/40 text-blue-900">
+                                              Qtd Emp.
+                                            </th>
+                                            <th className="p-2.5 w-24 text-right bg-blue-50/40 text-blue-900 font-bold">
+                                              Saldo UASG
+                                            </th>
+                                          </>
+                                        )}
+
+                                        <th className="p-2.5 min-w-[160px]">Fornecedor / Status</th>
+                                        <th className="p-2.5 w-32 min-w-[120px] text-center font-bold text-slate-800">Ação / NC</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-200/80 bg-white">
+                                      {itens.map(item => {
+                                        const vUnit = item['Valor Unitario Sugerido'] || item['Valor Unitário'] || 0;
+                                        const saldoUasgNum = Number(String(item['Saldo p/ Empenho'] || '0').replace(/\./g, '').replace(',', '.')) || 0;
+                                        const saldoAdesaoNum = Number(String(item['Saldo para Adesão'] || '0').replace(/\./g, '').replace(',', '.')) || 0;
+                                        const aceitaAdesao = (item['Aceita Adesão'] || 'Não').trim();
+                                        const isDeserto = item.Deserto || (item.Fornecedor || '').toLowerCase().includes('deserto') || item['Ata Vinculada'] === '-';
+
+                                        return (
+                                          <tr
+                                            key={item.Item}
+                                            className={`transition-colors ${isDeserto ? 'bg-slate-50/60 text-slate-500' : 'hover:bg-slate-50/80'}`}
                                           >
-                                            <FileDown className="w-3 h-3 text-emerald-700" />
-                                            <span>Baixar Ata</span>
-                                          </a>
-                                        )}
-                                        {item['Link Olhinho'] && (
-                                          <a
-                                            href={item['Link Olhinho']}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-1.5 py-0.5 rounded transition-colors"
-                                            title="Abrir página oficial do pregão no Contratos.gov.br (Transparência)"
-                                          >
-                                            <Eye className="w-3 h-3 text-blue-600" />
-                                            <span>Transparência</span>
-                                          </a>
-                                        )}
-                                      </div>
-                                    </td>
-                                    <td className="p-2.5 text-center text-slate-600 font-mono">
-                                      {item.Unidade || 'UN'}
-                                    </td>
-                                    <td className="p-2.5 text-right font-mono font-medium text-slate-900">
-                                      {vUnit > 0 ? formatarMoedaBRL(vUnit) : isDeserto ? '-' : 'R$ 0,00'}
-                                    </td>
-                                    <td className="p-2.5 text-right font-mono text-slate-700">
-                                      {item['Qtd Registrada'] || '0'}
-                                    </td>
-                                    <td className="p-2.5 text-right font-mono text-slate-700">
-                                      {item['Qtd Empenhada'] || '0'}
-                                    </td>
-                                    <td className="p-2.5 text-right font-mono">
-                                      {saldoNum > 0 ? (
-                                        <span className="font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
-                                          {item['Saldo p/ Empenho']}
-                                        </span>
-                                      ) : (
-                                        <span className="text-slate-400">
-                                          {item['Saldo p/ Empenho'] || '0'}
-                                        </span>
-                                      )}
-                                    </td>
-                                    <td className="p-2.5">
-                                      {isDeserto ? (
-                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-900">
-                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-600"></span>
-                                          Deserto / Fracassado
-                                        </span>
-                                      ) : (
-                                        <div className="truncate max-w-[200px]" title={item.Fornecedor}>
-                                          <span className="text-slate-800 font-medium">{item['Fornecedor Puro'] || item.Fornecedor}</span>
-                                          {item['CNPJ Puro'] && (
-                                            <span className="text-[10px] text-slate-400 block font-mono">{item['CNPJ Puro']}</span>
-                                          )}
-                                        </div>
-                                      )}
-                                    </td>
-                                    <td className="p-2.5 text-center">
-                                      {isDeserto ? (
-                                        <span className="inline-flex items-center px-2 py-1 rounded bg-slate-100 text-slate-400 text-[11px] font-medium italic">
-                                          Sem ata
-                                        </span>
-                                      ) : (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleAbrirModalImportar(item, pregao)}
-                                          className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-700 text-white font-semibold text-xs hover:bg-emerald-800 active:scale-95 transition-all shadow-xs w-full cursor-pointer"
-                                          title="Importar este item para uma Nota de Crédito com valor e saldo pré-preenchidos"
-                                        >
-                                          <Plus className="w-3.5 h-3.5 shrink-0" />
-                                          <span>Importar p/ NC</span>
-                                        </button>
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
+                                            <td className="p-2.5 font-mono text-center font-bold text-slate-700">
+                                              {item.Item}
+                                            </td>
+                                            <td className="p-2.5 font-medium text-slate-900">
+                                              <div className="line-clamp-2" title={item.Descrição}>
+                                                {item.Descrição}
+                                              </div>
+                                              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                                {item['Ata Vinculada'] && item['Ata Vinculada'] !== '-' ? (
+                                                  <span className="text-[10px] text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded font-mono font-medium border border-slate-200">
+                                                    Ata: {item['Ata Vinculada']}
+                                                  </span>
+                                                ) : (
+                                                  <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-medium border border-amber-200">
+                                                    Sem ata vinculada
+                                                  </span>
+                                                )}
+                                                {item['PDF da Ata'] && (
+                                                  <a
+                                                    href={item['PDF da Ata']}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded transition-colors shadow-2xs"
+                                                    title="Baixar PDF da Ata de Registro de Preços deste item"
+                                                  >
+                                                    <FileDown className="w-3 h-3 text-emerald-700" />
+                                                    <span>Baixar Ata</span>
+                                                  </a>
+                                                )}
+                                                {item['Link Olhinho'] && (
+                                                  <a
+                                                    href={item['Link Olhinho']}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-1.5 py-0.5 rounded transition-colors"
+                                                    title="Abrir página oficial do pregão no Contratos.gov.br (Transparência)"
+                                                  >
+                                                    <Eye className="w-3 h-3 text-blue-600" />
+                                                    <span>Transparência</span>
+                                                  </a>
+                                                )}
+                                              </div>
+                                            </td>
+                                            <td className="p-2.5 text-center text-slate-600 font-mono">
+                                              {item.Unidade || 'UN'}
+                                            </td>
+                                            <td className="p-2.5 text-right font-mono font-medium text-slate-900">
+                                              {vUnit > 0 ? formatarMoedaBRL(vUnit) : isDeserto ? '-' : 'R$ 0,00'}
+                                            </td>
+
+                                            {/* Células de Adesão */}
+                                            {(modoAtual === 'adesao' || modoAtual === 'todos') && (
+                                              <>
+                                                <td className="p-2.5 text-right font-mono text-slate-700 bg-emerald-50/20 border-l border-emerald-50">
+                                                  {item['Qtd para Adesão'] || '0'}
+                                                </td>
+                                                <td className="p-2.5 text-right font-mono text-slate-600 bg-emerald-50/20">
+                                                  {item['Adesões Aprovadas'] || '0'}
+                                                </td>
+                                                <td className="p-2.5 text-right font-mono bg-emerald-50/30">
+                                                  {saldoAdesaoNum > 0 ? (
+                                                    <span className="font-bold text-emerald-800 bg-emerald-100/80 px-1.5 py-0.5 rounded border border-emerald-200">
+                                                      {item['Saldo para Adesão']}
+                                                    </span>
+                                                  ) : (
+                                                    <span className="text-slate-400">
+                                                      {item['Saldo para Adesão'] || '0'}
+                                                    </span>
+                                                  )}
+                                                </td>
+                                                <td className="p-2.5 text-center bg-emerald-50/20">
+                                                  {aceitaAdesao.toLowerCase() === 'sim' ? (
+                                                    <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                                      ✓ Sim
+                                                    </span>
+                                                  ) : (
+                                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500">
+                                                      Não
+                                                    </span>
+                                                  )}
+                                                </td>
+                                              </>
+                                            )}
+
+                                            {/* Células da UASG */}
+                                            {(modoAtual === 'uasg' || modoAtual === 'todos') && (
+                                              <>
+                                                <td className="p-2.5 text-right font-mono text-slate-700 bg-blue-50/20 border-l border-blue-50">
+                                                  {item['Qtd Registrada'] || '0'}
+                                                </td>
+                                                <td className="p-2.5 text-right font-mono text-slate-700 bg-blue-50/20">
+                                                  {item['Qtd Empenhada'] || '0'}
+                                                </td>
+                                                <td className="p-2.5 text-right font-mono bg-blue-50/30">
+                                                  {saldoUasgNum > 0 ? (
+                                                    <span className="font-bold text-blue-800 bg-blue-100/80 px-1.5 py-0.5 rounded border border-blue-200">
+                                                      {item['Saldo p/ Empenho']}
+                                                    </span>
+                                                  ) : (
+                                                    <span className="text-slate-400">
+                                                      {item['Saldo p/ Empenho'] || '0'}
+                                                    </span>
+                                                  )}
+                                                </td>
+                                              </>
+                                            )}
+
+                                            <td className="p-2.5">
+                                              {isDeserto ? (
+                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-900">
+                                                  <span className="w-1.5 h-1.5 rounded-full bg-amber-600"></span>
+                                                  Deserto / Fracassado
+                                                </span>
+                                              ) : (
+                                                <div className="truncate max-w-[180px]" title={item.Fornecedor}>
+                                                  <span className="text-slate-800 font-medium">{item['Fornecedor Puro'] || item.Fornecedor}</span>
+                                                  {item['CNPJ Puro'] && (
+                                                    <span className="text-[10px] text-slate-400 block font-mono">{item['CNPJ Puro']}</span>
+                                                  )}
+                                                </div>
+                                              )}
+                                            </td>
+                                            <td className="p-2.5 text-center">
+                                              {isDeserto ? (
+                                                <span className="inline-flex items-center px-2 py-1 rounded bg-slate-100 text-slate-400 text-[11px] font-medium italic">
+                                                  Sem ata
+                                                </span>
+                                              ) : (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleAbrirModalImportar(item, pregao)}
+                                                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-700 text-white font-semibold text-xs hover:bg-emerald-800 active:scale-95 transition-all shadow-xs w-full cursor-pointer"
+                                                  title="Importar este item para uma Nota de Crédito com valor e saldo pré-preenchidos"
+                                                >
+                                                  <Plus className="w-3.5 h-3.5 shrink-0" />
+                                                  <span>Importar p/ NC</span>
+                                                </button>
+                                              )}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>
@@ -521,7 +662,7 @@ export function TabPregoes({
               </button>
             </div>
 
-            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2 text-xs">
+            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-3 text-xs">
               <div className="font-bold text-slate-900 flex items-center justify-between">
                 <span>Item #{itemImportando.Item} — Pregão {pregaoOrigem.numero_licitacao} (UASG {pregaoOrigem.uasg})</span>
                 {itemImportando['Ata Vinculada'] && itemImportando['Ata Vinculada'] !== '-' && (
@@ -531,27 +672,131 @@ export function TabPregoes({
               <div className="text-slate-700 font-medium">
                 {itemImportando.Descrição}
               </div>
-              <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200/80 text-[11px]">
-                <div className="bg-white p-2 rounded-lg border border-slate-100">
-                  <span className="text-slate-500 block">Qtd Registrada:</span>
-                  <strong className="font-mono text-slate-800 text-xs">{itemImportando['Qtd Registrada'] || '0'} {itemImportando.Unidade || 'UN'}</strong>
+
+              {/* Comparativo de Saldos: Aba de Adesões vs Aba da UASG */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200/80 text-[11px]">
+                {/* Card Aba de Adesões */}
+                <div className="bg-emerald-50/70 p-2.5 rounded-lg border border-emerald-200 space-y-1">
+                  <div className="flex items-center justify-between font-bold text-emerald-900 text-xs">
+                    <span>🤝 Aba de Adesões (Carona)</span>
+                    <span className="px-1.5 py-0.2 rounded text-[10px] bg-emerald-200/70 text-emerald-800">
+                      Aceita: {itemImportando['Aceita Adesão'] || 'Sim'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 pt-1 text-[10px]">
+                    <div>
+                      <span className="text-emerald-700 block">Limite:</span>
+                      <strong className="font-mono text-emerald-950">{itemImportando['Qtd para Adesão'] || '0'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-emerald-700 block">Aprovada:</span>
+                      <strong className="font-mono text-emerald-950">{itemImportando['Adesões Aprovadas'] || '0'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-emerald-800 font-bold block">Saldo Rem.:</span>
+                      <strong className="font-mono text-emerald-900 font-extrabold text-xs">{itemImportando['Saldo para Adesão'] || '0'}</strong>
+                    </div>
+                  </div>
                 </div>
-                <div className="bg-white p-2 rounded-lg border border-slate-100">
-                  <span className="text-slate-500 block">Qtd Empenhada:</span>
-                  <strong className="font-mono text-slate-800 text-xs">{itemImportando['Qtd Empenhada'] || '0'} {itemImportando.Unidade || 'UN'}</strong>
-                </div>
-                <div className="bg-emerald-50/60 p-2 rounded-lg border border-emerald-100">
-                  <span className="text-emerald-700 block font-semibold">Saldo Disponível:</span>
-                  <strong className="font-mono text-emerald-800 text-xs font-bold">{itemImportando['Saldo p/ Empenho'] || '0'} {itemImportando.Unidade || 'UN'}</strong>
+
+                {/* Card Aba da UASG */}
+                <div className="bg-blue-50/70 p-2.5 rounded-lg border border-blue-200 space-y-1">
+                  <div className="flex items-center justify-between font-bold text-blue-900 text-xs">
+                    <span>🏛️ Aba da UASG (Empenho)</span>
+                    <span className="px-1.5 py-0.2 rounded text-[10px] bg-blue-200/70 text-blue-800 font-mono">
+                      UASG {pregaoOrigem.uasg}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 pt-1 text-[10px]">
+                    <div>
+                      <span className="text-blue-700 block">Registrada:</span>
+                      <strong className="font-mono text-blue-950">{itemImportando['Qtd Registrada'] || '0'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-blue-700 block">Empenhada:</span>
+                      <strong className="font-mono text-blue-950">{itemImportando['Qtd Empenhada'] || '0'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-blue-800 font-bold block">Saldo UASG:</span>
+                      <strong className="font-mono text-blue-900 font-extrabold text-xs">{itemImportando['Saldo p/ Empenho'] || '0'}</strong>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div className="text-[11px] text-slate-600 pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+
+              {/* Solicitações de Adesão Aprovadas (se houver) */}
+              {itemImportando.adesoes_solicitacoes && itemImportando.adesoes_solicitacoes.length > 0 && (
+                <div className="p-2 bg-white rounded border border-slate-200 text-[10px] text-slate-600">
+                  <span className="font-bold text-slate-700 block mb-1">
+                    📋 Solicitações de Adesão Aprovadas ({itemImportando.adesoes_solicitacoes.length}):
+                  </span>
+                  <div className="max-h-20 overflow-y-auto space-y-0.5">
+                    {itemImportando.adesoes_solicitacoes.map((s, idx) => (
+                      <div key={idx} className="flex items-center justify-between font-mono text-[10px]">
+                        <span>• {s.unidade} {s.data ? `(${s.data})` : ''}</span>
+                        <strong className="text-emerald-800">Qtd: {s.quantidade}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="text-[11px] text-slate-600 pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-t border-slate-200/60">
                 <span>Fornecedor: <strong className="text-slate-900">{itemImportando['Fornecedor Puro'] || itemImportando.Fornecedor}</strong></span>
                 <span>Valor Unitário da Ata: <strong className="text-emerald-800 font-mono text-xs">{formatarMoedaBRL(itemImportando['Valor Unitario Sugerido'] || itemImportando['Valor Unitário'] || 0)}</strong></span>
               </div>
             </div>
 
             <div className="space-y-3 text-xs">
+              {/* Escolha da Modalidade: Adesão ou Empenho Ordinário */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Modalidade de Aquisição:
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalidadeImportar('adesao');
+                      const sAd = Number(String(itemImportando['Saldo para Adesão'] || '0').replace(/\./g, '').replace(',', '.')) || 0;
+                      setQtdImportar(sAd > 0 ? Math.max(1, Math.floor(sAd)) : 1);
+                    }}
+                    className={`p-2 rounded-lg border text-left transition-all ${
+                      modalidadeImportar === 'adesao'
+                        ? 'border-emerald-600 bg-emerald-50/80 text-emerald-900 ring-1 ring-emerald-500 font-semibold'
+                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="font-bold flex items-center gap-1">
+                      <span>🤝 Adesão à Ata (Carona)</span>
+                    </div>
+                    <div className="text-[11px] font-mono text-emerald-700 mt-0.5">
+                      Saldo Rem.: {itemImportando['Saldo para Adesão'] || '0'}
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalidadeImportar('uasg');
+                      const sU = Number(String(itemImportando['Saldo p/ Empenho'] || '0').replace(/\./g, '').replace(',', '.')) || 0;
+                      setQtdImportar(sU > 0 ? Math.max(1, Math.floor(sU)) : 1);
+                    }}
+                    className={`p-2 rounded-lg border text-left transition-all ${
+                      modalidadeImportar === 'uasg'
+                        ? 'border-blue-600 bg-blue-50/80 text-blue-900 ring-1 ring-blue-500 font-semibold'
+                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="font-bold flex items-center gap-1">
+                      <span>🏛️ Empenho Próprio UASG</span>
+                    </div>
+                    <div className="text-[11px] font-mono text-blue-700 mt-0.5">
+                      Saldo UASG: {itemImportando['Saldo p/ Empenho'] || '0'}
+                    </div>
+                  </button>
+                </div>
+              </div>
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
                   Nota de Crédito (NC) de Destino:
