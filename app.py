@@ -3380,6 +3380,7 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
                     "Fornecedor": fornecedor_display,
                     "Fornecedor Puro": saldo_info.get("fornecedor_puro", ""),
                     "CNPJ Puro": saldo_info.get("cnpj_puro", ""),
+                    "Valor Unitário": saldo_info.get("valor_unitario_sugerido", 0.0),
                     "Valor Unitario Sugerido": saldo_info.get("valor_unitario_sugerido", 0.0),
                     "PDF da Ata": pdf_ata,
                     "Empenhos": saldo_info.get("empenhos_resumo", "Nenhum"),
@@ -3405,6 +3406,7 @@ def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> 
                     "Fornecedor": "Em apuração",
                     "Fornecedor Puro": "",
                     "CNPJ Puro": "",
+                    "Valor Unitário": 0.0,
                     "Valor Unitario Sugerido": 0.0,
                     "PDF da Ata": "",
                     "Empenhos": "Nenhum",
@@ -5873,10 +5875,16 @@ with tab_consulta_pregoes:
                         with c_met4:
                             st.metric("Aceitam Adesão", f"{tot_aceita_ad} de {tot_it}", help="Itens que aceitam adesão (carona)")
 
+                        # Garantir que Valor Unitário esteja presente mesmo para itens já em cache
+                        for it in itens_pr:
+                            if "Valor Unitário" not in it or it["Valor Unitário"] is None or it["Valor Unitário"] == 0:
+                                v_sug = it.get("Valor Unitario Sugerido", 0.0)
+                                it["Valor Unitário"] = float(v_sug) if isinstance(v_sug, (int, float)) else converter_para_float(v_sug)
+
                         df_it_view = pd.DataFrame(itens_pr)
 
                         cols_v = [
-                            "Item", "Descrição", "Unidade", 
+                            "Item", "Descrição", "Unidade", "Valor Unitário",
                             "Qtd Registrada", "Qtd Empenhada", "Saldo p/ Empenho", 
                             "Qtd para Adesão", "Saldo para Adesão", "Aceita Adesão",
                             "Ata Vinculada", "Fornecedor", "PDF da Ata"
@@ -5889,6 +5897,11 @@ with tab_consulta_pregoes:
                                 "Item": st.column_config.TextColumn("Item", width="small"),
                                 "Descrição": st.column_config.TextColumn("Descrição"),
                                 "Unidade": st.column_config.TextColumn("Und", width="small"),
+                                "Valor Unitário": st.column_config.NumberColumn(
+                                    "Valor Unitário",
+                                    help="Valor unitário homologado registrado na ata",
+                                    format="R$ %.2f"
+                                ),
                                 "Qtd Registrada": st.column_config.TextColumn(
                                     "🏛️ 1. Qtd UASG",
                                     help="Quantidade registrada/homologada para a UASG gerenciadora/participante"
