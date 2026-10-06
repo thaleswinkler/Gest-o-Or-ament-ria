@@ -5867,130 +5867,64 @@ with tab_consulta_pregoes:
                         with c_met1:
                             st.metric("Total de Itens", f"{tot_it}", help="Total de itens apurados no pregão")
                         with c_met2:
-                            st.metric("Aceitam Adesão", f"{tot_aceita_ad} de {tot_it}", help="Itens que aceitam adesão (carona)")
+                            st.metric("🏛️ Saldo p/ Empenho UASG", f"{tot_saldo_uasg:,.0f} unid.", help="Total de saldo disponível para a UASG")
                         with c_met3:
-                            st.metric("Saldo Remanescente Adesão", f"{tot_saldo_ad:,.0f} unid.", help="Total remanescente para novas adesões de carona")
+                            st.metric("🤝 Saldo Remanescente Adesão", f"{tot_saldo_ad:,.0f} unid.", help="Total remanescente para novas adesões de carona")
                         with c_met4:
-                            st.metric("Saldo p/ Empenho UASG", f"{tot_saldo_uasg:,.0f} unid.", help="Total de saldo disponível para a UASG")
+                            st.metric("Aceitam Adesão", f"{tot_aceita_ad} de {tot_it}", help="Itens que aceitam adesão (carona)")
 
                         df_it_view = pd.DataFrame(itens_pr)
 
-                        aba_vis_adesao, aba_vis_uasg, aba_vis_completa = st.tabs([
-                            "🤝 Aba de Adesões (Qtd Limite e Saldo Remanescente)",
-                            "🏛️ Aba da UASG (Qtd Registrada e Saldo p/ Empenho)",
-                            "📊 Visão Completa (Todos os Saldos)"
-                        ])
-
-                        with aba_vis_adesao:
-                            st.caption("Visualização extraída da **Aba de Adesões da Ata**: Quantidade Limite Estipulada para Adesão, Adesões Aprovadas e Saldo Remanescente Disponível para Carona.")
-                            cols_ad = [
-                                "Item", "Descrição", "Unidade", 
-                                "Qtd para Adesão", "Adesões Aprovadas", "Saldo para Adesão", "Aceita Adesão",
-                                "Ata Vinculada", "Fornecedor", "PDF da Ata"
-                            ]
-                            st.dataframe(
-                                df_it_view[[c for c in cols_ad if c in df_it_view.columns]],
-                                use_container_width=True,
-                                hide_index=True,
-                                column_config={
-                                    "PDF da Ata": st.column_config.LinkColumn(
-                                        "Ata Oficial (PDF)",
-                                        display_text="📥 Abrir Ata (PDF)"
-                                    ),
-                                    "Qtd para Adesão": st.column_config.TextColumn(
-                                        "Qtd Limite Adesão",
-                                        help="Quantidade limite máxima estipulada para adesão (carona)"
-                                    ),
-                                    "Adesões Aprovadas": st.column_config.TextColumn(
-                                        "Adesões Aprovadas",
-                                        help="Quantidade já aprovada em solicitações de adesão"
-                                    ),
-                                    "Saldo para Adesão": st.column_config.TextColumn(
-                                        "Saldo Remanescente Adesão",
-                                        help="Quantidade disponível remanescente para novas adesões de carona"
-                                    ),
-                                    "Aceita Adesão": st.column_config.TextColumn(
-                                        "Aceita Adesão?",
-                                        help="Informa se o item aceita adesão/carona"
-                                    )
-                                }
-                            )
-
-                        with aba_vis_uasg:
-                            st.caption("Visualização extraída da **Aba da UASG Gerenciadora/Participantes**: Quantidade Registrada/Homologada, Empenhada e Saldo Próprio da UASG.")
-                            cols_u = [
-                                "Item", "Descrição", "Unidade", 
-                                "Qtd Registrada", "Qtd Empenhada", "Saldo p/ Empenho", 
-                                "Ata Vinculada", "Fornecedor", "PDF da Ata"
-                            ]
-                            st.dataframe(
-                                df_it_view[[c for c in cols_u if c in df_it_view.columns]],
-                                use_container_width=True,
-                                hide_index=True,
-                                column_config={
-                                    "PDF da Ata": st.column_config.LinkColumn(
-                                        "Ata Oficial (PDF)",
-                                        display_text="📥 Abrir Ata (PDF)"
-                                    ),
-                                    "Qtd Registrada": st.column_config.TextColumn(
-                                        "Qtd Registrada",
-                                        help="Quantidade total registrada/homologada para a UASG"
-                                    ),
-                                    "Qtd Empenhada": st.column_config.TextColumn(
-                                        "Qtd Empenhada",
-                                        help="Quantidade já empenhada pela UASG"
-                                    ),
-                                    "Saldo p/ Empenho": st.column_config.TextColumn(
-                                        "Saldo p/ Empenho",
-                                        help="Saldo disponível para empenho pela UASG"
-                                    )
-                                }
-                            )
-
-                        with aba_vis_completa:
-                            st.caption("Tabela unificada com todos os dados: saldos da UASG e saldos da aba de adesões.")
-                            cols_v = [
-                                "Item", "Descrição", "Unidade", 
-                                "Qtd Registrada", "Qtd Empenhada", "Saldo p/ Empenho", 
-                                "Qtd para Adesão", "Adesões Aprovadas", "Saldo para Adesão", "Aceita Adesão",
-                                "Ata Vinculada", "Fornecedor", "PDF da Ata"
-                            ]
-                            st.dataframe(
-                                df_it_view[[c for c in cols_v if c in df_it_view.columns]],
-                                use_container_width=True,
-                                hide_index=True,
-                                column_config={
-                                    "PDF da Ata": st.column_config.LinkColumn(
-                                        "Ata Oficial (PDF)",
-                                        display_text="📥 Abrir Ata (PDF)"
-                                    ),
-                                    "Qtd Registrada": st.column_config.TextColumn("Qtd Registrada"),
-                                    "Qtd Empenhada": st.column_config.TextColumn("Qtd Empenhada"),
-                                    "Saldo p/ Empenho": st.column_config.TextColumn("Saldo p/ Empenho"),
-                                    "Qtd para Adesão": st.column_config.TextColumn(
-                                        "Qtd Limite Adesão",
-                                        help="Quantidade limite máxima estipulada para adesão (carona)"
-                                    ),
-                                    "Adesões Aprovadas": st.column_config.TextColumn(
-                                        "Adesões Aprovadas",
-                                        help="Quantidade já aprovada em solicitações de adesão"
-                                    ),
-                                    "Saldo para Adesão": st.column_config.TextColumn(
-                                        "Saldo Remanescente Adesão",
-                                        help="Quantidade disponível remanescente para novas adesões de carona"
-                                    ),
-                                    "Aceita Adesão": st.column_config.TextColumn(
-                                        "Aceita Adesão?",
-                                        help="Informa se o item aceita adesão/carona"
-                                    )
-                                }
-                            )
+                        cols_v = [
+                            "Item", "Descrição", "Unidade", 
+                            "Qtd Registrada", "Qtd Empenhada", "Saldo p/ Empenho", 
+                            "Qtd para Adesão", "Saldo para Adesão", "Aceita Adesão",
+                            "Ata Vinculada", "Fornecedor", "PDF da Ata"
+                        ]
+                        st.dataframe(
+                            df_it_view[[c for c in cols_v if c in df_it_view.columns]],
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Item": st.column_config.TextColumn("Item", width="small"),
+                                "Descrição": st.column_config.TextColumn("Descrição"),
+                                "Unidade": st.column_config.TextColumn("Und", width="small"),
+                                "Qtd Registrada": st.column_config.TextColumn(
+                                    "🏛️ 1. Qtd UASG",
+                                    help="Quantidade registrada/homologada para a UASG gerenciadora/participante"
+                                ),
+                                "Qtd Empenhada": st.column_config.TextColumn(
+                                    "Qtd Emp. UASG",
+                                    help="Quantidade já empenhada pela UASG"
+                                ),
+                                "Saldo p/ Empenho": st.column_config.TextColumn(
+                                    "Saldo UASG",
+                                    help="Saldo próprio disponível para empenho pela UASG"
+                                ),
+                                "Qtd para Adesão": st.column_config.TextColumn(
+                                    "🤝 2. Qtd Adesão",
+                                    help="Quantidade limite estipulada para adesão (carona na ata)"
+                                ),
+                                "Saldo para Adesão": st.column_config.TextColumn(
+                                    "Saldo Rem. Adesão",
+                                    help="Quantidade disponível remanescente para novas adesões de carona"
+                                ),
+                                "Aceita Adesão": st.column_config.TextColumn(
+                                    "Aceita?",
+                                    help="Informa se o item aceita adesão/carona"
+                                ),
+                                "PDF da Ata": st.column_config.LinkColumn(
+                                    "Ata Oficial (PDF)",
+                                    display_text="📥 Abrir Ata (PDF)"
+                                )
+                            }
+                        )
 
                         st.markdown("---")
                         st.markdown("### 📥 Importar Item Selecionado Diretamente para uma Nota de Crédito")
                         
                         opcoes_import = [
-                            f"Item {it['Item']} - {it['Descrição'][:50]}... (Saldo UASG: {it.get('Saldo p/ Empenho', '0')} | Saldo Adesão: {it.get('Saldo para Adesão', '0')})" 
+                            f"Item {it['Item']} - {it['Descrição'][:45]}... (Qtd UASG: {it.get('Qtd Registrada', '0')} | Saldo UASG: {it.get('Saldo p/ Empenho', '0')} | Qtd Adesão: {it.get('Qtd para Adesão', '0')} | Saldo Rem. Adesão: {it.get('Saldo para Adesão', '0')})" 
                             for it in itens_pr
                         ]
                         it_escolhido_str = st.selectbox("Selecione o Item para Puxar para a NC:", opcoes_import, key=f"sel_import_{chave_p}")

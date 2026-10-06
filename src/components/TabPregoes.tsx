@@ -376,7 +376,7 @@ export function TabPregoes({
                         <div className="space-y-3">
                           {/* Botões de Seleção de Aba / Visualização de Saldos */}
                           {(() => {
-                            const modoAtual = modoAbaPregao[chave] || 'adesao';
+                            const modoAtual = modoAbaPregao[chave] || 'todos';
                             const totAdesao = itens.filter(it => (it['Aceita Adesão'] || '').toLowerCase() === 'sim').length;
                             const somaSaldoAdesao = itens.reduce((acc, it) => acc + (Number(String(it['Saldo para Adesão'] || '0').replace(/\./g, '').replace(',', '.')) || 0), 0);
                             const somaSaldoUasg = itens.reduce((acc, it) => acc + (Number(String(it['Saldo p/ Empenho'] || '0').replace(/\./g, '').replace(',', '.')) || 0), 0);
@@ -387,28 +387,6 @@ export function TabPregoes({
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <button
                                       type="button"
-                                      onClick={() => setModoAbaPregao(prev => ({ ...prev, [chave]: 'adesao' }))}
-                                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                                        modoAtual === 'adesao'
-                                          ? 'bg-emerald-700 text-white shadow-xs'
-                                          : 'bg-white text-slate-700 hover:bg-slate-200/80 border border-slate-300'
-                                      }`}
-                                    >
-                                      🤝 Aba de Adesões ({totAdesao} aceitam | {somaSaldoAdesao.toLocaleString('pt-BR')} unid.)
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setModoAbaPregao(prev => ({ ...prev, [chave]: 'uasg' }))}
-                                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                                        modoAtual === 'uasg'
-                                          ? 'bg-emerald-700 text-white shadow-xs'
-                                          : 'bg-white text-slate-700 hover:bg-slate-200/80 border border-slate-300'
-                                      }`}
-                                    >
-                                      🏛️ Aba da UASG (Saldo: {somaSaldoUasg.toLocaleString('pt-BR')} unid.)
-                                    </button>
-                                    <button
-                                      type="button"
                                       onClick={() => setModoAbaPregao(prev => ({ ...prev, [chave]: 'todos' }))}
                                       className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
                                         modoAtual === 'todos'
@@ -416,15 +394,40 @@ export function TabPregoes({
                                           : 'bg-white text-slate-700 hover:bg-slate-200/80 border border-slate-300'
                                       }`}
                                     >
-                                      📊 Visão Completa
+                                      📊 Visão Completa (UASG + Adesões)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setModoAbaPregao(prev => ({ ...prev, [chave]: 'uasg' }))}
+                                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                                        modoAtual === 'uasg'
+                                          ? 'bg-blue-700 text-white shadow-xs'
+                                          : 'bg-white text-slate-700 hover:bg-slate-200/80 border border-slate-300'
+                                      }`}
+                                    >
+                                      🏛️ Somente UASG (Saldo: {somaSaldoUasg.toLocaleString('pt-BR')} unid.)
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setModoAbaPregao(prev => ({ ...prev, [chave]: 'adesao' }))}
+                                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                                        modoAtual === 'adesao'
+                                          ? 'bg-emerald-700 text-white shadow-xs'
+                                          : 'bg-white text-slate-700 hover:bg-slate-200/80 border border-slate-300'
+                                      }`}
+                                    >
+                                      🤝 Foco Adesões (Saldo Rem.: {somaSaldoAdesao.toLocaleString('pt-BR')} unid.)
                                     </button>
                                   </div>
 
-                                  <span className="text-[11px] text-slate-500 font-medium">
-                                    {modoAtual === 'adesao' && 'Exibindo limites e saldos remanescentes para carona/adesão'}
-                                    {modoAtual === 'uasg' && 'Exibindo quantidades e saldos de empenho próprio da UASG'}
-                                    {modoAtual === 'todos' && 'Exibindo todos os dados unificados'}
-                                  </span>
+                                  <div className="flex items-center gap-2 text-[11px] font-medium">
+                                    <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-200">
+                                      🏛️ Saldo UASG: <strong>{somaSaldoUasg.toLocaleString('pt-BR')}</strong>
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      🤝 Saldo Rem. Adesão: <strong>{somaSaldoAdesao.toLocaleString('pt-BR')}</strong>
+                                    </span>
+                                  </div>
                                 </div>
 
                                 <div className="overflow-x-auto">
@@ -436,35 +439,34 @@ export function TabPregoes({
                                         <th className="p-2.5 w-12 text-center">Und</th>
                                         <th className="p-2.5 w-24 text-right">Valor Unitário</th>
 
-                                        {/* Colunas da Aba de Adesões */}
-                                        {(modoAtual === 'adesao' || modoAtual === 'todos') && (
+                                        {/* 1. Colunas da UASG (SEMPRE PRIMEIRO) */}
+                                        {(modoAtual === 'uasg' || modoAtual === 'todos' || modoAtual === 'adesao') && (
                                           <>
-                                            <th className="p-2.5 w-24 text-right bg-emerald-50/50 text-emerald-900 border-l border-emerald-100" title="Quantidade limite estipulada para adesão (carona)">
-                                              Qtd Adesão
+                                            <th className="p-2.5 w-20 text-right bg-blue-50/70 text-blue-900 border-l border-blue-200" title="Quantidade registrada/homologada da UASG gerenciadora/participante">
+                                              Qtd UASG
                                             </th>
-                                            <th className="p-2.5 w-20 text-right bg-emerald-50/50 text-emerald-900" title="Quantidade já aprovada em solicitações de adesão">
-                                              Aprovadas
-                                            </th>
-                                            <th className="p-2.5 w-28 text-right bg-emerald-50/50 text-emerald-900 font-bold" title="Quantidade disponível remanescente para adesões de carona">
-                                              Saldo Adesão
-                                            </th>
-                                            <th className="p-2.5 w-20 text-center bg-emerald-50/50 text-emerald-900">
-                                              Aceita?
+                                            {modoAtual !== 'adesao' && (
+                                              <th className="p-2.5 w-20 text-right bg-blue-50/70 text-blue-900" title="Quantidade já empenhada pela UASG">
+                                                Qtd Emp.
+                                              </th>
+                                            )}
+                                            <th className="p-2.5 w-24 text-right bg-blue-100/70 text-blue-950 font-bold" title="Saldo próprio disponível para empenho da UASG">
+                                              Saldo UASG
                                             </th>
                                           </>
                                         )}
 
-                                        {/* Colunas da Aba da UASG */}
-                                        {(modoAtual === 'uasg' || modoAtual === 'todos') && (
+                                        {/* 2. Colunas de Adesão (EM OUTRA COLUNA / AO LADO) */}
+                                        {(modoAtual === 'adesao' || modoAtual === 'todos') && (
                                           <>
-                                            <th className="p-2.5 w-20 text-right bg-blue-50/40 text-blue-900 border-l border-blue-100">
-                                              Qtd Reg.
+                                            <th className="p-2.5 w-24 text-right bg-emerald-50/70 text-emerald-900 border-l border-emerald-200" title="Quantidade limite estipulada para adesão (carona na ata)">
+                                              Qtd Adesão
                                             </th>
-                                            <th className="p-2.5 w-20 text-right bg-blue-50/40 text-blue-900">
-                                              Qtd Emp.
+                                            <th className="p-2.5 w-28 text-right bg-emerald-100/70 text-emerald-950 font-bold" title="Quantidade disponível remanescente para novas adesões de carona">
+                                              Saldo Remanescente
                                             </th>
-                                            <th className="p-2.5 w-24 text-right bg-blue-50/40 text-blue-900 font-bold">
-                                              Saldo UASG
+                                            <th className="p-2.5 w-16 text-center bg-emerald-50/70 text-emerald-900" title="Informa se o item aceita carona">
+                                              Aceita?
                                             </th>
                                           </>
                                         )}
@@ -536,18 +538,40 @@ export function TabPregoes({
                                               {vUnit > 0 ? formatarMoedaBRL(vUnit) : isDeserto ? '-' : 'R$ 0,00'}
                                             </td>
 
-                                            {/* Células de Adesão */}
+                                            {/* 1. Células da UASG (PRIMEIRO) */}
+                                            {(modoAtual === 'uasg' || modoAtual === 'todos' || modoAtual === 'adesao') && (
+                                              <>
+                                                <td className="p-2.5 text-right font-mono font-semibold text-blue-950 bg-blue-50/30 border-l border-blue-100">
+                                                  {item['Qtd Registrada'] || '0'}
+                                                </td>
+                                                {modoAtual !== 'adesao' && (
+                                                  <td className="p-2.5 text-right font-mono text-slate-700 bg-blue-50/20">
+                                                    {item['Qtd Empenhada'] || '0'}
+                                                  </td>
+                                                )}
+                                                <td className="p-2.5 text-right font-mono bg-blue-50/40">
+                                                  {saldoUasgNum > 0 ? (
+                                                    <span className="font-bold text-blue-900 bg-blue-100/90 px-2 py-0.5 rounded border border-blue-200 shadow-2xs">
+                                                      {item['Saldo p/ Empenho']}
+                                                    </span>
+                                                  ) : (
+                                                    <span className="text-slate-400">
+                                                      {item['Saldo p/ Empenho'] || '0'}
+                                                    </span>
+                                                  )}
+                                                </td>
+                                              </>
+                                            )}
+
+                                            {/* 2. Células de Adesão (EM OUTRA COLUNA / AO LADO) */}
                                             {(modoAtual === 'adesao' || modoAtual === 'todos') && (
                                               <>
-                                                <td className="p-2.5 text-right font-mono text-slate-700 bg-emerald-50/20 border-l border-emerald-50">
+                                                <td className="p-2.5 text-right font-mono font-semibold text-emerald-950 bg-emerald-50/30 border-l border-emerald-100">
                                                   {item['Qtd para Adesão'] || '0'}
                                                 </td>
-                                                <td className="p-2.5 text-right font-mono text-slate-600 bg-emerald-50/20">
-                                                  {item['Adesões Aprovadas'] || '0'}
-                                                </td>
-                                                <td className="p-2.5 text-right font-mono bg-emerald-50/30">
+                                                <td className="p-2.5 text-right font-mono bg-emerald-50/40">
                                                   {saldoAdesaoNum > 0 ? (
-                                                    <span className="font-bold text-emerald-800 bg-emerald-100/80 px-1.5 py-0.5 rounded border border-emerald-200">
+                                                    <span className="font-bold text-emerald-900 bg-emerald-100/90 px-2 py-0.5 rounded border border-emerald-200 shadow-2xs">
                                                       {item['Saldo para Adesão']}
                                                     </span>
                                                   ) : (
@@ -564,29 +588,6 @@ export function TabPregoes({
                                                   ) : (
                                                     <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500">
                                                       Não
-                                                    </span>
-                                                  )}
-                                                </td>
-                                              </>
-                                            )}
-
-                                            {/* Células da UASG */}
-                                            {(modoAtual === 'uasg' || modoAtual === 'todos') && (
-                                              <>
-                                                <td className="p-2.5 text-right font-mono text-slate-700 bg-blue-50/20 border-l border-blue-50">
-                                                  {item['Qtd Registrada'] || '0'}
-                                                </td>
-                                                <td className="p-2.5 text-right font-mono text-slate-700 bg-blue-50/20">
-                                                  {item['Qtd Empenhada'] || '0'}
-                                                </td>
-                                                <td className="p-2.5 text-right font-mono bg-blue-50/30">
-                                                  {saldoUasgNum > 0 ? (
-                                                    <span className="font-bold text-blue-800 bg-blue-100/80 px-1.5 py-0.5 rounded border border-blue-200">
-                                                      {item['Saldo p/ Empenho']}
-                                                    </span>
-                                                  ) : (
-                                                    <span className="text-slate-400">
-                                                      {item['Saldo p/ Empenho'] || '0'}
                                                     </span>
                                                   )}
                                                 </td>
@@ -673,43 +674,19 @@ export function TabPregoes({
                 {itemImportando.Descrição}
               </div>
 
-              {/* Comparativo de Saldos: Aba de Adesões vs Aba da UASG */}
+              {/* Comparativo de Saldos: Aba da UASG vs Aba de Adesões */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200/80 text-[11px]">
-                {/* Card Aba de Adesões */}
-                <div className="bg-emerald-50/70 p-2.5 rounded-lg border border-emerald-200 space-y-1">
-                  <div className="flex items-center justify-between font-bold text-emerald-900 text-xs">
-                    <span>🤝 Aba de Adesões (Carona)</span>
-                    <span className="px-1.5 py-0.2 rounded text-[10px] bg-emerald-200/70 text-emerald-800">
-                      Aceita: {itemImportando['Aceita Adesão'] || 'Sim'}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-1 pt-1 text-[10px]">
-                    <div>
-                      <span className="text-emerald-700 block">Limite:</span>
-                      <strong className="font-mono text-emerald-950">{itemImportando['Qtd para Adesão'] || '0'}</strong>
-                    </div>
-                    <div>
-                      <span className="text-emerald-700 block">Aprovada:</span>
-                      <strong className="font-mono text-emerald-950">{itemImportando['Adesões Aprovadas'] || '0'}</strong>
-                    </div>
-                    <div>
-                      <span className="text-emerald-800 font-bold block">Saldo Rem.:</span>
-                      <strong className="font-mono text-emerald-900 font-extrabold text-xs">{itemImportando['Saldo para Adesão'] || '0'}</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Card Aba da UASG */}
+                {/* 1. Card Aba da UASG (PRIMEIRO) */}
                 <div className="bg-blue-50/70 p-2.5 rounded-lg border border-blue-200 space-y-1">
                   <div className="flex items-center justify-between font-bold text-blue-900 text-xs">
-                    <span>🏛️ Aba da UASG (Empenho)</span>
+                    <span>🏛️ 1. Aba da UASG (Empenho)</span>
                     <span className="px-1.5 py-0.2 rounded text-[10px] bg-blue-200/70 text-blue-800 font-mono">
                       UASG {pregaoOrigem.uasg}
                     </span>
                   </div>
                   <div className="grid grid-cols-3 gap-1 pt-1 text-[10px]">
                     <div>
-                      <span className="text-blue-700 block">Registrada:</span>
+                      <span className="text-blue-700 block">Qtd UASG:</span>
                       <strong className="font-mono text-blue-950">{itemImportando['Qtd Registrada'] || '0'}</strong>
                     </div>
                     <div>
@@ -719,6 +696,30 @@ export function TabPregoes({
                     <div>
                       <span className="text-blue-800 font-bold block">Saldo UASG:</span>
                       <strong className="font-mono text-blue-900 font-extrabold text-xs">{itemImportando['Saldo p/ Empenho'] || '0'}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Card Aba de Adesões (EM OUTRA COLUNA / AO LADO) */}
+                <div className="bg-emerald-50/70 p-2.5 rounded-lg border border-emerald-200 space-y-1">
+                  <div className="flex items-center justify-between font-bold text-emerald-900 text-xs">
+                    <span>🤝 2. Aba de Adesões (Carona)</span>
+                    <span className="px-1.5 py-0.2 rounded text-[10px] bg-emerald-200/70 text-emerald-800">
+                      Aceita: {itemImportando['Aceita Adesão'] || 'Sim'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 pt-1 text-[10px]">
+                    <div>
+                      <span className="text-emerald-700 block">Qtd Adesão:</span>
+                      <strong className="font-mono text-emerald-950">{itemImportando['Qtd para Adesão'] || '0'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-emerald-700 block">Aprovada:</span>
+                      <strong className="font-mono text-emerald-950">{itemImportando['Adesões Aprovadas'] || '0'}</strong>
+                    </div>
+                    <div>
+                      <span className="text-emerald-800 font-bold block">Saldo Rem.:</span>
+                      <strong className="font-mono text-emerald-900 font-extrabold text-xs">{itemImportando['Saldo para Adesão'] || '0'}</strong>
                     </div>
                   </div>
                 </div>
@@ -748,33 +749,12 @@ export function TabPregoes({
             </div>
 
             <div className="space-y-3 text-xs">
-              {/* Escolha da Modalidade: Adesão ou Empenho Ordinário */}
+              {/* Escolha da Modalidade: Empenho Ordinário ou Adesão */}
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
                   Modalidade de Aquisição:
                 </label>
                 <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setModalidadeImportar('adesao');
-                      const sAd = Number(String(itemImportando['Saldo para Adesão'] || '0').replace(/\./g, '').replace(',', '.')) || 0;
-                      setQtdImportar(sAd > 0 ? Math.max(1, Math.floor(sAd)) : 1);
-                    }}
-                    className={`p-2 rounded-lg border text-left transition-all ${
-                      modalidadeImportar === 'adesao'
-                        ? 'border-emerald-600 bg-emerald-50/80 text-emerald-900 ring-1 ring-emerald-500 font-semibold'
-                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    <div className="font-bold flex items-center gap-1">
-                      <span>🤝 Adesão à Ata (Carona)</span>
-                    </div>
-                    <div className="text-[11px] font-mono text-emerald-700 mt-0.5">
-                      Saldo Rem.: {itemImportando['Saldo para Adesão'] || '0'}
-                    </div>
-                  </button>
-
                   <button
                     type="button"
                     onClick={() => {
@@ -789,10 +769,31 @@ export function TabPregoes({
                     }`}
                   >
                     <div className="font-bold flex items-center gap-1">
-                      <span>🏛️ Empenho Próprio UASG</span>
+                      <span>🏛️ 1. Empenho Próprio UASG</span>
                     </div>
                     <div className="text-[11px] font-mono text-blue-700 mt-0.5">
                       Saldo UASG: {itemImportando['Saldo p/ Empenho'] || '0'}
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalidadeImportar('adesao');
+                      const sAd = Number(String(itemImportando['Saldo para Adesão'] || '0').replace(/\./g, '').replace(',', '.')) || 0;
+                      setQtdImportar(sAd > 0 ? Math.max(1, Math.floor(sAd)) : 1);
+                    }}
+                    className={`p-2 rounded-lg border text-left transition-all ${
+                      modalidadeImportar === 'adesao'
+                        ? 'border-emerald-600 bg-emerald-50/80 text-emerald-900 ring-1 ring-emerald-500 font-semibold'
+                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="font-bold flex items-center gap-1">
+                      <span>🤝 2. Adesão à Ata (Carona)</span>
+                    </div>
+                    <div className="text-[11px] font-mono text-emerald-700 mt-0.5">
+                      Saldo Rem.: {itemImportando['Saldo para Adesão'] || '0'}
                     </div>
                   </button>
                 </div>
