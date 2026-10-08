@@ -1,7 +1,7 @@
 #!/bin/bash
 if ! which pip3 > /dev/null 2>&1; then
   echo "Instalando pip3..."
-  DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip
+  DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" python3-pip
 fi
 
 if ! which streamlit > /dev/null 2>&1; then
@@ -43,10 +43,10 @@ for base in ['/usr/local/lib/python3*/dist-packages/streamlit/static/static/js/*
             if 'e.tagName.toLowerCase()' in content:
                 content = content.replace('e.tagName.toLowerCase()', '(e.tagName||\"\").toLowerCase()')
                 changed = True
-            if 'return e.toLowerCase()===`true`' in content:
-                content = content.replace('return e.toLowerCase()===`true`', 'let s=String(e||\"\").toLowerCase();return s===`true`')
-                content = content.replace('e.toLowerCase()===`false`', 's===`false`')
-                content = content.replace('e.toLowerCase()===`indeterminate`', 's===`indeterminate`')
+            if 'return e.toLowerCase()===\`true\`' in content:
+                content = content.replace('return e.toLowerCase()===\`true\`', 'let s=String(e||\"\").toLowerCase();return s===\`true\`')
+                content = content.replace('e.toLowerCase()===\`false\`', 's===\`false\`')
+                content = content.replace('e.toLowerCase()===\`indeterminate\`', 's===\`indeterminate\`')
                 changed = True
             if changed:
                 open(path, 'w').write(content)
