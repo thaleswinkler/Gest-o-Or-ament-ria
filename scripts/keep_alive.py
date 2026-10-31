@@ -25,15 +25,31 @@ def main():
 
     sucessos = 0
 
-    # 1. ESCRITA / TRANSAÇÃO REAL (Upsert de heartbeat no banco de dados)
-    # Grava um timestamp ativo na tabela 'dados' com id '_keepalive_ping'
+    # 1. ESCRITA / TRANSAÇÃO REAL (Upsert de heartbeat no banco de dados com contador incremental)
+    # Grava um timestamp ativo na tabela 'dados' com id '_keepalive_ping' e incrementa o total de heartbeats.
     # Isto força o PostgreSQL a registrar transações e escrita de disco no WAL,
     # garantindo que a métrica de atividade do Supabase seja 100% preenchida.
+    current_count = 1
+    try:
+        req_check = urllib.request.Request(
+            f"{url}/rest/v1/dados?id=eq._keepalive_ping&select=ncs",
+            headers=headers,
+            method="GET"
+        )
+        with urllib.request.urlopen(req_check, timeout=15) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            if data and len(data) > 0:
+                prev_ncs = data[0].get("ncs", {})
+                current_count = int(prev_ncs.get("ping_count", 0)) + 1
+    except Exception as e:
+        print(f"ℹ️ Info ao ler contador anterior: {e}")
+
     try:
         payload = json.dumps({
             "id": "_keepalive_ping",
             "ncs": {
                 "last_ping": agora_iso,
+                "ping_count": current_count,
                 "service": "github_actions_keep_alive",
                 "status": "active"
             }
@@ -46,7 +62,7 @@ def main():
             method="POST"
         )
         with urllib.request.urlopen(req_upsert, timeout=15) as resp:
-            print(f"✅ [1/3] Transação de Escrita (Heartbeat Upsert): Sucesso (HTTP {resp.status})")
+            print(f"✅ [1/3] Transação de Escrita (Heartbeat #{current_count} Upsert): Sucesso (HTTP {resp.status})")
             sucessos += 1
     except Exception as e:
         print(f"⚠️ Aviso na escrita do heartbeat: {e}")
