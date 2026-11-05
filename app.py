@@ -4700,7 +4700,7 @@ with tab_visualizacao:
                                 1. Nos termos contidos na lei 14.133/2021, solicito-vos providências junto ao Ordenador de Despesas no sentido de aprovar o empenho da despesa para aquisição de material, com os respectivos recursos e destinos:
                             </div>
                             <div style="margin-left: 30px; line-height: 1.5; margin-top: 10px;">
-                                a) <b>Nota de crédito:</b> {nc_selecionada_vis} &nbsp;&nbsp;&nbsp; b) <b>PI:</b> {pi_vinculado}; <b>ND:</b> {nd_vinculada}<br>
+                                <b>PI:</b> {pi_vinculado}; &nbsp;&nbsp;&nbsp; <b>ND:</b> {nd_vinculada}<br>
                                 <b>Edital de Pregão:</b> {pregao_atual} / <b>UASG:</b> {uasg_atual} / <b>Tipo de Empenho:</b> Ordinário<br>
                                 <b>Empresa:</b> {cnpj_atual} – {forn}
                             </div>
@@ -4730,8 +4730,8 @@ with tab_visualizacao:
                             
                             <div class="quebra-pagina" style="padding-top: 10px; line-height: 1.5; font-size: 14px;">
                                 <b>DESPACHO DO OD:</b><br>
-                                1. Autorizo a aquisição do material relacionado na letra b) do número 1);<br>
-                                2. Empregar os recursos provenientes da nota de crédito relacionado na letra a);<br>
+                                1. Autorizo a aquisição do material solicitado no número 1);<br>
+                                2. Empregar os recursos orçamentários do PI e ND indicados;<br>
                                 3. A SALC inicie os procedimentos legais, conforme legislação em vigor para empenho da despesa.<br>
                                 <br><br>
                                 <div style="text-align: center; line-height: 1.2;">

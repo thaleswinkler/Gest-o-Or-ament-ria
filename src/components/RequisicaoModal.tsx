@@ -343,7 +343,7 @@ export function RequisicaoModal({
 
               {/* Dados da Despesa */}
               <div style={{ marginLeft: '30px', lineHeight: '1.6', fontSize: '13px', marginBottom: '15px' }}>
-                a) <b>Nota de crédito:</b> {chaveNC} &nbsp;&nbsp;&nbsp; b) <b>PI:</b> {nc.pi || 'Não informado'}; <b>ND:</b> {nc.nd || 'Não informada'}<br />
+                <b>PI:</b> {nc.pi || 'Não informado'}; &nbsp;&nbsp;&nbsp; <b>ND:</b> {nc.nd || 'Não informada'}<br />
                 <b>Edital de Pregão:</b> {pregaoAtual || 'Ata/Edital'} / <b>UASG:</b> {uasgAtual || 'S/N'} / <b>Tipo de Empenho:</b> Ordinário<br />
                 <b>Empresa:</b> {cnpjAtual ? `${cnpjAtual} – ` : ''}{fornecedorSelecionado === 'TODOS' ? 'Diversas' : fornecedorSelecionado}
               </div>
@@ -416,8 +416,8 @@ export function RequisicaoModal({
               {/* Despacho do OD */}
               <div style={{ paddingTop: '20px', lineHeight: '1.6', fontSize: '13px', pageBreakBefore: 'always' }}>
                 <b>DESPACHO DO OD:</b><br />
-                1. Autorizo a aquisição do material relacionado na letra b) do número 1);<br />
-                2. Empregar os recursos provenientes da nota de crédito relacionado na letra a);<br />
+                1. Autorizo a aquisição do material solicitado no número 1);<br />
+                2. Empregar os recursos orçamentários do PI e ND indicados;<br />
                 3. A SALC inicie os procedimentos legais, conforme legislação em vigor para empenho da despesa.<br />
                 <br /><br />
                 <div style={{ textAlign: 'center', lineHeight: '1.25', marginTop: '20px' }}>
