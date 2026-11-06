@@ -15,8 +15,17 @@ jobs:
       - name: Checkout do Repositório
         uses: actions/checkout@v4
 
-      - name: Acordar Streamlit via Headless Browser (Puppeteer/Chromium)
-        uses: gpenessot/streamlit-keep-alive@v1
+      - name: Configurar Python
+        uses: actions/setup-python@v5
         with:
-          app-urls: |
-            https://gestaoorcamentaria.streamlit.app
+          python-version: '3.11'
+
+      - name: Instalar Playwright e Navegador Chromium
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Executar Despertador do Streamlit
+        run: |
+          python scripts/wake_streamlit.py https://gestaoorcamentaria.streamlit.app
