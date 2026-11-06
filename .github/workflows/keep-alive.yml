@@ -2,8 +2,8 @@ name: Supabase Keep-Alive (Prevenir Pausa)
 
 on:
   schedule:
-    # Executa a cada 3 dias às 07:00 (Horário de Brasília)
-    - cron: '0 10 */3 * *'
+    # Executa 2 vezes ao dia (às 03:00 e às 15:00 Horário de Brasília) para manter o banco sempre ativo
+    - cron: '0 6,18 * * *'
   workflow_dispatch:
 
 jobs:
