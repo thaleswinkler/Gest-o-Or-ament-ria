@@ -2256,6 +2256,7 @@ def obter_credenciais_supabase() -> Tuple[str, str]:
 
 URL, KEY = obter_credenciais_supabase()
 
+@st.cache_resource(show_spinner=False)
 def inicializar_cliente_supabase(url_sb: str, key_sb: str) -> Optional[Client]:
     try:
         return create_client(url_sb, key_sb)
@@ -3775,24 +3776,30 @@ if not supabase:
         st.rerun()
     st.stop()
 
-try:
-    resp_perfil = supabase.table("usuarios").select("*").eq("id", usuario_atual).execute()
-except Exception as e:
-    st.error(formatar_erro_supabase(e, "carregamento dos dados do usuário"))
-    if st.button("🔄 Tentar novamente"):
-        st.rerun()
-    if st.button("🚪 Sair"):
-        st.session_state.usuario_logado = None
-        st.rerun()
-    st.stop()
+if "perfil_usuario" not in st.session_state or st.session_state.get("perfil_usuario_id") != usuario_atual:
+    try:
+        resp_perfil = supabase.table("usuarios").select("*").eq("id", usuario_atual).execute()
+    except Exception as e:
+        st.error(formatar_erro_supabase(e, "carregamento dos dados do usuário"))
+        if st.button("🔄 Tentar novamente"):
+            st.rerun()
+        if st.button("🚪 Sair"):
+            st.session_state.usuario_logado = None
+            st.session_state.pop("perfil_usuario", None)
+            st.rerun()
+        st.stop()
 
-if not resp_perfil or not resp_perfil.data:
-    st.session_state.usuario_logado = None
-    st.rerun()
-    st.stop()
-    perfil = {}
-else:
-    perfil = resp_perfil.data[0]
+    if not resp_perfil or not resp_perfil.data:
+        st.session_state.usuario_logado = None
+        st.session_state.pop("perfil_usuario", None)
+        st.rerun()
+        st.stop()
+        perfil = {}
+    else:
+        st.session_state.perfil_usuario = resp_perfil.data[0]
+        st.session_state.perfil_usuario_id = usuario_atual
+
+perfil = st.session_state.get("perfil_usuario", {})
 om_user = perfil.get("om", "Não informada")
 secao_user = perfil.get("secao", "Geral")
 tipo_perfil = perfil.get("perfil", "Operador")
@@ -3833,6 +3840,8 @@ with st.sidebar.expander("⚙️ Alterar Minha Senha"):
 st.sidebar.markdown("---")
 if st.sidebar.button("Sair da Conta (Logout)", use_container_width=True):
     st.session_state.usuario_logado = None
+    st.session_state.pop("perfil_usuario", None)
+    st.session_state.pop("secoes_da_om", None)
     if "banco" in st.session_state: del st.session_state.banco
     st.rerun()
 
@@ -3851,18 +3860,23 @@ st.sidebar.markdown(
 # =====================================================================
 OPCAO_TODAS_SECOES = "🌟 TODAS AS SEÇÕES DA OM"
 
-# Recupera as seções cadastradas da OM com tolerância a falhas
-secoes_da_om = []
-try:
-    if supabase:
-        resp_secoes = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
-        if resp_secoes and resp_secoes.data:
-            secoes_da_om = sorted(list(set([r["secao"] for r in resp_secoes.data if r.get("secao")])))
-except Exception:
-    pass
+# Recupera as seções cadastradas da OM com tolerância a falhas e cache de sessão
+if "secoes_da_om" not in st.session_state or st.session_state.get("secoes_da_om_om") != om_user:
+    secoes_da_om = []
+    try:
+        if supabase:
+            resp_secoes = supabase.table("usuarios").select("secao").eq("om", om_user).execute()
+            if resp_secoes and resp_secoes.data:
+                secoes_da_om = sorted(list(set([r["secao"] for r in resp_secoes.data if r.get("secao")])))
+    except Exception:
+        pass
 
-if not secoes_da_om:
-    secoes_da_om = [secao_user]
+    if not secoes_da_om:
+        secoes_da_om = [secao_user]
+    st.session_state.secoes_da_om = secoes_da_om
+    st.session_state.secoes_da_om_om = om_user
+else:
+    secoes_da_om = st.session_state.secoes_da_om
 
 # Linha de filtros no topo acima do conteúdo
 col_topo_ano, col_topo_sec = st.columns([1.5, 3.5])
