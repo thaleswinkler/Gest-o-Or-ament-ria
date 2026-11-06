@@ -9,70 +9,51 @@ def main():
     url = (sys.argv[1] if len(sys.argv) > 1 else "https://gestaoorcamentaria.streamlit.app").strip()
     log(f"🚀 Iniciando verificação de Keep-Alive no Streamlit: {url}")
     
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1280,800")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    log("🌐 Abrindo navegador Chrome Headless nativo...")
+    driver = webdriver.Chrome(options=options)
+    
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        log("❌ Playwright não instalado. Instale com: pip install playwright && playwright install chromium")
-        sys.exit(1)
+        log("🔗 Navegando para o Streamlit...")
+        driver.get(url)
+        time.sleep(6)
         
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu"
-            ]
-        )
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800}
-        )
-        page = context.new_page()
-        
-        log("🌐 Acessando a página do aplicativo...")
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        except Exception as e:
-            log(f"⚠️ Aviso no carregamento inicial: {e}")
-            
-        # Aguarda alguns segundos para renderização do React/WebSocket
-        page.wait_for_timeout(6000)
-        
-        # Procura pelo botão oficial de despertar do Streamlit Cloud
-        # Frases comuns: "Yes, get this app back up!", "Get this app back up!", "Wake up"
-        sleep_selectors = [
-            'button:has-text("back up")',
-            'button:has-text("get this app back up")',
-            'button:has-text("wake", { timeout: 1000 })',
-            'button:has-text("Yes")',
-            '[data-testid="stAppSleeping"] button'
-        ]
-        
+        # Procura botões de acordar o Streamlit
+        botoes = driver.find_elements(By.TAG_NAME, "button")
         acordou = False
-        for sel in sleep_selectors:
+        for btn in botoes:
             try:
-                locator = page.locator(sel)
-                if locator.count() > 0 and locator.first.is_visible():
-                    texto_btn = locator.first.inner_text()
-                    log(f"😴 App detectado em modo de suspensão! Botão encontrado: '{texto_btn}'")
-                    log("👉 Clicando no botão para acordar a aplicação...")
-                    locator.first.click()
+                texto = btn.text.strip().lower()
+                if any(palavra in texto for palavra in ["back up", "wake", "acordar", "yes, get this app back up"]):
+                    log(f"😴 App em modo de suspensão detectado! Botão encontrado: '{btn.text}'")
+                    log("👉 Clicando no botão para acordar o Streamlit...")
+                    btn.click()
                     acordou = True
                     break
             except Exception:
                 continue
                 
         if acordou:
-            log("⏳ Aguardando 20 segundos enquanto o Streamlit inicializa o contêiner...")
-            page.wait_for_timeout(20000)
+            log("⏳ Aguardando 15s para inicialização do contêiner...")
+            time.sleep(15)
         else:
             log("✅ O aplicativo já está acordado ou carregou a interface diretamente.")
             
-        log(f"📄 Título atual da página: '{page.title()}'")
-        browser.close()
-        log("🎉 Rotina concluída com sucesso! Contêiner do Streamlit mantido aquecido.")
+        log(f"📄 Título atual da página: '{driver.title}'")
+        log("🎉 Rotina concluída com sucesso! Contêiner mantido ativo.")
+    finally:
+        driver.quit()
 
 if __name__ == "__main__":
     main()
