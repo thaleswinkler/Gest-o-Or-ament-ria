@@ -2317,6 +2317,7 @@ _iniciar_keep_alive_background()
 BASE_COMPRAS_API = "https://dadosabertos.compras.gov.br"
 URL_ARP_CONSULTA = f"{BASE_COMPRAS_API}/modulo-arp/1_consultarARP"
 URL_ARP_ITENS = f"{BASE_COMPRAS_API}/modulo-arp/2_consultarARPItem"
+URL_ARP_ITENS_ID = f"{BASE_COMPRAS_API}/modulo-arp/2.1_consultarARPItem_Id"
 URL_ARP_UNIDADES_ITEM = f"{BASE_COMPRAS_API}/modulo-arp/3_consultarUnidadesItem"
 URL_ARP_EMPENHOS_SALDO = f"{BASE_COMPRAS_API}/modulo-arp/4_consultarEmpenhosSaldoItem"
 URL_ARP_ADESOES_ITEM = f"{BASE_COMPRAS_API}/modulo-arp/5_consultarAdesoesItem"
@@ -2538,15 +2539,16 @@ _arp_thread_local = _threading_arp.local()
 def _criar_sessao_http() -> requests.Session:
     session = requests.Session()
     retry = Retry(
-        total=3,
+        total=4,
         connect=3,
         read=0,
-        status=3,
-        backoff_factor=1,
+        status=4,
+        backoff_factor=1.5,
+        respect_retry_after_header=True,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["HEAD", "GET", "OPTIONS", "POST"]
     )
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=12, pool_maxsize=12)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
@@ -2673,6 +2675,7 @@ def extrair_pregoes_por_ano(session: requests.Session, uasg: str, ano: str) -> L
         objeto = str(reg.get("objeto") or "").strip()
         link_ata = str(reg.get("linkAtaPNCP") or "").strip()
         link_compra = str(reg.get("linkCompraPNCP") or "").strip()
+        pncp_ata_id = str(reg.get("numeroControlePncpAta") or "").strip()
         id_compra = str(reg.get("idCompra") or "").strip()
         vig_ini = _extrair_vigencia_iso(reg.get("dataVigenciaInicial") or "")
         vig_fim = _extrair_vigencia_iso(reg.get("dataVigenciaFinal") or "")
@@ -2692,6 +2695,7 @@ def extrair_pregoes_por_ano(session: requests.Session, uasg: str, ano: str) -> L
                 "Atas List": [],
                 "Atas": "",
                 "Ata Links Map": {},
+                "Ata Pncp Map": {},
                 "Vigencia Min": vig_ini or f"{ano_clean}-01-01",
                 "Vigencia Max": vig_ini or f"{ano_clean}-12-31",
                 "Vigência Inicial": vig_ini,
@@ -2703,6 +2707,8 @@ def extrair_pregoes_por_ano(session: requests.Session, uasg: str, ano: str) -> L
             entry["Atas List"].append(num_ata)
         if num_ata and link_ata:
             entry["Ata Links Map"][num_ata] = link_ata
+        if num_ata and pncp_ata_id:
+            entry["Ata Pncp Map"][num_ata] = pncp_ata_id
         if not entry["Link Contratos"] and (link_compra or link_ata):
             entry["Link Contratos"] = link_compra or link_ata
         if not entry["Objeto"] and objeto:
@@ -2748,6 +2754,7 @@ def extrair_pregoes_siasg(uasg: str, anos: List[str]) -> Tuple[pd.DataFrame, Opt
                     atual["Atas List"] = sorted(atual["Atas List"])
                     atual["Atas"] = ", ".join(atual["Atas List"])
                     atual["Ata Links Map"].update(row.get("Ata Links Map", {}))
+                    atual.setdefault("Ata Pncp Map", {}).update(row.get("Ata Pncp Map", {}))
                     if row.get("Vigencia Min") and row["Vigencia Min"] < atual["Vigencia Min"]:
                         atual["Vigencia Min"] = row["Vigencia Min"]
                     if row.get("Vigencia Max") and row["Vigencia Max"] > atual["Vigencia Max"]:
@@ -2779,10 +2786,11 @@ def buscar_itens_com_saldo_real(
     vig_min: Optional[str] = None,
     vig_max: Optional[str] = None,
     atas_conhecidas: Optional[List[str]] = None,
-    ata_links_map: Optional[Dict[str, str]] = None
+    ata_links_map: Optional[Dict[str, str]] = None,
+    ata_pncp_map: Optional[Dict[str, str]] = None
 ) -> List[Dict]:
     """
-    Passos 2 e 3: Busca em paralelo os itens registrados (2_consultarARPItem),
+    Passos 2 e 3: Busca em paralelo os itens registrados (2_consultarARPItem e 2.1_consultarARPItem_Id),
     empenhos e saldos (4_consultarEmpenhosSaldoItem), unidades/limites de adesão
     (3_consultarUnidadesItem) e solicitações de adesão aprovadas (5_consultarAdesoesItem),
     cruzando tudo por (numeroAtaRegistroPreco, numeroItem).
@@ -2791,6 +2799,7 @@ def buscar_itens_com_saldo_real(
     num_compra_clean = str(num_compra or "").strip()
     ano_compra_clean = str(ano_compra or "").strip()
     links_map = dict(ata_links_map or {})
+    pncp_map = dict(ata_pncp_map or {})
 
     ano_int = int(ano_compra_clean) if ano_compra_clean.isdigit() else datetime.datetime.now().year
     vig_min_q = (vig_min or "").strip()[:10] or f"{ano_int}-01-01"
@@ -2822,18 +2831,24 @@ def buscar_itens_com_saldo_real(
             except Exception:
                 pass
 
-    def _fetch_endpoint2() -> Tuple[List[Dict], Optional[str]]:
+    def _fetch_endpoint2(incluir_num_compra: bool = True) -> Tuple[List[Dict], Optional[str]]:
+        sess = _get_thread_session()
+        params2 = {
+            "codigoUnidadeGerenciadora": uasg_clean,
+            "dataVigenciaInicialMin": vig_min_q,
+            "dataVigenciaInicialMax": vig_max_q,
+            "tamanhoPagina": 500,
+        }
+        if incluir_num_compra and num_compra_clean:
+            params2["numeroCompra"] = num_compra_clean
+        return _arp_get_paginado(sess, URL_ARP_ITENS, params2, timeout=30)
+
+    def _fetch_endpoint2_1_pncp(pncp_ata_id: str) -> Tuple[List[Dict], Optional[str]]:
         sess = _get_thread_session()
         return _arp_get_paginado(
             sess,
-            URL_ARP_ITENS,
-            {
-                "codigoUnidadeGerenciadora": uasg_clean,
-                "numeroCompra": num_compra_clean,
-                "dataVigenciaInicialMin": vig_min_q,
-                "dataVigenciaInicialMax": vig_max_q,
-                "tamanhoPagina": 500,
-            },
+            URL_ARP_ITENS_ID,
+            {"numeroControlePncpAta": pncp_ata_id},
             timeout=30,
         )
 
@@ -2889,18 +2904,61 @@ def buscar_itens_com_saldo_real(
         itens_api: List[Dict] = []
         erro_ep2: Optional[str] = None
 
-        # Disparo paralelo inicial: Endpoint 2 (itens da compra) + Endpoint 4 (empenhos/saldos das atas conhecidas)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(3, min(10, 1 + len(atas_iniciais)))) as executor:
-            fut_ep2 = executor.submit(_fetch_endpoint2)
+        # Wave 1A (em paralelo): Endpoint 2 (2_consultarARPItem) + Endpoint 4 (4_consultarEmpenhosSaldoItem das atas conhecidas)
+        total_tasks_w1 = 1 + len(atas_iniciais)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(2, min(5, total_tasks_w1))) as executor:
+            fut_ep2 = executor.submit(_fetch_endpoint2, True)
             futs_ep4 = {executor.submit(_fetch_endpoint4_ata, ata): ata for ata in atas_iniciais}
 
-            itens_api, erro_ep2 = fut_ep2.result()
+            rows_ep2, erro_ep2 = fut_ep2.result()
+            if rows_ep2:
+                itens_api.extend(rows_ep2)
+
             for fut in concurrent.futures.as_completed(futs_ep4):
                 try:
                     ata_res, rows_ep4 = fut.result()
                     empenhos_por_ata[ata_res] = rows_ep4
                 except Exception:
                     pass
+
+        # Wave 1B: para atas que vieram vazias no 2_consultarARPItem (ex.: numeroCompra nulo na API como 90017/2025),
+        # consulta diretamente via 2.1_consultarARPItem_Id usando o numeroControlePncpAta da etapa 1
+        atas_com_itens = {
+            str(it.get("numeroAtaRegistroPreco") or "").strip()
+            for it in itens_api
+            if it.get("itemExcluido") is not True
+        }
+        atas_sem_itens = [a for a in atas_iniciais if a not in atas_com_itens]
+        pncp_faltantes = sorted({str(pncp_map.get(a) or "").strip() for a in atas_sem_itens if str(pncp_map.get(a) or "").strip()})
+        if pncp_faltantes:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(pncp_faltantes))) as executor:
+                futs_ep2_1 = [executor.submit(_fetch_endpoint2_1_pncp, pid) for pid in pncp_faltantes]
+                for fut21 in concurrent.futures.as_completed(futs_ep2_1):
+                    try:
+                        rows21, err21 = fut21.result()
+                        if rows21:
+                            itens_api.extend(rows21)
+                        elif err21 and not erro_ep2:
+                            erro_ep2 = err21
+                    except Exception:
+                        pass
+
+        # Wave 1C (fallback final): atas conhecidas ainda sem itens e sem PNCP ID -> 2_consultarARPItem sem filtro numeroCompra
+        atas_com_itens = {
+            str(it.get("numeroAtaRegistroPreco") or "").strip()
+            for it in itens_api
+            if it.get("itemExcluido") is not True
+        }
+        atas_sem_itens_rest = [a for a in atas_iniciais if a not in atas_com_itens]
+        if atas_sem_itens_rest:
+            rows_fallback, err_fb = _fetch_endpoint2(incluir_num_compra=False)
+            if rows_fallback:
+                atas_alvo_set = set(atas_sem_itens_rest)
+                for it_fb in rows_fallback:
+                    if str(it_fb.get("numeroAtaRegistroPreco") or "").strip() in atas_alvo_set:
+                        itens_api.append(it_fb)
+            elif err_fb and not erro_ep2:
+                erro_ep2 = err_fb
 
         if erro_ep2 and not itens_api:
             _limpar_ui()
@@ -2911,14 +2969,15 @@ def buscar_itens_com_saldo_real(
         # Filtrar itens válidos do pregão/ano alvo e deduplicar por (numeroAtaRegistroPreco, numeroItem_norm)
         itens_filtrados: List[Dict] = []
         chaves_vistas = set()
+        atas_iniciais_set = set(atas_iniciais)
         for it in itens_api:
             if it.get("itemExcluido") is True:
                 continue
+            ata_it = str(it.get("numeroAtaRegistroPreco") or "").strip()
             it_ano = str(it.get("anoCompra") or "").strip()
-            if ano_compra_clean and it_ano and it_ano != ano_compra_clean:
+            if ano_compra_clean and it_ano and it_ano != ano_compra_clean and ata_it not in atas_iniciais_set:
                 continue
 
-            ata_it = str(it.get("numeroAtaRegistroPreco") or "").strip()
             item_raw = str(it.get("numeroItem") or "").strip()
             item_norm = _norm_item_num(item_raw)
             if not item_norm:
@@ -2942,7 +3001,7 @@ def buscar_itens_com_saldo_real(
         })
         atas_faltantes = [a for a in atas_descobertas if a not in empenhos_por_ata]
         if atas_faltantes:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(atas_faltantes))) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(atas_faltantes))) as executor:
                 for ata_res, rows_ep4 in executor.map(_fetch_endpoint4_ata, atas_faltantes):
                     empenhos_por_ata[ata_res] = rows_ep4
 
@@ -3148,7 +3207,7 @@ def buscar_itens_com_saldo_real(
                 "empenhos_lista": empenhos_lista,
             }
 
-        max_workers = min(12, max(1, total_it))
+        max_workers = min(5, max(1, total_it))
         resultados_map: Dict[Tuple[str, str], Dict] = {}
         concluidos = 0
 
@@ -5623,7 +5682,8 @@ with tab_consulta_pregoes:
                             vig_min=row_p.get('Vigencia Min'),
                             vig_max=row_p.get('Vigencia Max'),
                             atas_conhecidas=row_p.get('Atas List'),
-                            ata_links_map=row_p.get('Ata Links Map')
+                            ata_links_map=row_p.get('Ata Links Map'),
+                            ata_pncp_map=row_p.get('Ata Pncp Map')
                         )
                         if itens_det:
                             st.session_state['itens_carregados_pregoes'][chave_p] = itens_det
