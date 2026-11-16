@@ -2314,16 +2314,18 @@ def _iniciar_keep_alive_background():
 
 _iniciar_keep_alive_background()
 
-SIASG_BASE = "https://www2.comprasnet.gov.br/siasgnet-atasrp/public"
-URL_PESQUISA_SIASG = f"{SIASG_BASE}/pesquisarLicitacaoSRP.do"
-URL_ITENS_SIASG = f"{SIASG_BASE}/pesquisarItemSRP.do"
-BASE_CONTRATOS = "https://contratos.sistema.gov.br"
+BASE_COMPRAS_API = "https://dadosabertos.compras.gov.br"
+URL_ARP_CONSULTA = f"{BASE_COMPRAS_API}/modulo-arp/1_consultarARP"
+URL_ARP_ITENS = f"{BASE_COMPRAS_API}/modulo-arp/2_consultarARPItem"
+URL_ARP_UNIDADES_ITEM = f"{BASE_COMPRAS_API}/modulo-arp/3_consultarUnidadesItem"
+URL_ARP_EMPENHOS_SALDO = f"{BASE_COMPRAS_API}/modulo-arp/4_consultarEmpenhosSaldoItem"
+URL_ARP_ADESOES_ITEM = f"{BASE_COMPRAS_API}/modulo-arp/5_consultarAdesoesItem"
 
-HEADERS_HTTP = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
+HEADERS_API = {
+    "accept": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
+HEADERS_HTTP = HEADERS_API
 
 # =====================================================================
 # 3. FUNÇÕES UTILITÁRIAS DO SISTEMA
@@ -2528,924 +2530,663 @@ def consultar_razao_social_cnpj(cnpj: str) -> str:
     return ""
 
 # =====================================================================
-# 4. MÓDULO DE RASTREAMENTO E INTEGRAÇÃO SIASG / CONTRATOS.GOV.BR
+# 4. MÓDULO DE INTEGRAÇÃO API DADOS ABERTOS COMPRAS.GOV.BR (MÓDULO 08 - ARP)
 # =====================================================================
-@st.cache_resource
-def get_http_session() -> requests.Session:
+import threading as _threading_arp
+_arp_thread_local = _threading_arp.local()
+
+def _criar_sessao_http() -> requests.Session:
     session = requests.Session()
     retry = Retry(
         total=3,
+        connect=3,
+        read=0,
+        status=3,
         backoff_factor=1,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["HEAD", "GET", "OPTIONS", "POST"]
     )
-    adapter = HTTPAdapter(max_retries=retry)
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
 
-def iniciar_sessao_siasg(session: requests.Session) -> None:
+@st.cache_resource
+def get_http_session() -> requests.Session:
+    return _criar_sessao_http()
+
+def _get_thread_session() -> requests.Session:
+    sess = getattr(_arp_thread_local, "session", None)
+    if sess is None:
+        sess = _criar_sessao_http()
+        _arp_thread_local.session = sess
+    return sess
+
+def _tem_contexto_streamlit() -> bool:
     try:
-        session.get(f"{URL_PESQUISA_SIASG}?method=iniciar", headers=HEADERS_HTTP, verify=False, timeout=12)
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx() is not None
     except Exception:
-        pass
+        return False
 
-def obter_id_unidade_contratos(session: requests.Session, uasg: str) -> Optional[int]:
-    uasg_clean = uasg.strip()
-    if 'cache_unidades' not in st.session_state:
-        st.session_state['cache_unidades'] = {}
-    if uasg_clean in st.session_state['cache_unidades']:
-        return st.session_state['cache_unidades'][uasg_clean]
-
+def _fmt_qtd_api(val) -> str:
     try:
-        url = f"{BASE_CONTRATOS}/arp/ajax-unidade-options?q={uasg_clean}"
-        res = session.get(url, headers=HEADERS_HTTP, timeout=10)
-        if res.ok:
-            data = res.json()
-            if isinstance(data, list) and len(data) > 0:
-                match = next((x for x in data if uasg_clean in x.get('nome', '')), data[0])
-                uid = match.get('id')
-                st.session_state['cache_unidades'][uasg_clean] = uid
-                return uid
+        f = float(val)
     except Exception:
-        pass
-    return None
+        return "0"
+    if f <= 0:
+        return "0"
+    if f == int(f):
+        return str(int(f))
+    return f"{f:.4f}".rstrip("0").rstrip(".") or "0"
 
-def buscar_atas_contratos(session: requests.Session, uasg: str, num_compra: str, ano_compra: str) -> List[Dict]:
-    if 'cache_atas' not in st.session_state:
-        st.session_state['cache_atas'] = {}
-    cache_key = f"{uasg}-{num_compra}-{ano_compra}"
-    if cache_key in st.session_state['cache_atas']:
-        return st.session_state['cache_atas'][cache_key]
+def _norm_item_num(val) -> str:
+    s = str(val or "").strip()
+    if not s:
+        return ""
+    if s.isdigit():
+        return str(int(s))
+    return s
 
-    from bs4 import BeautifulSoup
-    id_unidade = obter_id_unidade_contratos(session, uasg)
-    arp_ids: List[str] = []
-    
-    page = 1
-    while page <= 10:
-        url = f"{BASE_CONTRATOS}/transparencia/arp?situacao=vigente&numeroCompra={num_compra}&anoCompra={ano_compra}"
-        if id_unidade:
-            url += f"&unidadesGerenciadoras[]={id_unidade}"
-        if page > 1:
-            url += f"&page={page}"
+def _extrair_vigencia_iso(val: str) -> str:
+    s = str(val or "").strip()
+    return s[:10] if len(s) >= 10 else ""
 
+def _arp_get_paginado(
+    session: requests.Session,
+    url: str,
+    base_params: Dict,
+    timeout: int = 30
+) -> Tuple[List[Dict], Optional[str]]:
+    """Executa GET paginado na API Dados Abertos Compras.gov.br verificando paginasRestantes."""
+    todos: List[Dict] = []
+    pagina = 1
+    while pagina <= 50:
+        params = dict(base_params)
+        params["pagina"] = pagina
+        params["tamanhoPagina"] = int(params.get("tamanhoPagina") or 500)
         try:
-            res = session.get(url, headers=HEADERS_HTTP, timeout=15)
+            res = session.get(url, params=params, headers=HEADERS_API, timeout=timeout)
+            if res.status_code == 204 or not res.text or not res.text.strip():
+                break
             if not res.ok:
+                msg_err = f"HTTP {res.status_code}"
+                try:
+                    err_json = res.json()
+                    if isinstance(err_json, dict):
+                        msg_err = err_json.get("message") or err_json.get("mensagem") or err_json.get("error") or msg_err
+                except Exception:
+                    pass
+                return todos, msg_err
+
+            data = res.json()
+            if not isinstance(data, dict):
                 break
+            resultado = data.get("resultado") or []
+            if isinstance(resultado, list) and resultado:
+                todos.extend(resultado)
 
-            soup = BeautifulSoup(res.text, 'html.parser')
-            novos = 0
-            for a in soup.find_all('a', href=True):
-                m = re.search(r"/transparencia/arpshow/(\d+)/show", a['href'])
-                if m:
-                    arp_id = m.group(1)
-                    if arp_id not in arp_ids:
-                        arp_ids.append(arp_id)
-                        novos += 1
+            try:
+                paginas_restantes = int(data.get("paginasRestantes") or 0)
+            except Exception:
+                paginas_restantes = 0
 
-            if novos == 0:
+            if paginas_restantes <= 0 or not resultado:
                 break
-            page += 1
-        except Exception:
-            break
+            pagina += 1
+        except requests.exceptions.Timeout:
+            return todos, "Tempo limite excedido (timeout=30s) ao consultar a API do Compras.gov.br."
+        except Exception as e:
+            return todos, str(e)
 
-    atas_detalhadas: List[Dict] = []
-    for arp_id in arp_ids:
-        try:
-            url_arp = f"{BASE_CONTRATOS}/transparencia/arpshow/{arp_id}/show"
-            r_arp = session.get(url_arp, headers=HEADERS_HTTP, timeout=12)
-            if not r_arp.ok:
-                continue
-            s_arp = BeautifulSoup(r_arp.text, 'html.parser')
-            
-            num_ata = ""
-            for lbl in s_arp.find_all('label'):
-                txt = lbl.get_text(strip=True)
-                if re.match(r"\d{5}/\d{4}", txt) and not num_ata:
-                    num_ata = txt
-            
-            pdf_url = ""
-            for tbl in s_arp.find_all('table'):
-                ths = [th.get_text(strip=True).lower() for th in tbl.find_all('th')]
-                if any(h in ['tipo', 'incluído em', 'descrição', 'ação'] for h in ths):
-                    for tr in tbl.find_all('tr'):
-                        tr_txt = tr.get_text(strip=True).lower()
-                        if 'ata de registro de preços' in tr_txt or 'ata' in tr_txt:
-                            a_link = tr.find('a', href=True)
-                            if a_link:
-                                h = a_link['href'].strip()
-                                if ('/storage/arp/' in h or h.lower().endswith('.pdf')) and 'manual' not in h.lower():
-                                    pdf_url = h if h.startswith('http') else f"{BASE_CONTRATOS}{h}"
-                                    break
-                    if pdf_url:
-                        break
-
-            if not pdf_url:
-                for a in s_arp.find_all('a', href=True):
-                    h = a['href'].strip()
-                    title = a.get('title', '').lower()
-                    if 'manual' in h.lower():
-                        continue
-                    if '/storage/arp/' in h or 'baixar' in title or a.find('i', class_=re.compile(r'download')):
-                        pdf_url = h if h.startswith('http') else f"{BASE_CONTRATOS}{h}"
-                        break
-            
-            itens_olho = {}
-            for a_eye in s_arp.find_all('a', href=True):
-                h = a_eye['href'].strip()
-                m_it = re.search(r"/transparencia/arpshow/itens/(\d+)/", h)
-                if m_it:
-                    it_num_int = str(int(m_it.group(1)))
-                    link_eye = h if h.startswith('http') else f"{BASE_CONTRATOS}{h}"
-                    itens_olho[it_num_int] = link_eye
-                    itens_olho[m_it.group(1)] = link_eye
-
-            atas_detalhadas.append({
-                "arpId": arp_id,
-                "numeroAta": num_ata or f"ARP {arp_id}",
-                "pdfUrl": pdf_url,
-                "linkAta": url_arp,
-                "itensOlho": itens_olho
-            })
-        except Exception:
-            continue
-
-    st.session_state['cache_atas'][cache_key] = atas_detalhadas
-    return atas_detalhadas
-
-def obter_saldo_item_contratos(session: requests.Session, uasg: str, num_compra: str, ano_compra: str, num_item: str, atas: Optional[List[Dict]] = None) -> Dict:
-    from bs4 import BeautifulSoup
-    if atas is None:
-        atas = buscar_atas_contratos(session, uasg, num_compra, ano_compra)
-    num_int = int(num_item) if str(num_item).isdigit() else 0
-    num_str = str(num_int)
-    num_5 = str(num_int).zfill(5)
-
-    target_eye_url = ""
-    target_ata = None
-
-    for ata in atas:
-        itens_map = ata.get("itensOlho", {})
-        if num_str in itens_map:
-            target_eye_url = itens_map[num_str]
-            target_ata = ata
-            break
-        elif num_5 in itens_map:
-            target_eye_url = itens_map[num_5]
-            target_ata = ata
-            break
-
-    # Se o item NÃO existe em nenhuma ARP homologada: é Deserto, Fracassado ou Cancelado
-    if not target_eye_url or not target_ata:
-        return {
-            "qtd_registrada": "0",
-            "qtd_empenhada": "0",
-            "saldo_empenho": "0",
-            "qtd_limite_adesao": "0",
-            "qtd_aprovada_adesao": "0",
-            "saldo_adesao": "0",
-            "aceita_adesao": "Não",
-            "adesoes_solicitacoes": [],
-            "fornecedor": "Deserto / Fracassado",
-            "fornecedor_puro": "Deserto / Fracassado",
-            "cnpj_puro": "",
-            "valor_unitario_sugerido": 0.0,
-            "descricao_detalhada_ata": "",
-            "empenhos_resumo": "Nenhum (Item Deserto)",
-            "empenhos_lista": [],
-            "numero_ata": "-",
-            "pdf_ata": "",
-            "deserto": True
-        }
-
-    resultado = {
-        "qtd_registrada": "0",
-        "qtd_empenhada": "0",
-        "saldo_empenho": "0",
-        "qtd_limite_adesao": "0",
-        "qtd_aprovada_adesao": "0",
-        "saldo_adesao": "0",
-        "aceita_adesao": "Não",
-        "adesoes_solicitacoes": [],
-        "fornecedor": "",
-        "fornecedor_puro": "",
-        "cnpj_puro": "",
-        "valor_unitario_sugerido": 0.0,
-        "descricao_detalhada_ata": "",
-        "empenhos_resumo": "Nenhum",
-        "empenhos_lista": [],
-        "numero_ata": target_ata["numeroAta"] if target_ata else "-",
-        "pdf_ata": target_ata["pdfUrl"] if target_ata else "",
-        "deserto": False
-    }
-
-    try:
-        res = session.get(target_eye_url.strip(), headers=HEADERS_HTTP, timeout=12)
-        if not res.ok or "não encontrada" in res.text.lower() or "erro interno" in res.text.lower():
-            resultado["deserto"] = True
-            resultado["fornecedor"] = "Deserto / Fracassado"
-            resultado["fornecedor_puro"] = "Deserto / Fracassado"
-            return resultado
-
-        soup = BeautifulSoup(res.text, 'html.parser')
-
-        # 1. Extração da Descrição Técnica / Especificação
-        for tag in soup.find_all(['div', 'p', 'span', 'td', 'dd', 'li']):
-            txt_linhas = tag.get_text(separator='\n', strip=True).split('\n')
-            for i_l, linha in enumerate(txt_linhas):
-                if re.search(r"^(?:especificação|descrição detalhada|descrição do item)\s*:", linha, re.IGNORECASE):
-                    conteudo = re.sub(r"^(?:especificação|descrição detalhada|descrição do item)\s*:\s*", "", linha, flags=re.IGNORECASE).strip()
-                    if not conteudo and i_l + 1 < len(txt_linhas):
-                        conteudo = txt_linhas[i_l + 1].strip()
-                    desc_limpa = limpar_descricao_ata(conteudo)
-                    if len(desc_limpa) > 3:
-                        resultado["descricao_detalhada_ata"] = desc_limpa
-                        break
-            if resultado["descricao_detalhada_ata"]:
-                break
-
-        if not resultado["descricao_detalhada_ata"]:
-            for strong in soup.find_all(['strong', 'b', 'label', 'dt', 'th']):
-                if any(w in strong.get_text().lower() for w in ["especificação", "especificacao", "descrição detalhada", "descrição do item"]):
-                    prox = strong.find_next_sibling(['span', 'p', 'dd', 'div', 'td'])
-                    if prox:
-                        desc_limpa = limpar_descricao_ata(prox.get_text(separator=' ', strip=True))
-                        if len(desc_limpa) > 3:
-                            resultado["descricao_detalhada_ata"] = desc_limpa
-                            break
-                    pai = strong.parent
-                    if pai:
-                        desc_limpa = limpar_descricao_ata(pai.get_text(separator='\n', strip=True))
-                        if len(desc_limpa) > 3:
-                            resultado["descricao_detalhada_ata"] = desc_limpa
-                            break
-
-        # 2. Fornecedor, CNPJ e Valor Unitário
-        found_cnpj = ""
-        candidato_nome = ""
-        vlr_unit = 0.0
-
-        for tbl in soup.find_all('table'):
-            txt_tbl = tbl.get_text(" ", strip=True)
-            m_cnpj = re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", txt_tbl)
-            if m_cnpj:
-                found_cnpj = m_cnpj.group(0)
-                for tr in tbl.find_all('tr'):
-                    if found_cnpj in tr.get_text():
-                        tds = [td.get_text(" ", strip=True) for td in tr.find_all('td')]
-                        for c in tds:
-                            c_sem = re.sub(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", "", c).strip()
-                            if re.search(r"[A-Za-zÀ-ÿ]{3,}", c_sem) and not any(k in c_sem.lower() for k in ['classifica', 'quantidade', 'valor unit', 'total', 'vlr', 'r$']):
-                                candidato_nome = c_sem
-                                break
-                        for c in reversed(tds):
-                            if "r$" in c.lower() or re.search(r"\d+,\d{2,4}", c):
-                                vlr_unit = converter_para_float(c)
-                                break
-                        break
-                if found_cnpj:
-                    break
-
-        nome_forn_limpo = limpar_nome_fornecedor(candidato_nome, found_cnpj)
-        if not nome_forn_limpo or nome_forn_limpo == found_cnpj or len(re.findall(r"[A-Za-zÀ-ÿ]{3,}", nome_forn_limpo)) == 0:
-            if found_cnpj:
-                nome_auto = consultar_razao_social_cnpj(found_cnpj)
-                if nome_auto:
-                    nome_forn_limpo = nome_auto
-
-        fornecedor_puro = nome_forn_limpo or found_cnpj
-        if nome_forn_limpo and found_cnpj and nome_forn_limpo != found_cnpj:
-            fornecedor_display = f"{nome_forn_limpo} ({found_cnpj})"
-        else:
-            fornecedor_display = fornecedor_puro or found_cnpj or "Não informado"
-
-        resultado["cnpj_puro"] = found_cnpj
-        resultado["fornecedor_puro"] = fornecedor_puro
-        resultado["fornecedor"] = fornecedor_display
-        resultado["valor_unitario_sugerido"] = vlr_unit
-
-        # 3. Varredura Oficial de Saldos da UASG no Detalhamento do Item
-        uasg_clean = uasg.strip()
-
-        # Isolar tabelas folha (que não contêm <table> interno) para evitar interferência de tabelas aninhadas
-        all_soup_tables = soup.find_all('table')
-        leaf_tables = [t for t in all_soup_tables if not t.find('table')]
-        if not leaf_tables:
-            leaf_tables = all_soup_tables
-
-        # A) Notas de Empenho (NE) emitidas para esta UASG
-        soma_empenhos_nes = 0.0
-        empenhos_list = []
-        tem_ne_uasg = False
-
-        for tbl in leaf_tables:
-            hdr_ths = []
-            thead = tbl.find('thead')
-            if thead:
-                hdr_ths = [th.get_text(" ", strip=True).lower() for th in thead.find_all(['th', 'td'])]
-            if not hdr_ths:
-                first_tr = tbl.find('tr')
-                if first_tr:
-                    hdr_ths = [th.get_text(" ", strip=True).lower() for th in first_tr.find_all(['th', 'td'])]
-
-            if any("número de empenho" in h or "numero de empenho" in h or "nota de empenho" in h for h in hdr_ths):
-                idx_ne_col = -1
-                idx_u_col = -1
-                idx_data_col = -1
-                idx_qtd_col = -1
-                idx_val_col = -1
-                for i_c, c_name in enumerate(hdr_ths):
-                    if ("número" in c_name or "numero" in c_name or "empenho" in c_name) and "quantidade" not in c_name and "data" not in c_name and idx_ne_col == -1:
-                        idx_ne_col = i_c
-                    elif "unidade" in c_name and idx_u_col == -1:
-                        idx_u_col = i_c
-                    elif "data" in c_name and idx_data_col == -1:
-                        idx_data_col = i_c
-                    elif ("quantidade empenhada" in c_name) or ("quantidade" in c_name and "empenh" in c_name):
-                        idx_qtd_col = i_c
-                    elif "valor" in c_name and idx_val_col == -1:
-                        idx_val_col = i_c
-
-                for tr in tbl.find_all('tr'):
-                    tds = [td.get_text(" ", strip=True) for td in tr.find_all(['td', 'th'], recursive=False)]
-                    if len(tds) < 5:
-                        continue
-                    if any("número de empenho" in td.lower() for td in tds):
-                        continue
-
-                    col_u = tds[idx_u_col].lower() if idx_u_col != -1 and idx_u_col < len(tds) else ""
-                    linha_tr_txt = " ".join(tds).lower()
-
-                    is_match_ne = (uasg_clean in col_u) or (uasg_clean in linha_tr_txt) or (
-                        ("gerenciadora" in col_u or "gerenciadora" in linha_tr_txt) and ("não" not in col_u and "nao" not in col_u)
-                    )
-
-                    if is_match_ne:
-                        m_ne = re.search(r"\b(\d{4}NE\d{4,6})\b", linha_tr_txt, re.IGNORECASE)
-                        ne_num = m_ne.group(1).upper() if m_ne else (tds[idx_ne_col] if idx_ne_col != -1 and idx_ne_col < len(tds) else "")
-                        d_ne = tds[idx_data_col] if idx_data_col != -1 and idx_data_col < len(tds) else ""
-                        q_str = tds[idx_qtd_col] if idx_qtd_col != -1 and idx_qtd_col < len(tds) else "0"
-                        v_str = tds[idx_val_col] if idx_val_col != -1 and idx_val_col < len(tds) else ""
-
-                        q_f = converter_para_float(q_str)
-                        if q_f > 0:
-                            tem_ne_uasg = True
-                            soma_empenhos_nes += q_f
-
-                        emp_entry = ne_num or "NE"
-                        if d_ne: emp_entry += f" ({d_ne})"
-                        if q_str: emp_entry += f": Qtd {q_str}"
-                        if v_str: emp_entry += f" [R$ {v_str}]"
-                        if emp_entry not in empenhos_list:
-                            empenhos_list.append(emp_entry)
-
-        # B) Tabela de Saldos por Unidade no Item (Unidade, Tipo, Qtd Registrada, Qtd Empenhada, Saldo p/ Empenho)
-        reg_t3 = None
-        emp_t3 = None
-        sal_t3 = None
-
-        for tbl in leaf_tables:
-            hdr_ths = []
-            thead = tbl.find('thead')
-            if thead:
-                hdr_ths = [th.get_text(" ", strip=True).lower() for th in thead.find_all(['th', 'td'])]
-            if not hdr_ths:
-                first_tr = tbl.find('tr')
-                if first_tr:
-                    hdr_ths = [th.get_text(" ", strip=True).lower() for th in first_tr.find_all(['th', 'td'])]
-
-            if any("quantidade empenhada" in h for h in hdr_ths) and any("saldo" in h for h in hdr_ths) and any("unidade" in h for h in hdr_ths):
-                idx_u = -1
-                idx_tipo = -1
-                idx_r = -1
-                idx_e = -1
-                idx_s = -1
-                for i_c, c_name in enumerate(hdr_ths):
-                    if "unidade" in c_name and idx_u == -1:
-                        idx_u = i_c
-                    elif "tipo" in c_name and idx_tipo == -1:
-                        idx_tipo = i_c
-                    elif ("registrada" in c_name or "homologada" in c_name or "autorizada" in c_name) and idx_r == -1:
-                        idx_r = i_c
-                    elif "empenhada" in c_name and not any(k in c_name for k in ["saldo", "dispon", "reforço", "anulação"]) and idx_e == -1:
-                        idx_e = i_c
-                    elif "saldo" in c_name and idx_s == -1:
-                        idx_s = i_c
-
-                for tr in tbl.find_all('tr'):
-                    tds = [td.get_text(" ", strip=True) for td in tr.find_all(['td', 'th'], recursive=False)]
-                    if len(tds) < 4:
-                        continue
-                    if any("quantidade registrada" in td.lower() for td in tds):
-                        continue
-
-                    col_u = tds[idx_u].lower() if idx_u != -1 and idx_u < len(tds) else ""
-                    col_tipo = tds[idx_tipo].lower() if idx_tipo != -1 and idx_tipo < len(tds) else ""
-                    linha_txt = " ".join(tds).lower()
-
-                    is_uasg = (uasg_clean in col_u) or (uasg_clean in linha_txt)
-                    is_gerenciadora = ("gerenciadora" in col_tipo or "gerenciadora" in col_u or "gerenciadora" in linha_txt) and ("não" not in col_tipo and "nao" not in col_tipo)
-
-                    if is_uasg or is_gerenciadora:
-                        if idx_r != -1 and idx_r < len(tds):
-                            reg_t3 = converter_para_float(tds[idx_r])
-                        if idx_e != -1 and idx_e < len(tds):
-                            emp_t3 = converter_para_float(tds[idx_e])
-                        if idx_s != -1 and idx_s < len(tds):
-                            sal_t3 = converter_para_float(tds[idx_s])
-
-                        if is_uasg:
-                            break
-
-                if reg_t3 is not None and emp_t3 is not None:
-                    break
-
-        # C) Tabela de Unidades do Item (Código, Unidade, Tipo da unidade, Qtd Registrada, Qtd Disponível para remanejamento/empenho)
-        reg_t1 = None
-        disp_t1 = None
-        for tbl in leaf_tables:
-            hdr_ths = []
-            thead = tbl.find('thead')
-            if thead:
-                hdr_ths = [th.get_text(" ", strip=True).lower() for th in thead.find_all(['th', 'td'])]
-            if not hdr_ths:
-                first_tr = tbl.find('tr')
-                if first_tr:
-                    hdr_ths = [th.get_text(" ", strip=True).lower() for th in first_tr.find_all(['th', 'td'])]
-
-            if any("remanejamento" in c or "disponível" in c or "disponiv" in c for c in hdr_ths):
-                idx_r = -1
-                idx_disp = -1
-                for i_c, c_name in enumerate(hdr_ths):
-                    if ("registrada" in c_name or "homologada" in c_name) and idx_r == -1:
-                        idx_r = i_c
-                    elif ("disponível" in c_name or "disponiv" in c_name or "remanejamento" in c_name) and idx_disp == -1:
-                        idx_disp = i_c
-
-                for tr in tbl.find_all('tr'):
-                    tds = [td.get_text(" ", strip=True) for td in tr.find_all(['td', 'th'], recursive=False)]
-                    if len(tds) < 3:
-                        continue
-                    if any("quantidade registrada" in td.lower() for td in tds):
-                        continue
-
-                    r_txt = " ".join(tds).lower()
-                    if uasg_clean in r_txt or ("gerenciadora" in r_txt and "não" not in r_txt and "nao" not in r_txt):
-                        if idx_r != -1 and idx_r < len(tds):
-                            reg_t1 = converter_para_float(tds[idx_r])
-                        if idx_disp != -1 and idx_disp < len(tds):
-                            disp_t1 = converter_para_float(tds[idx_disp])
-                        break
-
-            if reg_t1 is not None:
-                break
-
-        # D) Consolidação Matemática das Quantidades: Saldo = Registrada - Empenhada
-        # Prioridade máxima para os dados da tabela da Unidade e Empenhos do item da ARP
-        if emp_t3 is not None and emp_t3 >= 0:
-            final_emp = emp_t3
-            final_reg = reg_t3 if (reg_t3 is not None and reg_t3 > 0) else (reg_t1 if (reg_t1 is not None and reg_t1 > 0) else final_emp)
-            final_sal = sal_t3 if sal_t3 is not None else max(0.0, final_reg - final_emp)
-        elif tem_ne_uasg and soma_empenhos_nes > 0:
-            final_emp = soma_empenhos_nes
-            final_reg = reg_t3 if (reg_t3 is not None and reg_t3 > 0) else (reg_t1 if (reg_t1 is not None and reg_t1 > 0) else final_emp)
-            final_sal = max(0.0, final_reg - final_emp)
-        elif reg_t1 is not None and disp_t1 is not None:
-            final_reg = reg_t1
-            final_sal = disp_t1
-            final_emp = max(0.0, final_reg - final_sal)
-        else:
-            final_reg = 0.0
-            final_emp = 0.0
-            final_sal = 0.0
-
-        # Garantia matemática estrita: Quantidade empenhada não pode ultrapassar a registrada
-        if final_reg > 0 and final_emp > final_reg:
-            final_emp = final_reg
-        if final_reg > 0:
-            final_sal = max(0.0, final_reg - final_emp)
-
-        def fmt_qtd(val: float) -> str:
-            if val == int(val):
-                return str(int(val))
-            return f"{val:g}"
-
-        resultado["qtd_registrada"] = fmt_qtd(final_reg)
-        resultado["qtd_empenhada"] = fmt_qtd(final_emp)
-        resultado["saldo_empenho"] = fmt_qtd(final_sal)
-        resultado["empenhos_resumo"] = " | ".join(empenhos_list) if empenhos_list else "Nenhum"
-        resultado["empenhos_lista"] = empenhos_list
-
-        # =========================================================================
-        # E) Detalhamento e Saldos da Aba "Adesões" (Carona na Ata)
-        # =========================================================================
-        limite_adesao = 0.0
-        disponivel_adesao = 0.0
-        aprovado_adesao = 0.0
-        aceita_adesao = "Não"
-        adesoes_lista = []
-
-        try:
-            tab3_elem = soup.find(id=re.compile(r"tab3|ades", re.IGNORECASE))
-            texto_tab3 = tab3_elem.get_text(" ", strip=True) if tab3_elem else ""
-            texto_completo = (texto_tab3 + " " + soup.get_text(" ", strip=True)).strip()
-
-            # 1. Indicador de aceitação de adesão
-            m_aceita = re.search(r"aceita\s*ades[aã]o\s*:\s*(sim|n[aã]o)", texto_completo, re.IGNORECASE)
-            if m_aceita:
-                aceita_adesao = "Sim" if m_aceita.group(1).lower() == "sim" else "Não"
-            elif re.search(r"ades[aã]o\s*permitida|permite\s*ades[aã]o", texto_completo, re.IGNORECASE):
-                aceita_adesao = "Sim"
-
-            # 2. Qtd limite para adesão
-            m_lim = re.search(r"(?:qtd\.?\s*limite\s*(?:informado\s*na\s*compra\s*)?(?:para)?\s*ades[aã]o|limite\s*para\s*ades[aã]o|quantidade\s*limite\s*para\s*ades[aã]o|m[aá]ximo\s*para\s*ades[oõ]es)\s*:\s*([\d\.,]+)", texto_completo, re.IGNORECASE)
-            if m_lim:
-                limite_adesao = converter_para_float(m_lim.group(1))
-
-            # 3. Quantidade disponível para adesão (saldo remanescente de carona)
-            m_disp = re.search(r"(?:quantidade\s*dispon[ií]vel\s*para\s*ades[aã]o|quantidade\s*disponivel\s*para\s*ades[aã]o|saldo\s*(?:dispon[ií]vel\s*)?(?:para|de)\s*ades[aã]o|saldo\s*remanescente\s*(?:para|de)\s*ades[aã]o)\s*:\s*([\d\.,]+)", texto_completo, re.IGNORECASE)
-            if m_disp:
-                disponivel_adesao = converter_para_float(m_disp.group(1))
-
-            # Varredura em tags específicas se não localizado em texto direto
-            if limite_adesao == 0.0 or disponivel_adesao == 0.0:
-                escopo_tags = tab3_elem.find_all(['div', 'p', 'span', 'li', 'td', 'dd', 'tr']) if tab3_elem else soup.find_all(['div', 'p', 'span', 'li', 'td', 'dd', 'tr'])
-                for el in escopo_tags:
-                    el_txt = el.get_text(" ", strip=True)
-                    if "limite" in el_txt.lower() and "ades" in el_txt.lower() and limite_adesao == 0.0:
-                        nums = re.findall(r"\b\d+(?:[\.,]\d+)?\b", el_txt)
-                        if nums:
-                            limite_adesao = converter_para_float(nums[-1])
-                    if "dispon" in el_txt.lower() and "ades" in el_txt.lower() and disponivel_adesao == 0.0:
-                        nums = re.findall(r"\b\d+(?:[\.,]\d+)?\b", el_txt)
-                        if nums:
-                            disponivel_adesao = converter_para_float(nums[-1])
-
-            # 4. Tabela de Solicitações Aprovadas de Adesão
-            tabelas_adesao = tab3_elem.find_all('table') if tab3_elem else leaf_tables
-            if not tabelas_adesao:
-                tabelas_adesao = leaf_tables
-
-            for tbl in tabelas_adesao:
-                hdr_txt = tbl.get_text(" ", strip=True).lower()
-                if any(k in hdr_txt for k in ["aprovação análise", "aprovacao analise", "quantidade aprovada", "solicitações aprovadas", "solicitacoes aprovadas"]):
-                    ths = [th.get_text(" ", strip=True).lower() for th in tbl.find_all(['th', 'td'])]
-                    idx_u_ad = -1
-                    idx_dt_ad = -1
-                    idx_qtd_ad = -1
-                    for ic, h in enumerate(ths):
-                        if "unidade" in h and idx_u_ad == -1: idx_u_ad = ic
-                        elif ("data" in h or "análise" in h or "analise" in h) and idx_dt_ad == -1: idx_dt_ad = ic
-                        elif "quantidade" in h or "aprovada" in h: idx_qtd_ad = ic
-
-                    for tr in tbl.find_all('tr'):
-                        tds = [td.get_text(" ", strip=True) for td in tr.find_all(['td', 'th'], recursive=False)]
-                        if len(tds) < 2: continue
-                        if any("quantidade aprovada" in td.lower() or "unidade" in td.lower() for td in tds):
-                            continue
-                        
-                        unid_solic = tds[idx_u_ad] if idx_u_ad != -1 and idx_u_ad < len(tds) else tds[0]
-                        data_solic = tds[idx_dt_ad] if idx_dt_ad != -1 and idx_dt_ad < len(tds) else (tds[1] if len(tds) > 1 else "")
-                        qtd_solic_str = tds[idx_qtd_ad] if idx_qtd_ad != -1 and idx_qtd_ad < len(tds) else tds[-1]
-                        
-                        qtd_f = converter_para_float(qtd_solic_str)
-                        if qtd_f > 0:
-                            aprovado_adesao += qtd_f
-                            adesoes_lista.append({
-                                "Unidade Solicitante": unid_solic,
-                                "Data Aprovação": data_solic,
-                                "Quantidade Aprovada": fmt_qtd(qtd_f)
-                            })
-
-            # 5. Consolidação Matemática de Adesão (Saldo Adesão = Limite - Aprovadas)
-            if limite_adesao > 0.0:
-                aceita_adesao = "Sim"
-                if disponivel_adesao == 0.0 and aprovado_adesao > 0.0:
-                    disponivel_adesao = max(0.0, limite_adesao - aprovado_adesao)
-                elif disponivel_adesao == 0.0 and aprovado_adesao == 0.0:
-                    disponivel_adesao = limite_adesao
-            elif disponivel_adesao > 0.0:
-                aceita_adesao = "Sim"
-                if limite_adesao == 0.0:
-                    limite_adesao = disponivel_adesao + aprovado_adesao
-
-            resultado["qtd_limite_adesao"] = fmt_qtd(limite_adesao)
-            resultado["qtd_aprovada_adesao"] = fmt_qtd(aprovado_adesao)
-            resultado["saldo_adesao"] = fmt_qtd(disponivel_adesao)
-            resultado["aceita_adesao"] = aceita_adesao
-            resultado["adesoes_solicitacoes"] = adesoes_lista
-        except Exception:
-            pass
-
-    except Exception:
-        pass
-
-    return resultado
+    return todos, None
 
 def extrair_pregoes_por_ano(session: requests.Session, uasg: str, ano: str) -> List[Dict]:
-    from bs4 import BeautifulSoup
-    payload = {
-        'method': 'pesquisar',
-        'parametro.uasg.numeroUasg': uasg.strip(),
-        'parametro.codigosModalidadeCompra': '5',
-        'parametro.anoLicitacao': str(ano).strip(),
+    """Passo 1: Lista Atas/Pregões da UASG no ano via GET /modulo-arp/1_consultarARP."""
+    uasg_clean = re.sub(r"\D", "", str(uasg or "").strip()) or str(uasg or "").strip()
+    ano_clean = str(ano).strip()
+
+    params = {
+        "codigoUnidadeGerenciadora": uasg_clean,
+        "dataVigenciaInicialMin": f"{ano_clean}-01-01",
+        "dataVigenciaInicialMax": f"{ano_clean}-12-31",
+        "tamanhoPagina": 500,
     }
+    registros, erro = _arp_get_paginado(session, URL_ARP_CONSULTA, params, timeout=30)
+    if erro and not registros:
+        raise RuntimeError(erro)
 
-    response = session.post(URL_PESQUISA_SIASG, data=payload, headers=HEADERS_HTTP, verify=False, timeout=15)
-    response.raise_for_status()
+    agrupados: Dict[Tuple[str, str, str], Dict] = {}
+    for reg in registros:
+        if reg.get("ataExcluido") is True:
+            continue
 
-    soup = BeautifulSoup(response.text, 'html.parser')
-    tabela = soup.find('table', {'id': 'licitacao'}) or soup.find('table', {'class': 'dados'})
-    if not tabela:
-        return []
+        uasg_row = str(reg.get("codigoUnidadeGerenciadora") or uasg_clean).strip()
+        num_compra = str(reg.get("numeroCompra") or "").strip()
+        ano_compra = str(reg.get("anoCompra") or ano_clean).strip()
+        if not num_compra:
+            continue
+
+        modalidade = str(reg.get("nomeModalidadeCompra") or "Pregão").strip()
+        num_licitacao = f"{num_compra}/{ano_compra}" if ano_compra else num_compra
+        num_ata = str(reg.get("numeroAtaRegistroPreco") or "").strip()
+        objeto = str(reg.get("objeto") or "").strip()
+        link_ata = str(reg.get("linkAtaPNCP") or "").strip()
+        link_compra = str(reg.get("linkCompraPNCP") or "").strip()
+        id_compra = str(reg.get("idCompra") or "").strip()
+        vig_ini = _extrair_vigencia_iso(reg.get("dataVigenciaInicial") or "")
+        vig_fim = _extrair_vigencia_iso(reg.get("dataVigenciaFinal") or "")
+
+        chave = (uasg_row, num_compra, ano_compra)
+        if chave not in agrupados:
+            agrupados[chave] = {
+                "UASG": uasg_row,
+                "Modalidade": modalidade,
+                "Nº da Licitação": num_licitacao,
+                "Ano": ano_compra,
+                "Objeto": objeto,
+                "Nº Compra": num_compra,
+                "Ano Compra": ano_compra,
+                "Código Licitação": id_compra,
+                "Link Contratos": link_compra or link_ata,
+                "Atas List": [],
+                "Atas": "",
+                "Ata Links Map": {},
+                "Vigencia Min": vig_ini or f"{ano_clean}-01-01",
+                "Vigencia Max": vig_ini or f"{ano_clean}-12-31",
+                "Vigência Inicial": vig_ini,
+                "Vigência Final": vig_fim,
+            }
+
+        entry = agrupados[chave]
+        if num_ata and num_ata not in entry["Atas List"]:
+            entry["Atas List"].append(num_ata)
+        if num_ata and link_ata:
+            entry["Ata Links Map"][num_ata] = link_ata
+        if not entry["Link Contratos"] and (link_compra or link_ata):
+            entry["Link Contratos"] = link_compra or link_ata
+        if not entry["Objeto"] and objeto:
+            entry["Objeto"] = objeto
+        if vig_ini:
+            if not entry["Vigência Inicial"] or vig_ini < entry["Vigência Inicial"]:
+                entry["Vigência Inicial"] = vig_ini
+            if vig_ini < entry["Vigencia Min"]:
+                entry["Vigencia Min"] = vig_ini
+            if vig_ini > entry["Vigencia Max"]:
+                entry["Vigencia Max"] = vig_ini
+        if vig_fim:
+            if not entry["Vigência Final"] or vig_fim > entry["Vigência Final"]:
+                entry["Vigência Final"] = vig_fim
 
     dados = []
-    for linha in tabela.find_all('tr')[1:]:
-        colunas = linha.find_all('td')
-        if len(colunas) < 5:
-            continue
-
-        uasg_row = colunas[0].get_text(strip=True)
-        if "nenhum" in uasg_row.lower():
-            continue
-
-        modalidade = colunas[1].get_text(strip=True)
-        num_licitacao = colunas[2].get_text(strip=True)
-        objeto = colunas[3].get_text(strip=True)
-
-        link_tag = colunas[4].find('a')
-        js_code = link_tag['href'] if link_tag and 'href' in link_tag.attrs else ""
-        match = re.search(r"selecionarLicitacao\s*\(\s*['\"]?(\d+)['\"]?\s*,\s*['\"]?(\d+)['\"]?\s*,\s*['\"]?(\d+)['\"]?\s*,\s*['\"]?(\d+)['\"]?\s*,\s*(\d+)", js_code)
-
-        num_compra = ""
-        ano_compra = str(ano)
-        cod_licitacao = ""
-
-        if match:
-            num_compra = match.group(3)
-            ano_compra = match.group(4)
-            cod_licitacao = match.group(5)
-        elif "/" in num_licitacao:
-            parts = num_licitacao.split("/")
-            num_compra = parts[0]
-            ano_compra = parts[1]
-
-        dados.append({
-            "UASG": uasg_row,
-            "Modalidade": modalidade,
-            "Nº da Licitação": num_licitacao,
-            "Ano": ano_compra,
-            "Objeto": objeto,
-            "Nº Compra": num_compra,
-            "Ano Compra": ano_compra,
-            "Código Licitação": cod_licitacao,
-            "Link Contratos": f"{BASE_CONTRATOS}/transparencia/arp?numeroCompra={num_compra}&anoCompra={ano_compra}"
-        })
+    for entry in agrupados.values():
+        entry["Atas List"] = sorted(entry["Atas List"])
+        entry["Atas"] = ", ".join(entry["Atas List"])
+        dados.append(entry)
 
     return dados
 
 def extrair_pregoes_siasg(uasg: str, anos: List[str]) -> Tuple[pd.DataFrame, Optional[str]]:
+    """Consulta Pregões/ARPs da UASG para os exercícios selecionados via API Dados Abertos Compras.gov.br."""
     session = get_http_session()
-    iniciar_sessao_siasg(session)
+    todos_por_chave: Dict[Tuple[str, str], Dict] = {}
+    erros: List[str] = []
 
-    todos_dados = []
-    erros = []
-
-    for ano in anos:
+    anos_validos = [str(a).strip() for a in (anos or []) if str(a).strip()]
+    for ano in anos_validos:
         try:
             dados_ano = extrair_pregoes_por_ano(session, uasg, ano)
-            todos_dados.extend(dados_ano)
+            for row in dados_ano:
+                chave = (row["UASG"], row["Nº da Licitação"])
+                if chave not in todos_por_chave:
+                    todos_por_chave[chave] = row
+                else:
+                    atual = todos_por_chave[chave]
+                    for ata in row.get("Atas List", []):
+                        if ata not in atual["Atas List"]:
+                            atual["Atas List"].append(ata)
+                    atual["Atas List"] = sorted(atual["Atas List"])
+                    atual["Atas"] = ", ".join(atual["Atas List"])
+                    atual["Ata Links Map"].update(row.get("Ata Links Map", {}))
+                    if row.get("Vigencia Min") and row["Vigencia Min"] < atual["Vigencia Min"]:
+                        atual["Vigencia Min"] = row["Vigencia Min"]
+                    if row.get("Vigencia Max") and row["Vigencia Max"] > atual["Vigencia Max"]:
+                        atual["Vigencia Max"] = row["Vigencia Max"]
+                    if row.get("Vigência Inicial") and (not atual["Vigência Inicial"] or row["Vigência Inicial"] < atual["Vigência Inicial"]):
+                        atual["Vigência Inicial"] = row["Vigência Inicial"]
+                    if row.get("Vigência Final") and (not atual["Vigência Final"] or row["Vigência Final"] > atual["Vigência Final"]):
+                        atual["Vigência Final"] = row["Vigência Final"]
+                    if not atual.get("Link Contratos") and row.get("Link Contratos"):
+                        atual["Link Contratos"] = row["Link Contratos"]
         except Exception as e:
             erros.append(f"Ano {ano}: {str(e)}")
 
+    todos_dados = list(todos_por_chave.values())
     if not todos_dados and erros:
-        return pd.DataFrame(), f"Falha na consulta: {'; '.join(erros)}"
+        return pd.DataFrame(), f"Falha na consulta à API Compras.gov.br: {'; '.join(erros)}"
 
     df = pd.DataFrame(todos_dados)
     if not df.empty:
-        df.drop_duplicates(subset=["Nº da Licitação"], inplace=True)
+        df.drop_duplicates(subset=["UASG", "Nº da Licitação"], inplace=True)
         df.sort_values(by=["Ano", "Nº da Licitação"], ascending=[False, False], inplace=True)
 
     return df, None
 
-def buscar_itens_com_saldo_real(uasg: str, num_compra: str, ano_compra: str) -> List[Dict]:
-    from bs4 import BeautifulSoup
-    session = get_http_session()
-    iniciar_sessao_siasg(session)
+def buscar_itens_com_saldo_real(
+    uasg: str,
+    num_compra: str,
+    ano_compra: str,
+    vig_min: Optional[str] = None,
+    vig_max: Optional[str] = None,
+    atas_conhecidas: Optional[List[str]] = None,
+    ata_links_map: Optional[Dict[str, str]] = None
+) -> List[Dict]:
+    """
+    Passos 2 e 3: Busca em paralelo os itens registrados (2_consultarARPItem),
+    empenhos e saldos (4_consultarEmpenhosSaldoItem), unidades/limites de adesão
+    (3_consultarUnidadesItem) e solicitações de adesão aprovadas (5_consultarAdesoesItem),
+    cruzando tudo por (numeroAtaRegistroPreco, numeroItem).
+    """
+    uasg_clean = re.sub(r"\D", "", str(uasg or "").strip()) or str(uasg or "").strip()
+    num_compra_clean = str(num_compra or "").strip()
+    ano_compra_clean = str(ano_compra or "").strip()
+    links_map = dict(ata_links_map or {})
 
-    itens_detectados = []
-    vistos = set()
+    ano_int = int(ano_compra_clean) if ano_compra_clean.isdigit() else datetime.datetime.now().year
+    vig_min_q = (vig_min or "").strip()[:10] or f"{ano_int}-01-01"
+    vig_max_q = (vig_max or "").strip()[:10] or f"{max(ano_int + 2, datetime.datetime.now().year + 1)}-12-31"
+    if vig_max_q < vig_min_q:
+        vig_max_q = f"{max(ano_int + 2, datetime.datetime.now().year + 1)}-12-31"
 
-    def parsear_pagina_itens(html: str) -> int:
-        soup = BeautifulSoup(html, 'html.parser')
-        tabela = soup.find('table', {'id': 'item'}) or soup.find('table', {'class': 'dados'})
-        if not tabela:
-            return 1
+    em_streamlit = _tem_contexto_streamlit()
+    prog_bar = st.progress(0.0) if em_streamlit else None
+    status_txt = st.empty() if em_streamlit else None
 
-        for tr in tabela.find_all('tr')[1:]:
-            tds = tr.find_all('td')
-            if len(tds) < 5:
-                continue
+    def _atualizar_ui(pct: float, msg: str) -> None:
+        if em_streamlit:
+            try:
+                if prog_bar is not None:
+                    prog_bar.progress(min(1.0, max(0.0, pct)))
+                if status_txt is not None:
+                    status_txt.text(msg)
+            except Exception:
+                pass
 
-            num_item = tds[0].get_text(strip=True)
-            tipo_item = tds[1].get_text(strip=True)
-            desc_item = tds[2].get_text(strip=True)
-            qtd_item = tds[3].get_text(strip=True)
-            unidade = tds[4].get_text(strip=True)
+    def _limpar_ui() -> None:
+        if em_streamlit:
+            try:
+                if status_txt is not None:
+                    status_txt.empty()
+                if prog_bar is not None:
+                    prog_bar.empty()
+            except Exception:
+                pass
 
-            if num_item not in vistos:
-                vistos.add(num_item)
-                itens_detectados.append({
-                    "Item": num_item,
-                    "Tipo": tipo_item,
-                    "Descrição": desc_item,
-                    "Qtd SIASG": qtd_item,
-                    "Unidade": unidade
-                })
+    def _fetch_endpoint2() -> Tuple[List[Dict], Optional[str]]:
+        sess = _get_thread_session()
+        return _arp_get_paginado(
+            sess,
+            URL_ARP_ITENS,
+            {
+                "codigoUnidadeGerenciadora": uasg_clean,
+                "numeroCompra": num_compra_clean,
+                "dataVigenciaInicialMin": vig_min_q,
+                "dataVigenciaInicialMax": vig_max_q,
+                "tamanhoPagina": 500,
+            },
+            timeout=30,
+        )
 
-        pags = re.findall(r"numeroPagina=(\d+)", html)
-        return max([int(p) for p in pags], default=1)
+    def _fetch_endpoint4_ata(num_ata: str) -> Tuple[str, List[Dict]]:
+        sess = _get_thread_session()
+        rows, _ = _arp_get_paginado(
+            sess,
+            URL_ARP_EMPENHOS_SALDO,
+            {
+                "numeroAta": num_ata,
+                "unidadeGerenciadora": uasg_clean,
+                "tamanhoPagina": 500,
+            },
+            timeout=30,
+        )
+        return num_ata, rows
+
+    def _fetch_endpoint3_item(num_ata: str, num_item_raw: str) -> List[Dict]:
+        sess = _get_thread_session()
+        rows, _ = _arp_get_paginado(
+            sess,
+            URL_ARP_UNIDADES_ITEM,
+            {
+                "numeroAta": num_ata,
+                "unidadeGerenciadora": uasg_clean,
+                "numeroItem": num_item_raw,
+                "tamanhoPagina": 500,
+            },
+            timeout=30,
+        )
+        return rows
+
+    def _fetch_endpoint5_item(num_ata: str, num_item_raw: str) -> List[Dict]:
+        sess = _get_thread_session()
+        rows, _ = _arp_get_paginado(
+            sess,
+            URL_ARP_ADESOES_ITEM,
+            {
+                "numeroAta": num_ata,
+                "unidadeGerenciadora": uasg_clean,
+                "numeroItem": num_item_raw,
+                "tamanhoPagina": 500,
+            },
+            timeout=30,
+        )
+        return rows
 
     try:
-        url_itens = (
-            f"{URL_ITENS_SIASG}?method=iniciar"
-            f"&parametro.identificacaoCompra.numeroUasg={uasg.strip()}"
-            f"&parametro.identificacaoCompra.modalidadeCompra=5"
-            f"&parametro.identificacaoCompra.numeroCompra={num_compra}"
-            f"&parametro.identificacaoCompra.anoCompra={ano_compra}"
-        )
-        res = session.get(url_itens, headers=HEADERS_HTTP, verify=False, timeout=15)
-        max_pags = parsear_pagina_itens(res.text)
+        _atualizar_ui(0.05, f"Consultando itens e saldos do pregão {num_compra_clean}/{ano_compra_clean} na API Compras.gov.br...")
 
-        for p in range(2, max_pags + 1):
-            url_p = (
-                f"{URL_ITENS_SIASG}?parametro.identificacaoCompra.anoCompra={ano_compra}"
-                f"&numeroPagina={p}&parametro.identificacaoCompra.numeroUasg={uasg.strip()}"
-                f"&parametro.identificacaoCompra.modalidadeCompra=5&method=consultarPorFiltro"
-                f"&parametro.identificacaoCompra.numeroCompra={num_compra}"
-            )
-            r_p = session.get(url_p, headers=HEADERS_HTTP, verify=False, timeout=12)
-            if r_p.ok:
-                parsear_pagina_itens(r_p.text)
+        atas_iniciais = sorted({str(a).strip() for a in (atas_conhecidas or []) if str(a).strip()})
+        empenhos_por_ata: Dict[str, List[Dict]] = {}
+        itens_api: List[Dict] = []
+        erro_ep2: Optional[str] = None
 
-        if not itens_detectados:
-            return []
+        # Disparo paralelo inicial: Endpoint 2 (itens da compra) + Endpoint 4 (empenhos/saldos das atas conhecidas)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(3, min(10, 1 + len(atas_iniciais)))) as executor:
+            fut_ep2 = executor.submit(_fetch_endpoint2)
+            futs_ep4 = {executor.submit(_fetch_endpoint4_ata, ata): ata for ata in atas_iniciais}
 
-        itens_detectados.sort(key=lambda x: int(x["Item"]) if x["Item"].isdigit() else 9999)
-
-        total_it = len(itens_detectados)
-        prog_bar = st.progress(0.0)
-        status_txt = st.empty()
-
-        status_txt.text(f"Mapeando Atas de Registro de Preços no Contratos.gov.br ({total_it} itens detectados)...")
-        atas_pregao = buscar_atas_contratos(session, uasg, num_compra, ano_compra)
-
-        def processar_item_individual(it: Dict) -> Dict:
-            try:
-                # Cada thread de scraping usa uma sessão HTTP dedicada com timeout ágil
-                thread_sess = get_http_session()
-                saldo_info = obter_saldo_item_contratos(thread_sess, uasg, num_compra, ano_compra, it["Item"], atas=atas_pregao)
-
-                # Se o item é deserto/fracassado:
-                if saldo_info.get("deserto", False):
-                    qtd_registrada_final = "0"
-                    qtd_empenhada_final = "0"
-                    saldo_empenho_calc = "0"
-                    fornecedor_display = "Deserto / Fracassado"
-                    ata_vinculada = "-"
-                    pdf_ata = ""
-                else:
-                    raw_reg = str(saldo_info.get("qtd_registrada", "0")).strip()
-                    if raw_reg == "0" or raw_reg == uasg.strip() or any(c.isalpha() for c in raw_reg):
-                        qtd_registrada_final = it.get("Qtd SIASG", "0")
-                    else:
-                        qtd_registrada_final = raw_reg
-
-                    qtd_empenhada_final = str(saldo_info.get("qtd_empenhada", "0")).strip()
-                    saldo_empenho_calc = str(saldo_info.get("saldo_empenho", "0")).strip()
-
-                    # Aplicação rigorosa da fórmula oficial: Saldo = Registrada - Empenhada
-                    f_reg = converter_para_float(qtd_registrada_final)
-                    f_emp = converter_para_float(qtd_empenhada_final)
-                    f_sal = converter_para_float(saldo_empenho_calc)
-
-                    # Se a quantidade empenhada exceder a registrada (anomalia de scraping), limita ao teto registrado
-                    if f_reg > 0 and f_emp > f_reg:
-                        f_emp = f_reg
-                        qtd_empenhada_final = f"{f_emp:g}"
-
-                    # Se saldo oficial da unidade foi capturado e empenho direto estava 0
-                    if f_sal > 0 and f_emp == 0 and f_reg > f_sal:
-                        f_emp = max(0.0, f_reg - f_sal)
-                        qtd_empenhada_final = f"{f_emp:g}"
-                    else:
-                        f_sal = max(0.0, f_reg - f_emp)
-                        saldo_empenho_calc = f"{f_sal:g}"
-
-                    # Resolução do Fornecedor e CNPJ
-                    cnpj_puro = str(saldo_info.get("cnpj_puro", "")).strip()
-                    forn_puro = str(saldo_info.get("fornecedor_puro", "")).strip()
-
-                    if forn_puro and cnpj_puro and forn_puro != cnpj_puro:
-                        fornecedor_display = f"{forn_puro} ({cnpj_puro})"
-                    elif forn_puro and not cnpj_puro:
-                        fornecedor_display = forn_puro
-                    elif cnpj_puro and not forn_puro:
-                        fornecedor_display = cnpj_puro
-                    else:
-                        fornecedor_display = saldo_info.get("fornecedor") or "Deserto / Fracassado"
-
-                    ata_vinculada = saldo_info.get("numero_ata") or "Não identificada"
-                    pdf_ata = saldo_info.get("pdf_ata", "")
-
-                desc_final = saldo_info.get("descricao_detalhada_ata") or it.get("Descrição", "")
-                desc_final = limpar_descricao_ata(desc_final)
-
-                return {
-                    "Item": it["Item"],
-                    "Tipo": it.get("Tipo", "Material"),
-                    "Descrição": desc_final,
-                    "Descrição Curta SIASG": limpar_descricao_ata(it.get("Descrição", "")),
-                    "Unidade": it.get("Unidade", ""),
-                    "Qtd Registrada": qtd_registrada_final,
-                    "Qtd Empenhada": qtd_empenhada_final,
-                    "Saldo p/ Empenho": saldo_empenho_calc,
-                    "Qtd para Adesão": saldo_info.get("qtd_limite_adesao", "0"),
-                    "Saldo para Adesão": saldo_info.get("saldo_adesao", "0"),
-                    "Adesões Aprovadas": saldo_info.get("qtd_aprovada_adesao", "0"),
-                    "Aceita Adesão": saldo_info.get("aceita_adesao", "Não"),
-                    "adesoes_solicitacoes": saldo_info.get("adesoes_solicitacoes", []),
-                    "Ata Vinculada": ata_vinculada,
-                    "Fornecedor": fornecedor_display,
-                    "Fornecedor Puro": saldo_info.get("fornecedor_puro", ""),
-                    "CNPJ Puro": saldo_info.get("cnpj_puro", ""),
-                    "Valor Unitário": saldo_info.get("valor_unitario_sugerido", 0.0),
-                    "Valor Unitario Sugerido": saldo_info.get("valor_unitario_sugerido", 0.0),
-                    "PDF da Ata": pdf_ata,
-                    "Empenhos": saldo_info.get("empenhos_resumo", "Nenhum"),
-                    "empenhos_lista": saldo_info.get("empenhos_lista", [])
-                }
-            except Exception:
-                # Fallback resiliente: falhas pontuais de rede nunca derrubam a lista geral
-                return {
-                    "Item": it["Item"],
-                    "Tipo": it.get("Tipo", "Material"),
-                    "Descrição": limpar_descricao_ata(it.get("Descrição", "")),
-                    "Descrição Curta SIASG": limpar_descricao_ata(it.get("Descrição", "")),
-                    "Unidade": it.get("Unidade", ""),
-                    "Qtd Registrada": it.get("Qtd SIASG", "0"),
-                    "Qtd Empenhada": "0",
-                    "Saldo p/ Empenho": it.get("Qtd SIASG", "0"),
-                    "Qtd para Adesão": "0",
-                    "Saldo para Adesão": "0",
-                    "Adesões Aprovadas": "0",
-                    "Aceita Adesão": "Não",
-                    "adesoes_solicitacoes": [],
-                    "Ata Vinculada": "Não identificada",
-                    "Fornecedor": "Em apuração",
-                    "Fornecedor Puro": "",
-                    "CNPJ Puro": "",
-                    "Valor Unitário": 0.0,
-                    "Valor Unitario Sugerido": 0.0,
-                    "PDF da Ata": "",
-                    "Empenhos": "Nenhum",
-                    "empenhos_lista": []
-                }
-
-        # Execução concorrente com ThreadPoolExecutor: 60 itens passam de ~90s para ~12s
-        max_workers = min(6, total_it)
-        resultados_map = {}
-        concluidos = 0
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_item = {executor.submit(processar_item_individual, it): it["Item"] for it in itens_detectados}
-            for future in concurrent.futures.as_completed(future_to_item):
+            itens_api, erro_ep2 = fut_ep2.result()
+            for fut in concurrent.futures.as_completed(futs_ep4):
                 try:
-                    res_item = future.result()
-                    if res_item:
-                        resultados_map[res_item["Item"]] = res_item
+                    ata_res, rows_ep4 = fut.result()
+                    empenhos_por_ata[ata_res] = rows_ep4
                 except Exception:
                     pass
 
+        if erro_ep2 and not itens_api:
+            _limpar_ui()
+            if em_streamlit:
+                st.error(f"Erro ao consultar itens na API Compras.gov.br: {erro_ep2}")
+            return []
+
+        # Filtrar itens válidos do pregão/ano alvo e deduplicar por (numeroAtaRegistroPreco, numeroItem_norm)
+        itens_filtrados: List[Dict] = []
+        chaves_vistas = set()
+        for it in itens_api:
+            if it.get("itemExcluido") is True:
+                continue
+            it_ano = str(it.get("anoCompra") or "").strip()
+            if ano_compra_clean and it_ano and it_ano != ano_compra_clean:
+                continue
+
+            ata_it = str(it.get("numeroAtaRegistroPreco") or "").strip()
+            item_raw = str(it.get("numeroItem") or "").strip()
+            item_norm = _norm_item_num(item_raw)
+            if not item_norm:
+                continue
+
+            chave_cruzamento = (ata_it, item_norm)
+            if chave_cruzamento in chaves_vistas:
+                continue
+            chaves_vistas.add(chave_cruzamento)
+            itens_filtrados.append(it)
+
+        if not itens_filtrados:
+            _limpar_ui()
+            return []
+
+        # Se Endpoint 2 trouxe alguma Ata que ainda não foi consultada no Endpoint 4, busca em paralelo agora
+        atas_descobertas = sorted({
+            str(it.get("numeroAtaRegistroPreco") or "").strip()
+            for it in itens_filtrados
+            if str(it.get("numeroAtaRegistroPreco") or "").strip()
+        })
+        atas_faltantes = [a for a in atas_descobertas if a not in empenhos_por_ata]
+        if atas_faltantes:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(atas_faltantes))) as executor:
+                for ata_res, rows_ep4 in executor.map(_fetch_endpoint4_ata, atas_faltantes):
+                    empenhos_por_ata[ata_res] = rows_ep4
+
+        # Indexar Endpoint 4 por (numeroAta, numeroItem_norm) priorizando a UASG pesquisada / GERENCIADORA
+        mapa_empenhos: Dict[Tuple[str, str], Dict] = {}
+        for ata_k, rows_ep4 in empenhos_por_ata.items():
+            candidatos_por_item: Dict[str, List[Dict]] = {}
+            for r4 in rows_ep4:
+                n_norm = _norm_item_num(r4.get("numeroItem"))
+                if not n_norm:
+                    continue
+                candidatos_por_item.setdefault(n_norm, []).append(r4)
+
+            for n_norm, cand_list in candidatos_por_item.items():
+                escolhido = None
+                for r4 in cand_list:
+                    unid_str = str(r4.get("unidade") or "")
+                    if re.search(rf"\b{re.escape(uasg_clean)}\b", unid_str):
+                        escolhido = r4
+                        break
+                if escolhido is None:
+                    for r4 in cand_list:
+                        if str(r4.get("tipo") or "").strip().upper() == "GERENCIADORA":
+                            escolhido = r4
+                            break
+                if escolhido is None and cand_list:
+                    escolhido = cand_list[0]
+                if escolhido is not None:
+                    mapa_empenhos[(ata_k, n_norm)] = escolhido
+
+        # Ordenar itens pelo número do item e ata
+        itens_filtrados.sort(key=lambda x: (
+            int(_norm_item_num(x.get("numeroItem"))) if _norm_item_num(x.get("numeroItem")).isdigit() else 999999,
+            str(x.get("numeroAtaRegistroPreco") or "")
+        ))
+
+        total_it = len(itens_filtrados)
+        _atualizar_ui(0.25, f"Apurando saldos e limites de adesão de {total_it} itens via API Compras.gov.br...")
+
+        def _processar_item_api(it: Dict) -> Dict:
+            ata_it = str(it.get("numeroAtaRegistroPreco") or "").strip()
+            item_raw = str(it.get("numeroItem") or "").strip()
+            item_norm = _norm_item_num(item_raw)
+            chave = (ata_it, item_norm)
+
+            # 1) Consultar Endpoint 3 (saldos da unidade e limites de adesão - resposta rápida ~1s)
+            rows_u: List[Dict] = []
+            if ata_it and item_raw:
+                try:
+                    rows_u = _fetch_endpoint3_item(ata_it, item_raw)
+                except Exception:
+                    rows_u = []
+
+            row_u_alvo: Optional[Dict] = None
+            for ru in rows_u:
+                if str(ru.get("codigoUnidade") or "").strip() == uasg_clean:
+                    row_u_alvo = ru
+                    break
+            if row_u_alvo is None:
+                for ru in rows_u:
+                    if str(ru.get("tipoUnidade") or "").strip().upper() == "GERENCIADORA":
+                        row_u_alvo = ru
+                        break
+            if row_u_alvo is None and rows_u:
+                row_u_alvo = rows_u[0]
+
+            # 2) Quantidade Registrada, Empenhada e Saldo p/ Empenho (Endpoint 4 -> Endpoint 3 -> Endpoint 2)
+            row_ep4 = mapa_empenhos.get(chave)
+
+            qtd_reg = 0.0
+            if row_ep4 and row_ep4.get("quantidadeRegistrada") is not None:
+                qtd_reg = float(row_ep4.get("quantidadeRegistrada") or 0.0)
+            elif row_u_alvo and row_u_alvo.get("quantidadeRegistrada") is not None:
+                qtd_reg = float(row_u_alvo.get("quantidadeRegistrada") or 0.0)
+            else:
+                v_venc = it.get("quantidadeHomologadaVencedor")
+                v_item = it.get("quantidadeHomologadaItem")
+                qtd_reg = float(v_venc if v_venc is not None else (v_item or 0.0))
+            qtd_reg = max(0.0, qtd_reg)
+
+            empenhos_lista: List[str] = []
+            if row_ep4:
+                qtd_emp = max(0.0, float(row_ep4.get("quantidadeEmpenhada") or 0.0))
+                sal_ep4 = row_ep4.get("saldoEmpenho")
+                if sal_ep4 is not None:
+                    # Garantia: API pode retornar saldo negativo (ex.: -28.0); clamp em 0 para não virar positivo
+                    saldo_emp = max(0.0, float(sal_ep4))
+                else:
+                    saldo_emp = max(0.0, qtd_reg - qtd_emp)
+
+                if qtd_emp > 0:
+                    unid_lbl = str(row_ep4.get("unidade") or f"UASG {uasg_clean}").strip()
+                    empenhos_lista.append(
+                        f"{unid_lbl}: Qtd Emp {_fmt_qtd_api(qtd_emp)} | Saldo {_fmt_qtd_api(saldo_emp)}"
+                    )
+            elif row_u_alvo and row_u_alvo.get("saldoRemanejamentoEmpenho") is not None:
+                saldo_emp = max(0.0, float(row_u_alvo.get("saldoRemanejamentoEmpenho") or 0.0))
+                qtd_emp = max(0.0, qtd_reg - saldo_emp)
+            else:
+                qtd_emp = max(0.0, float(it.get("quantidadeEmpenhada") or 0.0))
+                saldo_emp = max(0.0, qtd_reg - qtd_emp)
+
+            # 3) Adesões (Caronas): Limite, Saldo e Solicitações Aprovadas (Endpoint 3 + Endpoint 5 quando necessário)
+            if row_u_alvo:
+                limite_adesao = max(0.0, float(
+                    row_u_alvo.get("qtdLimiteAdesao")
+                    if row_u_alvo.get("qtdLimiteAdesao") is not None
+                    else (row_u_alvo.get("qtdLimiteInformadoCompra") or it.get("maximoAdesao") or 0.0)
+                ))
+                saldo_adesao = max(0.0, float(
+                    row_u_alvo.get("saldoAdesoes")
+                    if row_u_alvo.get("saldoAdesoes") is not None
+                    else limite_adesao
+                ))
+                aceita_flag = row_u_alvo.get("aceitaAdesao")
+            else:
+                limite_adesao = max(0.0, float(it.get("maximoAdesao") or 0.0))
+                saldo_adesao = limite_adesao
+                aceita_flag = limite_adesao > 0
+
+            aprovado_adesao = max(0.0, limite_adesao - saldo_adesao) if row_u_alvo else 0.0
+            adesoes_lista: List[Dict] = []
+
+            # Só aciona Endpoint 5 quando há indício de adesões aprovadas (limite > saldo) ou se Endpoint 3 não respondeu
+            precisa_ep5 = bool(ata_it and item_raw and ((row_u_alvo is not None and limite_adesao > saldo_adesao) or (row_u_alvo is None and limite_adesao > 0)))
+            if precisa_ep5:
+                try:
+                    rows_ep5 = _fetch_endpoint5_item(ata_it, item_raw)
+                except Exception:
+                    rows_ep5 = []
+                soma_ep5 = 0.0
+                for r5 in rows_ep5:
+                    q_aprov = max(0.0, float(r5.get("quantidadeAprovadaAdesao") or 0.0))
+                    if q_aprov > 0:
+                        soma_ep5 += q_aprov
+                        dt_ap = str(r5.get("dataAprovacaoAnalise") or "").strip()[:10]
+                        adesoes_lista.append({
+                            "Unidade Solicitante": str(r5.get("unidadeNaoParticipante") or "Não informada").strip(),
+                            "Data Aprovação": dt_ap,
+                            "Quantidade Aprovada": _fmt_qtd_api(q_aprov)
+                        })
+                if soma_ep5 > 0:
+                    aprovado_adesao = soma_ep5
+                    if row_u_alvo is None or row_u_alvo.get("saldoAdesoes") is None:
+                        saldo_adesao = max(0.0, limite_adesao - aprovado_adesao)
+
+            aceita_adesao_str = "Sim" if (aceita_flag is True or limite_adesao > 0 or saldo_adesao > 0) else "Não"
+
+            # 4) Descrição, Fornecedor, CNPJ, Valor Unitário e PDF/Link da Ata
+            desc_bruta = str(it.get("descricaoItem") or "").strip()
+            desc_limpa = limpar_descricao_ata(desc_bruta) or desc_bruta
+
+            cnpj_raw = str(it.get("niFornecedor") or "").strip()
+            cnpj_dig = re.sub(r"\D", "", cnpj_raw)
+            cnpj_puro = formatar_cnpj(cnpj_dig) if cnpj_dig else ""
+            forn_puro = str(it.get("nomeRazaoSocialFornecedor") or "").strip()
+
+            if forn_puro and cnpj_puro and forn_puro != cnpj_puro:
+                fornecedor_display = f"{forn_puro} ({cnpj_puro})"
+            elif forn_puro:
+                fornecedor_display = forn_puro
+            elif cnpj_puro:
+                fornecedor_display = cnpj_puro
+            else:
+                fornecedor_display = "Não informado"
+
+            try:
+                vlr_unit = float(it.get("valorUnitario") or 0.0)
+            except Exception:
+                vlr_unit = 0.0
+
+            tipo_item = str(it.get("tipoItem") or "Material").strip()
+            unid_forn = str(
+                it.get("unidadeFornecimento")
+                or it.get("unidadeMedida")
+                or ("SV" if tipo_item.lower().startswith("serv") else "UN")
+            ).strip()
+
+            pdf_ata = links_map.get(ata_it, "") or ""
+
+            return {
+                "Item": item_norm,
+                "Tipo": tipo_item,
+                "Descrição": desc_limpa,
+                "Descrição Curta SIASG": desc_limpa,
+                "Unidade": unid_forn,
+                "Qtd Registrada": _fmt_qtd_api(qtd_reg),
+                "Qtd Empenhada": _fmt_qtd_api(qtd_emp),
+                "Saldo p/ Empenho": _fmt_qtd_api(saldo_emp),
+                "Qtd para Adesão": _fmt_qtd_api(limite_adesao),
+                "Saldo para Adesão": _fmt_qtd_api(saldo_adesao),
+                "Adesões Aprovadas": _fmt_qtd_api(aprovado_adesao),
+                "Aceita Adesão": aceita_adesao_str,
+                "adesoes_solicitacoes": adesoes_lista,
+                "Ata Vinculada": ata_it or "Não identificada",
+                "Fornecedor": fornecedor_display,
+                "Fornecedor Puro": forn_puro,
+                "CNPJ Puro": cnpj_puro,
+                "Valor Unitário": vlr_unit,
+                "Valor Unitario Sugerido": vlr_unit,
+                "PDF da Ata": pdf_ata,
+                "Empenhos": " | ".join(empenhos_lista) if empenhos_lista else "Nenhum",
+                "empenhos_lista": empenhos_lista,
+            }
+
+        max_workers = min(12, max(1, total_it))
+        resultados_map: Dict[Tuple[str, str], Dict] = {}
+        concluidos = 0
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_key = {
+                executor.submit(_processar_item_api, it): (
+                    str(it.get("numeroAtaRegistroPreco") or "").strip(),
+                    _norm_item_num(it.get("numeroItem"))
+                )
+                for it in itens_filtrados
+            }
+            for future in concurrent.futures.as_completed(future_to_key):
+                k = future_to_key[future]
+                try:
+                    res_item = future.result()
+                    if res_item:
+                        resultados_map[k] = res_item
+                except Exception:
+                    pass
                 concluidos += 1
-                progresso = min(1.0, concluidos / max(1, total_it))
-                prog_bar.progress(progresso)
-                status_txt.text(f"Consultando Contratos.gov.br: {concluidos} de {total_it} itens apurados...")
+                progresso = 0.25 + 0.75 * (concluidos / max(1, total_it))
+                _atualizar_ui(progresso, f"API Compras.gov.br: {concluidos} de {total_it} itens apurados...")
 
-        # Reordenar mantendo a ordem numérica original dos itens
-        dados_finais = [resultados_map[it["Item"]] for it in itens_detectados if it["Item"] in resultados_map]
+        dados_finais = []
+        for it in itens_filtrados:
+            k = (str(it.get("numeroAtaRegistroPreco") or "").strip(), _norm_item_num(it.get("numeroItem")))
+            if k in resultados_map:
+                dados_finais.append(resultados_map[k])
 
-        status_txt.empty()
-        prog_bar.empty()
+        _limpar_ui()
         return dados_finais
 
     except Exception as e:
-        st.error(f"Erro ao obter itens do pregão: {str(e)}")
-        if 'resultados_map' in locals() and resultados_map:
-            return [resultados_map[it["Item"]] for it in itens_detectados if it["Item"] in resultados_map]
+        _limpar_ui()
+        if em_streamlit:
+            st.error(f"Erro ao obter itens do pregão: {str(e)}")
         return []
+
 
 # =====================================================================
 # 5. GERADORES DE PLANILHAS COMPLETAS (OPENPYXL COM FORMATAÇÃO COMPLETA)
@@ -5804,8 +5545,8 @@ with tab_visao_global:
 # ABA 4: CONSULTA DE PREGÕES & IMPORTAÇÃO DIRETA PARA NOTA DE CRÉDITO
 # =====================================================================
 with tab_consulta_pregoes:
-    st.subheader("🔎 Consulta de Pregões no SIASGnet e Contratos.gov.br")
-    st.caption("Consulte os pregões da UASG, veja saldos reais de empenho e **importe itens diretamente para suas Notas de Crédito** em 1 clique!")
+    st.subheader("🔎 Consulta de Pregões e Atas (API Dados Abertos Compras.gov.br)")
+    st.caption("Consulte os pregões/ARPs da UASG, veja saldos reais de empenho e adesão (carona) e **importe itens diretamente para suas Notas de Crédito** em 1 clique!")
 
     col_u1, col_u2, col_u3 = st.columns([2, 3, 2])
     with col_u1:
@@ -5814,7 +5555,7 @@ with tab_consulta_pregoes:
         ano_now = datetime.datetime.now().year
         lista_exercicios = [str(ano_now + 1)] + [str(ano_now - i) for i in range(6)]
         anos_pregoes = st.multiselect(
-            "Exercícios (Anos):",
+            "Exercícios (Início da Vigência das Atas):",
             options=lista_exercicios,
             default=[str(ano_now), str(ano_now - 1)],
             key="multisel_anos_pregoes"
@@ -5830,12 +5571,12 @@ with tab_consulta_pregoes:
         st.session_state['itens_carregados_pregoes'] = {}
 
     if btn_rodar_busca:
-        with st.spinner(f"Consultando SIASGnet para a UASG {uasg_busca}..."):
+        with st.spinner(f"Consultando API Compras.gov.br (Módulo ARP) para a UASG {uasg_busca}..."):
             df_pregoes_res, err_msg = extrair_pregoes_siasg(uasg_busca, anos_pregoes)
             if err_msg:
                 st.error(err_msg)
             elif df_pregoes_res.empty:
-                st.warning(f"Nenhum pregão encontrado para a UASG {uasg_busca}.")
+                st.warning(f"Nenhum pregão/ata encontrado para a UASG {uasg_busca} nos exercícios selecionados.")
                 st.session_state['df_pregoes_busca'] = pd.DataFrame()
             else:
                 st.session_state['df_pregoes_busca'] = df_pregoes_res
@@ -5849,23 +5590,46 @@ with tab_consulta_pregoes:
 
         for idx_p, row_p in df_pregoes_atual.iterrows():
             chave_p = f"{row_p['UASG']}_{row_p['Nº da Licitação']}"
-            with st.expander(f"📦 Pregão {row_p['Nº da Licitação']} ({row_p['Ano']}) — {row_p['Objeto'][:100]}..."):
-                st.write(f"**Objeto Completo:** {row_p['Objeto']}")
-                
+            obj_txt = str(row_p.get('Objeto') or 'Sem objeto informado').strip()
+            with st.expander(f"📦 Pregão {row_p['Nº da Licitação']} ({row_p['Ano']}) — {obj_txt[:100]}..."):
+                st.write(f"**Objeto Completo:** {obj_txt}")
+                atas_str = str(row_p.get('Atas') or '').strip()
+                vig_ini_str = str(row_p.get('Vigência Inicial') or '').strip()
+                vig_fim_str = str(row_p.get('Vigência Final') or '').strip()
+                if atas_str or vig_ini_str:
+                    info_meta = []
+                    if atas_str:
+                        info_meta.append(f"**Atas (ARP):** {atas_str}")
+                    if vig_ini_str and vig_fim_str:
+                        info_meta.append(f"**Vigência:** {vig_ini_str} até {vig_fim_str}")
+                    st.caption(" | ".join(info_meta))
+
                 c_p1, c_p2 = st.columns([3, 4])
                 with c_p1:
                     itens_existentes = st.session_state['itens_carregados_pregoes'].get(chave_p, [])
                     btn_rotulo = f"🔄 Recarregar Itens ({len(itens_existentes)} carregados)" if itens_existentes else "🔍 Carregar Itens e Saldos Reais"
                     btn_itens_p = st.button(btn_rotulo, key=f"btn_it_{chave_p}", type="primary" if not itens_existentes else "secondary")
                 with c_p2:
-                    st.markdown(f"[📋 Acessar no Contratos.gov.br]({row_p['Link Contratos']})")
+                    link_pncp = str(row_p.get('Link Contratos') or '').strip()
+                    if link_pncp:
+                        st.markdown(f"[📋 Acessar Compra no PNCP]({link_pncp})")
 
                 if btn_itens_p:
-                    with st.spinner("Varrendo itens e apurando saldos no Contratos.gov.br (processamento acelerado)..."):
-                        itens_det = buscar_itens_com_saldo_real(st.session_state.get('uasg_pesquisada', uasg_busca), row_p['Nº Compra'], row_p['Ano Compra'])
+                    with st.spinner("Consultando itens, empenhos e adesões em paralelo na API Compras.gov.br..."):
+                        itens_det = buscar_itens_com_saldo_real(
+                            st.session_state.get('uasg_pesquisada', uasg_busca),
+                            row_p['Nº Compra'],
+                            row_p['Ano Compra'],
+                            vig_min=row_p.get('Vigencia Min'),
+                            vig_max=row_p.get('Vigencia Max'),
+                            atas_conhecidas=row_p.get('Atas List'),
+                            ata_links_map=row_p.get('Ata Links Map')
+                        )
                         if itens_det:
                             st.session_state['itens_carregados_pregoes'][chave_p] = itens_det
                             st.rerun()
+                        else:
+                            st.warning("Nenhum item localizado para este pregão na API Dados Abertos Compras.gov.br.")
 
                 if chave_p in st.session_state['itens_carregados_pregoes']:
                     itens_pr = st.session_state['itens_carregados_pregoes'][chave_p]
@@ -5941,8 +5705,8 @@ with tab_consulta_pregoes:
                                     help="Informa se o item aceita adesão/carona"
                                 ),
                                 "PDF da Ata": st.column_config.LinkColumn(
-                                    "Ata Oficial (PDF)",
-                                    display_text="📥 Abrir Ata (PDF)"
+                                    "Ata Oficial (PNCP)",
+                                    display_text="📥 Abrir Ata (PNCP)"
                                 )
                             }
                         )
