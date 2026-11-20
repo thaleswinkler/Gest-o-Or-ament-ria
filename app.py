@@ -2542,17 +2542,35 @@ def consultar_razao_social_cnpj(cnpj: str) -> str:
 # =====================================================================
 import threading as _threading_arp
 _arp_thread_local = _threading_arp.local()
+_arp_rl_lock = _threading_arp.Lock()
+_arp_cooldown_until = 0.0
+
+def _aguardar_cooldown_arp() -> None:
+    with _arp_rl_lock:
+        alvo = _arp_cooldown_until
+    agora = time.monotonic()
+    if alvo > agora:
+        time.sleep(min(alvo - agora, 8.5))
+
+def _registrar_cooldown_arp(segundos: float) -> float:
+    esp = max(2.0, min(float(segundos), 9.0))
+    novo_alvo = time.monotonic() + esp
+    with _arp_rl_lock:
+        global _arp_cooldown_until
+        if novo_alvo > _arp_cooldown_until:
+            _arp_cooldown_until = novo_alvo
+    return esp
 
 def _criar_sessao_http() -> requests.Session:
     session = requests.Session()
     retry = Retry(
-        total=4,
-        connect=3,
+        total=2,
+        connect=2,
         read=0,
-        status=4,
-        backoff_factor=1.5,
+        status=1,
+        backoff_factor=0.5,
         respect_retry_after_header=True,
-        status_forcelist=[429, 500, 502, 503, 504],
+        status_forcelist=[500, 502, 503, 504],
         allowed_methods=["HEAD", "GET", "OPTIONS", "POST"]
     )
     adapter = HTTPAdapter(max_retries=retry, pool_connections=16, pool_maxsize=16)
@@ -2605,48 +2623,92 @@ def _arp_get_paginado(
     session: requests.Session,
     url: str,
     base_params: Dict,
-    timeout: int = 30
+    timeout: int = 14
 ) -> Tuple[List[Dict], Optional[str]]:
-    """Executa GET paginado na API Dados Abertos Compras.gov.br verificando paginasRestantes."""
+    """Executa GET paginado na API Dados Abertos Compras.gov.br com controle de 429, ReadTimeout e paginasRestantes."""
     todos: List[Dict] = []
     pagina = 1
     while pagina <= 50:
         params = dict(base_params)
         params["pagina"] = pagina
         params["tamanhoPagina"] = int(params.get("tamanhoPagina") or 500)
-        try:
-            res = session.get(url, params=params, headers=HEADERS_API, timeout=timeout)
-            if res.status_code == 204 or not res.text or not res.text.strip():
-                break
-            if not res.ok:
-                msg_err = f"HTTP {res.status_code}"
-                try:
-                    err_json = res.json()
-                    if isinstance(err_json, dict):
-                        msg_err = err_json.get("message") or err_json.get("mensagem") or err_json.get("error") or msg_err
-                except Exception:
-                    pass
-                return todos, msg_err
 
-            data = res.json()
-            if not isinstance(data, dict):
-                break
-            resultado = data.get("resultado") or []
-            if isinstance(resultado, list) and resultado:
-                todos.extend(resultado)
+        data = None
+        encerrou_pagina = False
+        ultimo_erro: Optional[str] = None
 
+        for tentativa in range(1, 4):
+            _aguardar_cooldown_arp()
             try:
-                paginas_restantes = int(data.get("paginasRestantes") or 0)
-            except Exception:
-                paginas_restantes = 0
+                res = session.get(url, params=params, headers=HEADERS_API, timeout=(6, timeout))
+                if res.status_code == 429:
+                    ra_raw = str(res.headers.get("Retry-After") or "").strip()
+                    try:
+                        ra_val = float(ra_raw) if ra_raw else (2.5 * tentativa)
+                    except Exception:
+                        ra_val = 2.5 * tentativa
+                    esp = _registrar_cooldown_arp(ra_val)
+                    ultimo_erro = f"HTTP 429 (Limite de requisições da API Compras.gov.br; aguarde {esp:.0f}s)"
+                    if tentativa < 3:
+                        time.sleep(esp)
+                        continue
+                    return todos, ultimo_erro
 
-            if paginas_restantes <= 0 or not resultado:
+                if res.status_code == 204 or not res.text or not res.text.strip():
+                    encerrou_pagina = True
+                    ultimo_erro = None
+                    break
+
+                if res.status_code in (500, 502, 503, 504) and tentativa < 2:
+                    ultimo_erro = f"HTTP {res.status_code}"
+                    time.sleep(1.0)
+                    continue
+
+                if not res.ok:
+                    msg_err = f"HTTP {res.status_code}"
+                    try:
+                        err_json = res.json()
+                        if isinstance(err_json, dict):
+                            msg_err = err_json.get("message") or err_json.get("mensagem") or err_json.get("error") or msg_err
+                    except Exception:
+                        pass
+                    return todos, msg_err
+
+                data = res.json()
+                ultimo_erro = None
                 break
-            pagina += 1
-        except requests.exceptions.Timeout:
-            return todos, "Tempo limite excedido (timeout=30s) ao consultar a API do Compras.gov.br."
-        except Exception as e:
-            return todos, str(e)
+            except requests.exceptions.Timeout:
+                ultimo_erro = f"Tempo limite excedido (timeout={timeout}s) ao consultar a API do Compras.gov.br."
+                if tentativa < 2:
+                    time.sleep(0.8)
+                    continue
+                return todos, ultimo_erro
+            except Exception as e:
+                ultimo_erro = str(e)
+                if tentativa < 2 and ("timed out" in ultimo_erro.lower() or "connection" in ultimo_erro.lower()):
+                    time.sleep(0.8)
+                    continue
+                return todos, ultimo_erro
+
+        if encerrou_pagina:
+            break
+        if ultimo_erro:
+            return todos, ultimo_erro
+        if not isinstance(data, dict):
+            break
+
+        resultado = data.get("resultado") or []
+        if isinstance(resultado, list) and resultado:
+            todos.extend(resultado)
+
+        try:
+            paginas_restantes = int(data.get("paginasRestantes") or 0)
+        except Exception:
+            paginas_restantes = 0
+
+        if paginas_restantes <= 0 or not resultado:
+            break
+        pagina += 1
 
     return todos, None
 
@@ -2661,7 +2723,7 @@ def extrair_pregoes_por_ano(session: requests.Session, uasg: str, ano: str) -> L
         "dataVigenciaInicialMax": f"{ano_clean}-12-31",
         "tamanhoPagina": 500,
     }
-    registros, erro = _arp_get_paginado(session, URL_ARP_CONSULTA, params, timeout=30)
+    registros, erro = _arp_get_paginado(session, URL_ARP_CONSULTA, params, timeout=18)
     if erro and not registros:
         raise RuntimeError(erro)
 
@@ -3248,7 +3310,8 @@ def buscar_itens_com_saldo_real(
     ata_links_map: Optional[Dict[str, str]] = None,
     ata_pncp_map: Optional[Dict[str, str]] = None,
     modalidade_compra: str = "5",
-    link_compra_pncp: Optional[str] = None
+    link_compra_pncp: Optional[str] = None,
+    diagnostico_out: Optional[Dict] = None
 ) -> List[Dict]:
     """
     Fluxo Híbrido (SIASGnet -> API Dados Abertos Compras.gov.br + PNCP):
@@ -3292,6 +3355,18 @@ def buscar_itens_com_saldo_real(
             except Exception:
                 pass
 
+    def _fetch_endpoint1_compra() -> List[Dict]:
+        sess = _get_thread_session()
+        params1 = {
+            "codigoUnidadeGerenciadora": uasg_clean,
+            "numeroCompra": num_compra_clean,
+            "dataVigenciaInicialMin": vig_min_q,
+            "dataVigenciaInicialMax": vig_max_q,
+            "tamanhoPagina": 500,
+        }
+        rows1, _ = _arp_get_paginado(sess, URL_ARP_CONSULTA, params1, timeout=15)
+        return rows1
+
     def _fetch_endpoint2(incluir_num_compra: bool = True) -> Tuple[List[Dict], Optional[str]]:
         sess = _get_thread_session()
         params2 = {
@@ -3302,7 +3377,7 @@ def buscar_itens_com_saldo_real(
         }
         if incluir_num_compra and num_compra_clean:
             params2["numeroCompra"] = num_compra_clean
-        return _arp_get_paginado(sess, URL_ARP_ITENS, params2, timeout=30)
+        return _arp_get_paginado(sess, URL_ARP_ITENS, params2, timeout=18)
 
     def _fetch_endpoint2_1_pncp(pncp_ata_id: str) -> Tuple[List[Dict], Optional[str]]:
         sess = _get_thread_session()
@@ -3310,12 +3385,13 @@ def buscar_itens_com_saldo_real(
             sess,
             URL_ARP_ITENS_ID,
             {"numeroControlePncpAta": pncp_ata_id},
-            timeout=30,
+            timeout=18,
         )
 
-    def _fetch_endpoint4_ata(num_ata: str) -> Tuple[str, List[Dict]]:
+    def _fetch_endpoint4_ata(num_ata: str) -> Tuple[str, List[Dict], Optional[str]]:
+        time.sleep(0.05)
         sess = _get_thread_session()
-        rows, _ = _arp_get_paginado(
+        rows, err = _arp_get_paginado(
             sess,
             URL_ARP_EMPENHOS_SALDO,
             {
@@ -3323,13 +3399,13 @@ def buscar_itens_com_saldo_real(
                 "unidadeGerenciadora": uasg_clean,
                 "tamanhoPagina": 500,
             },
-            timeout=30,
+            timeout=18,
         )
-        return num_ata, rows
+        return num_ata, rows, err
 
-    def _fetch_endpoint3_item(num_ata: str, num_item_raw: str) -> List[Dict]:
+    def _fetch_endpoint3_item(num_ata: str, num_item_raw: str) -> Tuple[List[Dict], Optional[str]]:
         sess = _get_thread_session()
-        rows, _ = _arp_get_paginado(
+        rows, err = _arp_get_paginado(
             sess,
             URL_ARP_UNIDADES_ITEM,
             {
@@ -3338,9 +3414,9 @@ def buscar_itens_com_saldo_real(
                 "numeroItem": num_item_raw,
                 "tamanhoPagina": 500,
             },
-            timeout=30,
+            timeout=18,
         )
-        return rows
+        return rows, err
 
     def _fetch_endpoint5_item(num_ata: str, num_item_raw: str) -> List[Dict]:
         sess = _get_thread_session()
@@ -3353,17 +3429,17 @@ def buscar_itens_com_saldo_real(
                 "numeroItem": num_item_raw,
                 "tamanhoPagina": 500,
             },
-            timeout=30,
+            timeout=18,
         )
         return rows
 
     try:
         _atualizar_ui(0.05, f"Listando itens no SIASGnet e consultando API Compras.gov.br ({num_compra_clean}/{ano_compra_clean})...")
 
-        # 1) Em paralelo: lista rápida de todos os itens no SIASGnet + PNCP Atas + Endpoint 2 (ARP)
+        # 1) Em paralelo: lista rápida de todos os itens no SIASGnet + PNCP Atas + Endpoint 2 (ARP) (+ EP1 se necessário)
         atas_set_ini = {str(a).strip() for a in (atas_conhecidas or []) if str(a).strip()}
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pre_ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pre_ex:
             fut_siasg_lista = pre_ex.submit(
                 _buscar_lista_itens_siasgnet,
                 uasg_clean,
@@ -3372,11 +3448,43 @@ def buscar_itens_com_saldo_real(
                 modalidade_compra,
             )
             fut_pncp = pre_ex.submit(_descobrir_atas_pncp, _get_thread_session(), link_compra_pncp or "") if link_compra_pncp else None
+            fut_ep1_rede = pre_ex.submit(_fetch_endpoint1_compra) if (not atas_set_ini and not link_compra_pncp) else None
             fut_ep2 = pre_ex.submit(_fetch_endpoint2, True)
+
+            if fut_ep1_rede is not None:
+                try:
+                    for reg1 in (fut_ep1_rede.result() or []):
+                        if reg1.get("ataExcluido") is True:
+                            continue
+                        n_ata1 = str(reg1.get("numeroAtaRegistroPreco") or "").strip()
+                        l_ata1 = str(reg1.get("linkAtaPNCP") or "").strip()
+                        p_ata1 = str(reg1.get("numeroControlePncpAta") or "").strip()
+                        l_comp1 = str(reg1.get("linkCompraPNCP") or "").strip()
+                        if n_ata1:
+                            atas_set_ini.add(n_ata1)
+                            if l_ata1:
+                                links_map.setdefault(n_ata1, l_ata1)
+                            if p_ata1:
+                                pncp_map.setdefault(n_ata1, p_ata1)
+                        if l_comp1 and not link_compra_pncp:
+                            link_compra_pncp = l_comp1
+                except Exception:
+                    pass
 
             if fut_pncp is not None:
                 try:
                     ext_links, ext_pncp = fut_pncp.result()
+                    for k_a, v_l in ext_links.items():
+                        links_map.setdefault(k_a, v_l)
+                        atas_set_ini.add(k_a)
+                    for k_a, v_p in ext_pncp.items():
+                        pncp_map.setdefault(k_a, v_p)
+                        atas_set_ini.add(k_a)
+                except Exception:
+                    pass
+            elif link_compra_pncp and not atas_set_ini:
+                try:
+                    ext_links, ext_pncp = _descobrir_atas_pncp(_get_thread_session(), link_compra_pncp)
                     for k_a, v_l in ext_links.items():
                         links_map.setdefault(k_a, v_l)
                         atas_set_ini.add(k_a)
@@ -3391,6 +3499,7 @@ def buscar_itens_com_saldo_real(
 
         atas_iniciais = sorted(atas_set_ini)
         empenhos_por_ata: Dict[str, List[Dict]] = {}
+        ep4_erros: Dict[str, str] = {}
         itens_api: List[Dict] = []
         if rows_ep2:
             itens_api.extend(rows_ep2)
@@ -3398,16 +3507,20 @@ def buscar_itens_com_saldo_real(
         _atualizar_ui(0.25, "Detalhando itens no SIASGnet e cruzando empenhos reais no Compras.gov.br...")
 
         # Dispara detalhamento completo no SIASGnet (fornecedor/deserto/adesões, ~5-9s sem 429)
-        # EM PARALELO com EP4 (por Ata), EP2.1 (PNCP) e fallback EP2!
+        # EM PARALELO com EP4 (por Ata, cadenciado para evitar 429), EP2.1 (PNCP) e fallback EP2!
         mapa_det_siasg: Dict[str, Dict] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as par_ex:
             fut_det_all = par_ex.submit(_detalhar_itens_siasgnet, itens_siasg_lista, uasg_clean) if itens_siasg_lista else None
 
-            # Wave 1A-extra: consultar Endpoint 4 (4_consultarEmpenhosSaldoItem) das atas conhecidas (1 req por Ata)
+            # Wave 1A-extra: consultar Endpoint 4 (4_consultarEmpenhosSaldoItem) com max_workers=3 para não disparar 429 no APIM
             if atas_iniciais:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(atas_iniciais))) as executor:
-                    for ata_res, rows_ep4 in executor.map(_fetch_endpoint4_ata, atas_iniciais):
-                        empenhos_por_ata[ata_res] = rows_ep4
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(atas_iniciais))) as executor:
+                    for ata_res, rows_ep4, err_ep4 in executor.map(_fetch_endpoint4_ata, atas_iniciais):
+                        if err_ep4 is None:
+                            empenhos_por_ata[ata_res] = rows_ep4
+                            ep4_erros.pop(ata_res, None)
+                        else:
+                            ep4_erros[ata_res] = err_ep4
 
             # Wave 1B: atas descobertas via PNCP ou sem itens no EP2 -> 2.1_consultarARPItem_Id
             atas_com_itens = {
@@ -3418,7 +3531,7 @@ def buscar_itens_com_saldo_real(
             atas_sem_itens = [a for a in atas_iniciais if a not in atas_com_itens]
             pncp_faltantes = sorted({str(pncp_map.get(a) or "").strip() for a in atas_sem_itens if str(pncp_map.get(a) or "").strip()})
             if pncp_faltantes:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(pncp_faltantes))) as executor:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(pncp_faltantes))) as executor:
                     futs_ep2_1 = [executor.submit(_fetch_endpoint2_1_pncp, pid) for pid in pncp_faltantes]
                     for fut21 in concurrent.futures.as_completed(futs_ep2_1):
                         try:
@@ -3489,13 +3602,69 @@ def buscar_itens_com_saldo_real(
             for it in itens_api_filtrados
             if str(it.get("numeroAtaRegistroPreco") or "").strip()
         })
-        atas_faltantes = [a for a in atas_descobertas if a not in empenhos_por_ata]
+        atas_faltantes = [a for a in atas_descobertas if a not in empenhos_por_ata and a not in ep4_erros]
         if atas_faltantes:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(atas_faltantes))) as executor:
-                for ata_res, rows_ep4 in executor.map(_fetch_endpoint4_ata, atas_faltantes):
-                    empenhos_por_ata[ata_res] = rows_ep4
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(atas_faltantes))) as executor:
+                for ata_res, rows_ep4, err_ep4 in executor.map(_fetch_endpoint4_ata, atas_faltantes):
+                    if err_ep4 is None:
+                        empenhos_por_ata[ata_res] = rows_ep4
+                        ep4_erros.pop(ata_res, None)
+                    else:
+                        ep4_erros[ata_res] = err_ep4
 
-        # Indexar Endpoint 4 por (numeroAta, numeroItem_norm) e também fallback por numeroItem_norm
+        # Nova tentativa cadenciada SOMENTE nas atas que falharam (429/Timeout) antes de prosseguir
+        if ep4_erros:
+            _atualizar_ui(0.75, f"API Compras.gov.br oscilou em {len(ep4_erros)} ata(s); repetindo consulta de empenhos...")
+            time.sleep(2.0)
+            atas_retry = sorted(ep4_erros.keys())
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(2, len(atas_retry))) as executor:
+                for ata_res, rows_ep4, err_ep4 in executor.map(_fetch_endpoint4_ata, atas_retry):
+                    if err_ep4 is None:
+                        empenhos_por_ata[ata_res] = rows_ep4
+                        ep4_erros.pop(ata_res, None)
+                    else:
+                        ep4_erros[ata_res] = err_ep4
+
+        # Fallback EP3 pontual caso alguma ata ainda tenha falhado no EP4 (ex.: timeout/500 específico do endpoint 4)
+        ep3_cache: Dict[Tuple[str, str], Optional[Dict]] = {}
+        if ep4_erros:
+            alvos_fb = [
+                it for it in itens_api_filtrados
+                if str(it.get("numeroAtaRegistroPreco") or "").strip() in ep4_erros
+                and str(it.get("numeroItem") or "").strip()
+            ]
+            if 1 <= len(alvos_fb) <= 20:
+                _atualizar_ui(0.79, f"Consultando saldos via fallback (EP3) em {len(alvos_fb)} item(ns)...")
+                atas_fb_itens: Dict[str, List[bool]] = {}
+                def _run_ep3_fb(it_fb: Dict) -> Tuple[str, str, Optional[Dict], bool]:
+                    a_fb = str(it_fb.get("numeroAtaRegistroPreco") or "").strip()
+                    i_raw = str(it_fb.get("numeroItem") or "").strip()
+                    i_norm = _norm_item_num(i_raw)
+                    rows_u, err_u = _fetch_endpoint3_item(a_fb, i_raw)
+                    if err_u is not None:
+                        return a_fb, i_norm, None, False
+                    escolhido_u = None
+                    for ru in rows_u:
+                        if str(ru.get("codigoUnidade") or "").strip() == uasg_clean:
+                            escolhido_u = ru
+                            break
+                    if escolhido_u is None:
+                        for ru in rows_u:
+                            if str(ru.get("tipoUnidade") or "").strip().upper() == "GERENCIADORA" and not str(ru.get("codigoUnidade") or "").strip():
+                                escolhido_u = ru
+                                break
+                    return a_fb, i_norm, escolhido_u, True
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(2, len(alvos_fb))) as ex3:
+                    for a_fb, i_norm, u_row, ok_u in ex3.map(_run_ep3_fb, alvos_fb):
+                        atas_fb_itens.setdefault(a_fb, []).append(ok_u)
+                        if ok_u and u_row is not None:
+                            ep3_cache[(a_fb, i_norm)] = u_row
+                for a_fb, flags in atas_fb_itens.items():
+                    if flags and all(flags):
+                        ep4_erros.pop(a_fb, None)
+
+        # Indexar Endpoint 4 APENAS para a UASG pesquisada (nunca herdar empenho de UASG participante)
         mapa_empenhos: Dict[Tuple[str, str], Dict] = {}
         mapa_empenhos_por_item: Dict[str, List[Tuple[str, Dict]]] = {}
         for ata_k, rows_ep4 in empenhos_por_ata.items():
@@ -3515,11 +3684,10 @@ def buscar_itens_com_saldo_real(
                         break
                 if escolhido is None:
                     for r4 in cand_list:
-                        if str(r4.get("tipo") or "").strip().upper() == "GERENCIADORA":
+                        unid_str = str(r4.get("unidade") or "").strip()
+                        if str(r4.get("tipo") or "").strip().upper() == "GERENCIADORA" and not re.match(r"^\d{6}\b", unid_str):
                             escolhido = r4
                             break
-                if escolhido is None and cand_list:
-                    escolhido = cand_list[0]
                 if escolhido is not None:
                     mapa_empenhos[(ata_k, n_norm)] = escolhido
                     mapa_empenhos_por_item.setdefault(n_norm, []).append((ata_k, escolhido))
@@ -3537,10 +3705,10 @@ def buscar_itens_com_saldo_real(
             item_norm = _norm_item_num(item_raw)
             chave = (ata_it, item_norm)
 
-            row_u_alvo: Optional[Dict] = None
-            if consultar_ep3 and ata_it and item_raw:
+            row_u_alvo: Optional[Dict] = ep3_cache.get(chave)
+            if row_u_alvo is None and consultar_ep3 and ata_it and item_raw:
                 try:
-                    rows_u = _fetch_endpoint3_item(ata_it, item_raw)
+                    rows_u, _ = _fetch_endpoint3_item(ata_it, item_raw)
                 except Exception:
                     rows_u = []
                 for ru in rows_u:
@@ -3549,16 +3717,14 @@ def buscar_itens_com_saldo_real(
                         break
                 if row_u_alvo is None:
                     for ru in rows_u:
-                        if str(ru.get("tipoUnidade") or "").strip().upper() == "GERENCIADORA":
+                        if str(ru.get("tipoUnidade") or "").strip().upper() == "GERENCIADORA" and not str(ru.get("codigoUnidade") or "").strip():
                             row_u_alvo = ru
                             break
-                if row_u_alvo is None and rows_u:
-                    row_u_alvo = rows_u[0]
 
             row_ep4 = mapa_empenhos.get(chave)
             if row_ep4 is None:
                 cands_ep4 = mapa_empenhos_por_item.get(item_norm, [])
-                if cands_ep4:
+                if len(cands_ep4) == 1 and (not ata_it or cands_ep4[0][0] == ata_it):
                     row_ep4 = cands_ep4[0][1]
 
             qtd_reg = 0.0
@@ -3593,6 +3759,11 @@ def buscar_itens_com_saldo_real(
             elif row_u_alvo and row_u_alvo.get("saldoRemanejamentoEmpenho") is not None:
                 saldo_emp = max(0.0, float(row_u_alvo.get("saldoRemanejamentoEmpenho") or 0.0))
                 qtd_emp = max(0.0, qtd_reg - saldo_emp)
+                if qtd_emp > 0:
+                    unid_lbl = f"{uasg_clean} - {str(row_u_alvo.get('nomeUnidade') or '').strip()}".strip(" -")
+                    empenhos_lista.append(
+                        f"{unid_lbl}: Qtd Emp {_fmt_qtd_api(qtd_emp)} | Saldo {_fmt_qtd_api(saldo_emp)}"
+                    )
             elif siasg_ref and siasg_ref.get("detalhe_ok"):
                 qtd_emp = max(0.0, float(siasg_ref.get("qtd_emp") or 0.0))
                 saldo_emp = max(0.0, qtd_reg - qtd_emp)
@@ -3875,6 +4046,20 @@ def buscar_itens_com_saldo_real(
 
         dados_finais = [r for r in resultados_finais if r is not None]
         dados_finais.sort(key=lambda x: int(x["Item"]) if str(x.get("Item", "")).isdigit() else 999999)
+
+        if diagnostico_out is not None:
+            atas_verificadas = set(empenhos_por_ata.keys())
+            atas_totais_check = atas_verificadas | set(ep4_erros.keys())
+            diagnostico_out.clear()
+            diagnostico_out.update({
+                "atas_total": len(atas_totais_check),
+                "atas_ep4_ok": len(atas_verificadas),
+                "atas_ep4_falhas": sorted(ep4_erros.keys()),
+                "ep4_erros_detalhes": dict(ep4_erros),
+                "ep2_erro": erro_ep2,
+                "ep3_recuperados": len(ep3_cache),
+                "itens_com_empenho": sum(1 for r in dados_finais if converter_para_float(r.get("Qtd Empenhada", "0")) > 0),
+            })
 
         _limpar_ui()
         return dados_finais
@@ -6267,6 +6452,8 @@ with tab_consulta_pregoes:
         st.session_state['df_pregoes_busca'] = pd.DataFrame()
     if 'itens_carregados_pregoes' not in st.session_state:
         st.session_state['itens_carregados_pregoes'] = {}
+    if 'avisos_carregamento_pregoes' not in st.session_state:
+        st.session_state['avisos_carregamento_pregoes'] = {}
 
     if btn_rodar_busca:
         with st.spinner(f"Consultando API Compras.gov.br (Módulo ARP) para a UASG {uasg_busca}..."):
@@ -6279,6 +6466,7 @@ with tab_consulta_pregoes:
             else:
                 st.session_state['df_pregoes_busca'] = df_pregoes_res
                 st.session_state['itens_carregados_pregoes'] = {}
+                st.session_state['avisos_carregamento_pregoes'] = {}
                 st.session_state['uasg_pesquisada'] = uasg_busca
 
     df_pregoes_atual = st.session_state.get('df_pregoes_busca', pd.DataFrame())
@@ -6314,6 +6502,7 @@ with tab_consulta_pregoes:
 
                 if btn_itens_p:
                     with st.spinner("Consultando SIASGnet e API Compras.gov.br em paralelo (itens, desertos, empenhos e adesões)..."):
+                        diag_pregao: Dict = {}
                         itens_det = buscar_itens_com_saldo_real(
                             st.session_state.get('uasg_pesquisada', uasg_busca),
                             row_p['Nº Compra'],
@@ -6324,10 +6513,12 @@ with tab_consulta_pregoes:
                             ata_links_map=row_p.get('Ata Links Map'),
                             ata_pncp_map=row_p.get('Ata Pncp Map'),
                             modalidade_compra=str(row_p.get('Modalidade Código') or '5'),
-                            link_compra_pncp=str(row_p.get('Link Contratos') or '')
+                            link_compra_pncp=str(row_p.get('Link Contratos') or ''),
+                            diagnostico_out=diag_pregao
                         )
                         if itens_det:
                             st.session_state['itens_carregados_pregoes'][chave_p] = itens_det
+                            st.session_state['avisos_carregamento_pregoes'][chave_p] = diag_pregao
                             st.rerun()
                         else:
                             st.warning("Nenhum item localizado para este pregão no SIASGnet / API Dados Abertos Compras.gov.br.")
@@ -6337,7 +6528,19 @@ with tab_consulta_pregoes:
                     if itens_pr:
                         st.markdown("---")
                         st.markdown("#### 📊 Consulta de Saldos: Aba de Adesões (Carona) e Aba da UASG")
-                        
+
+                        diag_p = st.session_state.get('avisos_carregamento_pregoes', {}).get(chave_p, {})
+                        atas_falhas_p = diag_p.get("atas_ep4_falhas") or []
+                        if atas_falhas_p:
+                            erros_det_p = diag_p.get("ep4_erros_detalhes") or {}
+                            exemplo_err = next(iter(erros_det_p.values()), "Instabilidade / Limite de requisições")
+                            st.warning(
+                                f"⚠️ **Atenção:** A API do Compras.gov.br (Empenhos SIAFI) apresentou falha ou limite de requisições "
+                                f"em **{len(atas_falhas_p)} de {diag_p.get('atas_total', len(atas_falhas_p))} ata(s)** "
+                                f"({', '.join(atas_falhas_p[:5])}{'...' if len(atas_falhas_p) > 5 else ''}) — *{exemplo_err}*. "
+                                f"Os empenhos dessas atas podem aparecer como **0** temporariamente; aguarde alguns segundos e clique em **🔄 Recarregar Itens**."
+                            )
+
                         # Métricas resumidas do Pregão
                         tot_it = len(itens_pr)
                         tot_desertos = sum(1 for it in itens_pr if "deserto" in str(it.get("Fornecedor", "")).lower())
@@ -6356,8 +6559,16 @@ with tab_consulta_pregoes:
                         with c_met4:
                             st.metric("Aceitam Adesão", f"{tot_aceita_ad} de {tot_homol or tot_it}", help="Itens que aceitam adesão (carona)")
 
-                        if tot_desertos > 0:
-                            st.caption(f"ℹ️ **{tot_homol}** item(ns) com fornecedor homologado no SIASGnet e **{tot_desertos}** item(ns) marcado(s) como **Deserto / Fracassado** (sem fornecedor).")
+                        resumo_infos = [
+                            f"**{tot_homol}** item(ns) com fornecedor homologado no SIASGnet",
+                            f"**{tot_desertos}** item(ns) marcado(s) como **Deserto / Fracassado**" if tot_desertos > 0 else "nenhum deserto",
+                        ]
+                        if diag_p.get("atas_total", 0) > 0:
+                            resumo_infos.append(
+                                f"empenhos SIAFI consultados em **{diag_p.get('atas_ep4_ok', 0)}/{diag_p.get('atas_total', 0)}** ata(s) "
+                                f"(**{diag_p.get('itens_com_empenho', 0)}** item(ns) com saldo já empenhado pela UASG)"
+                            )
+                        st.caption("ℹ️ " + " | ".join(resumo_infos) + ".")
 
                         # Garantir que Valor Unitário esteja presente mesmo para itens já em cache
                         for it in itens_pr:
