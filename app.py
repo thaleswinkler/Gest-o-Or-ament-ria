@@ -2314,6 +2314,11 @@ def _iniciar_keep_alive_background():
 
 _iniciar_keep_alive_background()
 
+SIASG_BASE = "https://www2.comprasnet.gov.br/siasgnet-atasrp/public"
+URL_PESQUISA_SIASG = f"{SIASG_BASE}/pesquisarLicitacaoSRP.do"
+URL_ITENS_SIASG = f"{SIASG_BASE}/pesquisarItemSRP.do"
+URL_VISUALIZAR_ITEM_SIASG = f"{SIASG_BASE}/visualizarItemSRP.do"
+
 BASE_COMPRAS_API = "https://dadosabertos.compras.gov.br"
 URL_ARP_CONSULTA = f"{BASE_COMPRAS_API}/modulo-arp/1_consultarARP"
 URL_ARP_ITENS = f"{BASE_COMPRAS_API}/modulo-arp/2_consultarARPItem"
@@ -2326,7 +2331,9 @@ HEADERS_API = {
     "accept": "application/json",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
-HEADERS_HTTP = HEADERS_API
+HEADERS_HTTP = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
 
 # =====================================================================
 # 3. FUNÇÕES UTILITÁRIAS DO SISTEMA
@@ -2548,7 +2555,7 @@ def _criar_sessao_http() -> requests.Session:
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["HEAD", "GET", "OPTIONS", "POST"]
     )
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=12, pool_maxsize=12)
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=16, pool_maxsize=16)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
@@ -2670,6 +2677,8 @@ def extrair_pregoes_por_ano(session: requests.Session, uasg: str, ano: str) -> L
             continue
 
         modalidade = str(reg.get("nomeModalidadeCompra") or "Pregão").strip()
+        cod_mod_raw = str(reg.get("codigoModalidadeCompra") or "5").strip()
+        cod_mod_siasg = str(int(cod_mod_raw)) if cod_mod_raw.isdigit() else "5"
         num_licitacao = f"{num_compra}/{ano_compra}" if ano_compra else num_compra
         num_ata = str(reg.get("numeroAtaRegistroPreco") or "").strip()
         objeto = str(reg.get("objeto") or "").strip()
@@ -2685,6 +2694,7 @@ def extrair_pregoes_por_ano(session: requests.Session, uasg: str, ano: str) -> L
             agrupados[chave] = {
                 "UASG": uasg_row,
                 "Modalidade": modalidade,
+                "Modalidade Código": cod_mod_siasg,
                 "Nº da Licitação": num_licitacao,
                 "Ano": ano_compra,
                 "Objeto": objeto,
@@ -2732,45 +2742,183 @@ def extrair_pregoes_por_ano(session: requests.Session, uasg: str, ano: str) -> L
 
     return dados
 
+def _extrair_pregoes_siasgnet_por_ano(uasg: str, ano: str) -> List[Dict]:
+    """Lista 100% dos Pregões/Concorrências SRP da UASG no ano diretamente do SIASGnet (mesmo sem Ata sincronizada na API)."""
+    from bs4 import BeautifulSoup
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    uasg_clean = re.sub(r"\D", "", str(uasg or "").strip()) or str(uasg or "").strip()
+    ano_clean = str(ano).strip()
+    sess = _criar_sessao_http()
+    dados_map: Dict[Tuple[str, str], Dict] = {}
+
+    def _parse_pagina_lic(html: str) -> None:
+        sp = BeautifulSoup(html, "html.parser")
+        tbl = sp.find("table", id="licitacao") or next(
+            (t for t in sp.find_all("table") if "UASG" in t.get_text() and "Licita" in t.get_text()),
+            None
+        )
+        if not tbl:
+            return
+        for tr in tbl.find_all("tr")[1:]:
+            tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+            if len(tds) < 4:
+                continue
+            uasg_row = re.sub(r"\D", "", tds[0]) or uasg_clean
+            mod_nome = tds[1] or "Pregão Eletrônico"
+            num_lic = tds[2].strip()
+            objeto = tds[3].strip()
+            if not num_lic:
+                continue
+
+            cod_mod_siasg = "3" if "concorr" in mod_nome.lower() else "5"
+            num_compra = num_lic.split("/")[0].strip()
+            ano_compra = num_lic.split("/")[1].strip() if "/" in num_lic else ano_clean
+            cod_lic_srp = ""
+
+            a_tag = tr.find("a")
+            if a_tag and a_tag.get("href"):
+                m_sel = re.search(
+                    r"selecionarLicitacao\(\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*(\d+)",
+                    a_tag["href"],
+                    re.S
+                )
+                if m_sel:
+                    uasg_row = m_sel.group(1).strip() or uasg_row
+                    cod_mod_siasg = m_sel.group(2).strip() or cod_mod_siasg
+                    num_compra = m_sel.group(3).strip() or num_compra
+                    ano_compra = m_sel.group(4).strip() or ano_compra
+                    cod_lic_srp = m_sel.group(5).strip()
+                    num_lic = f"{num_compra}/{ano_compra}" if ano_compra else num_compra
+
+            chave = (uasg_row, num_lic)
+            if chave not in dados_map:
+                dados_map[chave] = {
+                    "UASG": uasg_row,
+                    "Modalidade": mod_nome,
+                    "Modalidade Código": cod_mod_siasg,
+                    "Nº da Licitação": num_lic,
+                    "Ano": ano_compra,
+                    "Objeto": objeto,
+                    "Nº Compra": num_compra,
+                    "Ano Compra": ano_compra,
+                    "Código Licitação": cod_lic_srp,
+                    "Link Contratos": "",
+                    "Atas List": [],
+                    "Atas": "",
+                    "Ata Links Map": {},
+                    "Ata Pncp Map": {},
+                    "Vigencia Min": f"{ano_compra}-01-01",
+                    "Vigencia Max": f"{max(int(ano_compra) + 1, datetime.datetime.now().year)}-12-31" if ano_compra.isdigit() else f"{datetime.datetime.now().year}-12-31",
+                    "Vigência Inicial": "",
+                    "Vigência Final": "",
+                }
+
+    try:
+        sess.get(f"{URL_PESQUISA_SIASG}?method=iniciar", headers=HEADERS_HTTP, verify=False, timeout=15)
+        r_p1 = sess.post(
+            f"{URL_PESQUISA_SIASG}?method=pesquisar",
+            data=[
+                ("parametro.uasg.numeroUasg", uasg_clean),
+                ("parametro.anoLicitacao", ano_clean),
+                ("parametro.codigosModalidadeCompra", "3"),
+                ("parametro.codigosModalidadeCompra", "5"),
+                ("parametro.consideraApenasAtasVigentes", "false"),
+            ],
+            headers=HEADERS_HTTP,
+            verify=False,
+            timeout=15,
+        )
+        if not r_p1.ok:
+            return []
+        _parse_pagina_lic(r_p1.text)
+
+        p_nums = sorted({int(p) for p in re.findall(r"numeroPagina=(\d+)", r_p1.text) if int(p) > 1})
+        for pn in p_nums:
+            url_pg = (
+                f"{URL_PESQUISA_SIASG}?parametro.codigosModalidadeCompra=3"
+                f"&parametro.codigosModalidadeCompra=5"
+                f"&parametro.consideraApenasAtasVigentes=false"
+                f"&numeroPagina={pn}"
+                f"&parametro.uasg.numeroUasg={uasg_clean}"
+                f"&method=pesquisar"
+                f"&parametro.anoLicitacao={ano_clean}"
+            )
+            rp = sess.get(url_pg, headers=HEADERS_HTTP, verify=False, timeout=15)
+            if rp.ok:
+                _parse_pagina_lic(rp.text)
+    except Exception:
+        return []
+
+    return list(dados_map.values())
+
 def extrair_pregoes_siasg(uasg: str, anos: List[str]) -> Tuple[pd.DataFrame, Optional[str]]:
-    """Consulta Pregões/ARPs da UASG para os exercícios selecionados via API Dados Abertos Compras.gov.br."""
-    session = get_http_session()
+    """Consulta Pregões/ARPs da UASG combinando SIASGnet (lista completa) + API Dados Abertos Compras.gov.br (Atas/PNCP/Vigências)."""
     todos_por_chave: Dict[Tuple[str, str], Dict] = {}
     erros: List[str] = []
 
     anos_validos = [str(a).strip() for a in (anos or []) if str(a).strip()]
-    for ano in anos_validos:
-        try:
-            dados_ano = extrair_pregoes_por_ano(session, uasg, ano)
-            for row in dados_ano:
-                chave = (row["UASG"], row["Nº da Licitação"])
-                if chave not in todos_por_chave:
-                    todos_por_chave[chave] = row
-                else:
-                    atual = todos_por_chave[chave]
-                    for ata in row.get("Atas List", []):
-                        if ata not in atual["Atas List"]:
-                            atual["Atas List"].append(ata)
-                    atual["Atas List"] = sorted(atual["Atas List"])
-                    atual["Atas"] = ", ".join(atual["Atas List"])
-                    atual["Ata Links Map"].update(row.get("Ata Links Map", {}))
-                    atual.setdefault("Ata Pncp Map", {}).update(row.get("Ata Pncp Map", {}))
-                    if row.get("Vigencia Min") and row["Vigencia Min"] < atual["Vigencia Min"]:
-                        atual["Vigencia Min"] = row["Vigencia Min"]
-                    if row.get("Vigencia Max") and row["Vigencia Max"] > atual["Vigencia Max"]:
-                        atual["Vigencia Max"] = row["Vigencia Max"]
-                    if row.get("Vigência Inicial") and (not atual["Vigência Inicial"] or row["Vigência Inicial"] < atual["Vigência Inicial"]):
-                        atual["Vigência Inicial"] = row["Vigência Inicial"]
-                    if row.get("Vigência Final") and (not atual["Vigência Final"] or row["Vigência Final"] > atual["Vigência Final"]):
-                        atual["Vigência Final"] = row["Vigência Final"]
-                    if not atual.get("Link Contratos") and row.get("Link Contratos"):
-                        atual["Link Contratos"] = row["Link Contratos"]
-        except Exception as e:
-            erros.append(f"Ano {ano}: {str(e)}")
+    if not anos_validos:
+        return pd.DataFrame(), None
+
+    def _mesclar_linha(row: Dict) -> None:
+        chave = (row["UASG"], row["Nº da Licitação"])
+        if chave not in todos_por_chave:
+            todos_por_chave[chave] = row
+            return
+        atual = todos_por_chave[chave]
+        for ata in row.get("Atas List", []):
+            if ata not in atual["Atas List"]:
+                atual["Atas List"].append(ata)
+        atual["Atas List"] = sorted(atual["Atas List"])
+        atual["Atas"] = ", ".join(atual["Atas List"])
+        atual["Ata Links Map"].update(row.get("Ata Links Map", {}))
+        atual.setdefault("Ata Pncp Map", {}).update(row.get("Ata Pncp Map", {}))
+        if row.get("Vigência Inicial"):
+            if not atual.get("Vigência Inicial") or row["Vigência Inicial"] < atual["Vigência Inicial"]:
+                atual["Vigência Inicial"] = row["Vigência Inicial"]
+            if not atual.get("Vigencia Min") or row["Vigencia Min"] < atual["Vigencia Min"]:
+                atual["Vigencia Min"] = row.get("Vigencia Min") or row["Vigência Inicial"]
+        if row.get("Vigência Final"):
+            if not atual.get("Vigência Final") or row["Vigência Final"] > atual["Vigência Final"]:
+                atual["Vigência Final"] = row["Vigência Final"]
+            if not atual.get("Vigencia Max") or row["Vigencia Max"] > atual["Vigencia Max"]:
+                atual["Vigencia Max"] = row.get("Vigencia Max") or row["Vigência Final"]
+        if not atual.get("Link Contratos") and row.get("Link Contratos"):
+            atual["Link Contratos"] = row["Link Contratos"]
+        if (not atual.get("Objeto") or len(str(row.get("Objeto") or "")) > len(str(atual.get("Objeto") or ""))) and row.get("Objeto"):
+            atual["Objeto"] = row["Objeto"]
+
+    # Executa SIASGnet + 1_consultarARP em paralelo por exercício selecionado
+    resultados_siasg: List[Dict] = []
+    resultados_api: List[Dict] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, max(2, 2 * len(anos_validos)))) as ex:
+        futs_siasg = {ex.submit(_extrair_pregoes_siasgnet_por_ano, uasg, ano): ano for ano in anos_validos}
+        futs_api = {ex.submit(extrair_pregoes_por_ano, _get_thread_session(), uasg, ano): ano for ano in anos_validos}
+
+        for fut in futs_siasg:
+            try:
+                resultados_siasg.extend(fut.result() or [])
+            except Exception as e:
+                erros.append(f"SIASGnet ({futs_siasg[fut]}): {str(e)}")
+
+        for fut in futs_api:
+            try:
+                resultados_api.extend(fut.result() or [])
+            except Exception as e:
+                erros.append(f"API ({futs_api[fut]}): {str(e)}")
+
+    # 1) Base SIASGnet (todos os pregões/concorrências da UASG)
+    for row_s in resultados_siasg:
+        _mesclar_linha(row_s)
+
+    # 2) Enriquecimento e complemento com API 1_consultarARP (Atas, PNCP, vigências e eventuais dispensas/inexigibilidades)
+    for row_a in resultados_api:
+        _mesclar_linha(row_a)
 
     todos_dados = list(todos_por_chave.values())
     if not todos_dados and erros:
-        return pd.DataFrame(), f"Falha na consulta à API Compras.gov.br: {'; '.join(erros)}"
+        return pd.DataFrame(), f"Falha na consulta dos pregões: {'; '.join(erros)}"
 
     df = pd.DataFrame(todos_dados)
     if not df.empty:
@@ -2778,6 +2926,317 @@ def extrair_pregoes_siasg(uasg: str, anos: List[str]) -> Tuple[pd.DataFrame, Opt
         df.sort_values(by=["Ano", "Nº da Licitação"], ascending=[False, False], inplace=True)
 
     return df, None
+
+def _normalizar_unidade_siasg(unid_raw: str, tipo_item: str = "Material") -> str:
+    u = str(unid_raw or "").strip()
+    if not u:
+        return "SV" if str(tipo_item or "").lower().startswith("serv") else "UN"
+    if u.lower() == "unidade":
+        return "UN"
+    return u
+
+def _descobrir_atas_pncp(session: requests.Session, link_compra_pncp: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Consulta a API pública do PNCP para descobrir todas as Atas da compra (inclusive as ainda não sincronizadas no modulo-arp)."""
+    links_extra: Dict[str, str] = {}
+    pncp_extra: Dict[str, str] = {}
+    if not link_compra_pncp:
+        return links_extra, pncp_extra
+    m = re.search(r"/editais/(\d+)/(\d{4})/(\d+)", str(link_compra_pncp))
+    if not m:
+        return links_extra, pncp_extra
+    cnpj_org, ano_pncp, seq_pncp = m.group(1), m.group(2), m.group(3)
+    try:
+        seq_norm = str(int(seq_pncp))
+    except Exception:
+        seq_norm = seq_pncp
+    try:
+        url = f"https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj_org}/compras/{ano_pncp}/{seq_pncp}/atas"
+        r = session.get(url, params={"pagina": 1, "tamanhoPagina": 100}, headers=HEADERS_API, timeout=12)
+        if not r.ok or not r.text:
+            return links_extra, pncp_extra
+        payload = r.json()
+        atas_list = payload.get("data", payload) if isinstance(payload, dict) else payload
+        if not isinstance(atas_list, list):
+            return links_extra, pncp_extra
+        for a in atas_list:
+            if not isinstance(a, dict) or a.get("cancelado") is True:
+                continue
+            num_a = str(a.get("numeroAtaRegistroPreco") or "").strip()
+            ano_a = str(a.get("anoAta") or "").strip()
+            pid = str(a.get("numeroControlePNCP") or "").strip()
+            seq_a = str(a.get("sequencialAta") or "").strip()
+            if not num_a or not ano_a:
+                continue
+            num_a_pad = num_a.zfill(5) if num_a.isdigit() else num_a
+            ata_key = f"{num_a_pad}/{ano_a}"
+            if pid:
+                pncp_extra[ata_key] = pid
+            if seq_a:
+                links_extra[ata_key] = f"https://pncp.gov.br/app/atas/{cnpj_org}/{ano_pncp}/{seq_norm}/{seq_a}"
+    except Exception:
+        pass
+    return links_extra, pncp_extra
+
+def _parsear_item_siasg_html(html: str, uasg_clean: str) -> Dict:
+    """Extrai descrição detalhada, fornecedores (ou deserto), quantidades da UASG e limites de adesão de visualizarItemSRP.do."""
+    from bs4 import BeautifulSoup
+    sp = BeautifulSoup(html, "html.parser")
+    inps = {i.get("name"): (i.get("value") or "").strip() for i in sp.find_all("input") if i.get("name")}
+
+    ta = sp.find("textarea")
+    desc_det = ta.get_text(" ", strip=True) if ta else ""
+    unid_forn = inps.get("cabecalhoItemSRP.unidadeFornecimento", "")
+    homol_geral = converter_para_float(inps.get("itemAtaSRP.informacoesSIASG.quantidadeHomolgadaItem", "0"))
+    qtd_total_pub = converter_para_float(inps.get("cabecalhoItemSRP.quantidadeTotal", "0"))
+
+    # 1) Fornecedores do Item (tabela ou JS selecionarFornecedor)
+    forn_puro = ""
+    cnpj_puro = ""
+    qtd_hom_forn = 0.0
+    vlr_unit = 0.0
+    tem_fornecedor = False
+
+    for tbl in sp.find_all("table"):
+        ths = [th.get_text(" ", strip=True) for th in tbl.find_all("th")]
+        if any("Fornecedor" in th for th in ths) and any("Classifica" in th for th in ths):
+            cand_rows = []
+            for tr in tbl.find_all("tr")[1:]:
+                tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+                if not tds or len(tds) < 6:
+                    continue
+                if any("Nenhum registro" in c for c in tds):
+                    continue
+                cand_rows.append(tds)
+            if cand_rows:
+                # Prioriza linha com quantidade homologada > 0
+                escolhida = None
+                for r_tds in cand_rows:
+                    if converter_para_float(r_tds[3]) > 0:
+                        escolhida = r_tds
+                        break
+                if escolhida is None:
+                    escolhida = cand_rows[0]
+
+                forn_cell = escolhida[1]
+                m_cnpj = re.search(r"(\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2})", forn_cell)
+                if m_cnpj:
+                    cnpj_puro = formatar_cnpj(m_cnpj.group(1))
+                    resto = re.sub(r"^\s*\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\s*[-–]?\s*", "", forn_cell).strip()
+                    forn_puro = resto
+                else:
+                    forn_puro = forn_cell.strip()
+
+                qtd_hom_forn = converter_para_float(escolhida[3])
+                vlr_homol = converter_para_float(escolhida[5]) if len(escolhida) > 5 else 0.0
+                vlr_reneg = converter_para_float(escolhida[6]) if len(escolhida) > 6 and escolhida[6] not in ("-", "") else 0.0
+                vlr_unit = vlr_reneg if vlr_reneg > 0 else vlr_homol
+                if forn_puro or cnpj_puro:
+                    tem_fornecedor = True
+            break
+
+    # Fallback regex em selecionarFornecedor({...}) se tabela vier vazia ou incompleta
+    if not tem_fornecedor:
+        m_sf = re.search(r"selecionarFornecedor\(\{([^}]+)\}\)", html, re.S)
+        if m_sf:
+            bloco = m_sf.group(1)
+            def _ext_js(campo: str) -> str:
+                mj = re.search(rf"{campo}\s*:\s*'([^']*)'", bloco)
+                return mj.group(1).strip() if mj else ""
+            ident = _ext_js("identificacao")
+            ffmt = _ext_js("fornecedorFormatado")
+            qh = converter_para_float(_ext_js("quantidadeHomologada"))
+            vh = converter_para_float(_ext_js("valorHomologadoUnitario"))
+            vr = converter_para_float(_ext_js("valorRenegociadoUnitario"))
+            if ident or ffmt:
+                tem_fornecedor = True
+                cnpj_puro = formatar_cnpj(ident) if ident else ""
+                forn_puro = re.sub(r"^\s*\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\s*[-–]?\s*", "", ffmt).strip()
+                qtd_hom_forn = qh
+                vlr_unit = vr if vr > 0 else vh
+
+    deserto = (not tem_fornecedor) or (homol_geral <= 0 and qtd_hom_forn <= 0)
+
+    # 2) Tabela UASGs Participantes (para quantidade específica da UASG pesquisada)
+    qtd_reg_uasg = None
+    qtd_emp_uasg = 0.0
+    if not deserto:
+        for tbl in sp.find_all("table"):
+            ths = [th.get_text(" ", strip=True) for th in tbl.find_all("th")]
+            if "UASG" in ths and "Quantidade Homologada" in ths:
+                idx_u = ths.index("UASG")
+                idx_tp = ths.index("Tipo") if "Tipo" in ths else 1
+                idx_qh = ths.index("Quantidade Homologada")
+                idx_qe = ths.index("Quantidade Empenhada") if "Quantidade Empenhada" in ths else -1
+                ger_row = None
+                for tr in tbl.find_all("tr")[1:]:
+                    tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+                    if len(tds) <= idx_qh or any("Nenhum registro" in c for c in tds):
+                        continue
+                    u_txt = tds[idx_u]
+                    tp_txt = tds[idx_tp] if idx_tp < len(tds) else ""
+                    if re.search(rf"\b{re.escape(uasg_clean)}\b", u_txt):
+                        qtd_reg_uasg = converter_para_float(tds[idx_qh])
+                        if idx_qe != -1 and idx_qe < len(tds):
+                            qtd_emp_uasg = converter_para_float(tds[idx_qe])
+                        break
+                    if ger_row is None and "gerenciadora" in tp_txt.lower() and "não" not in tp_txt.lower():
+                        ger_row = tds
+                if qtd_reg_uasg is None and ger_row is not None:
+                    qtd_reg_uasg = converter_para_float(ger_row[idx_qh])
+                    if idx_qe != -1 and idx_qe < len(ger_row):
+                        qtd_emp_uasg = converter_para_float(ger_row[idx_qe])
+                break
+
+        if qtd_reg_uasg is None:
+            qtd_reg_uasg = homol_geral if homol_geral > 0 else (qtd_hom_forn if qtd_hom_forn > 0 else qtd_total_pub)
+
+        # Garantir consistência com teto homologado
+        if homol_geral > 0 and qtd_reg_uasg > homol_geral:
+            qtd_reg_uasg = homol_geral
+
+    limite_adesao = converter_para_float(inps.get("itemAtaSRP.quantidadeMaximaParaAdesoes", "0"))
+    saldo_adesao = converter_para_float(inps.get("itemAtaSRP.saldoDisponivelAdesao", "0"))
+    aprovado_adesao = converter_para_float(inps.get("itemAtaSRP.quantitativoAdesao.quantidadeAutorizada", "0"))
+
+    return {
+        "desc_det": desc_det,
+        "unidade": unid_forn,
+        "deserto": deserto,
+        "forn_puro": "" if deserto else forn_puro,
+        "cnpj_puro": "" if deserto else cnpj_puro,
+        "vlr_unit": 0.0 if deserto else vlr_unit,
+        "qtd_reg": 0.0 if deserto else max(0.0, qtd_reg_uasg or 0.0),
+        "qtd_emp": 0.0 if deserto else max(0.0, qtd_emp_uasg),
+        "limite_adesao": 0.0 if deserto else max(0.0, limite_adesao),
+        "saldo_adesao": 0.0 if deserto else max(0.0, saldo_adesao),
+        "aprovado_adesao": 0.0 if deserto else max(0.0, aprovado_adesao),
+    }
+
+def _buscar_lista_itens_siasgnet(
+    uasg_clean: str,
+    num_compra_clean: str,
+    ano_compra_clean: str,
+    modalidade_cod: str = "5"
+) -> List[Dict]:
+    """Busca rápida da lista completa de itens do pregão (paginada) no SIASGnet Atas SRP (sem detalhar ainda)."""
+    from bs4 import BeautifulSoup
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    sess = _criar_sessao_http()
+    itens_detectados: List[Dict] = []
+    vistos = set()
+
+    def _parsear_pagina(html: str) -> int:
+        sp = BeautifulSoup(html, "html.parser")
+        tbl = sp.find("table", id="item") or sp.find("table", class_="displaytag")
+        if not tbl:
+            return 1
+        for tr in tbl.find_all("tr")[1:]:
+            tds = tr.find_all("td")
+            if len(tds) < 5:
+                continue
+            num_item = tds[0].get_text(strip=True)
+            item_norm = _norm_item_num(num_item)
+            if not item_norm or item_norm in vistos:
+                continue
+            tipo_item = tds[1].get_text(strip=True) or "Material"
+            desc_item = tds[2].get_text(strip=True)
+            qtd_item = tds[3].get_text(strip=True)
+            unidade = tds[4].get_text(strip=True)
+            cod_siasg = ""
+            a_tag = tds[-1].find("a")
+            if a_tag and a_tag.get("href"):
+                m_cod = re.search(r"(\d+)", a_tag["href"])
+                if m_cod:
+                    cod_siasg = m_cod.group(1)
+            vistos.add(item_norm)
+            itens_detectados.append({
+                "Item": item_norm,
+                "Tipo": tipo_item,
+                "Descrição": desc_item,
+                "Qtd SIASG": qtd_item,
+                "Unidade": unidade,
+                "cod_siasg": cod_siasg,
+            })
+        pags = re.findall(r"numeroPagina=(\d+)", html)
+        return max([int(p) for p in pags], default=1)
+
+    try:
+        mod = str(modalidade_cod or "5").strip()
+        if mod.isdigit():
+            mod = str(int(mod))
+        url_p1 = (
+            f"{URL_ITENS_SIASG}?method=iniciar"
+            f"&parametro.identificacaoCompra.numeroUasg={uasg_clean}"
+            f"&parametro.identificacaoCompra.modalidadeCompra={mod}"
+            f"&parametro.identificacaoCompra.numeroCompra={num_compra_clean}"
+            f"&parametro.identificacaoCompra.anoCompra={ano_compra_clean}"
+        )
+        r1 = sess.get(url_p1, headers=HEADERS_HTTP, verify=False, timeout=18)
+        if not r1.ok:
+            return []
+        max_pags = _parsear_pagina(r1.text)
+        for p in range(2, max_pags + 1):
+            url_p = (
+                f"{URL_ITENS_SIASG}?parametro.identificacaoCompra.anoCompra={ano_compra_clean}"
+                f"&numeroPagina={p}&parametro.identificacaoCompra.numeroUasg={uasg_clean}"
+                f"&parametro.identificacaoCompra.modalidadeCompra={mod}"
+                f"&method=consultarPorFiltro&parametro.identificacaoCompra.numeroCompra={num_compra_clean}"
+            )
+            rp = sess.get(url_p, headers=HEADERS_HTTP, verify=False, timeout=15)
+            if rp.ok:
+                _parsear_pagina(rp.text)
+    except Exception:
+        return []
+
+    itens_detectados.sort(key=lambda x: int(x["Item"]) if str(x["Item"]).isdigit() else 999999)
+    return itens_detectados
+
+def _detalhar_itens_siasgnet(itens_base: List[Dict], uasg_clean: str) -> Dict[str, Dict]:
+    """Consulta visualizarItemSRP.do em paralelo SOMENTE para os itens que precisam de verificação de fornecedor/deserto."""
+    if not itens_base:
+        return {}
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    def _detalhar_item(it: Dict) -> Dict:
+        cod = it.get("cod_siasg", "")
+        det = {
+            "desc_det": "",
+            "unidade": it.get("Unidade", ""),
+            "deserto": False,
+            "forn_puro": "",
+            "cnpj_puro": "",
+            "vlr_unit": 0.0,
+            "qtd_reg": converter_para_float(it.get("Qtd SIASG", "0")),
+            "qtd_emp": 0.0,
+            "limite_adesao": 0.0,
+            "saldo_adesao": 0.0,
+            "aprovado_adesao": 0.0,
+            "detalhe_ok": False,
+        }
+        if cod:
+            try:
+                ts = _get_thread_session()
+                rv = ts.get(
+                    f"{URL_VISUALIZAR_ITEM_SIASG}?method=iniciar&itemAtaSRP.codigoItemAtaSRP={cod}",
+                    headers=HEADERS_HTTP,
+                    verify=False,
+                    timeout=18,
+                )
+                if rv.ok and rv.text:
+                    parsed = _parsear_item_siasg_html(rv.text, uasg_clean)
+                    det.update(parsed)
+                    det["detalhe_ok"] = True
+            except Exception:
+                pass
+        return {**it, **det}
+
+    max_w = min(12, max(1, len(itens_base)))
+    mapa_det: Dict[str, Dict] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as ex:
+        for res_it in ex.map(_detalhar_item, itens_base):
+            mapa_det[res_it["Item"]] = res_it
+    return mapa_det
 
 def buscar_itens_com_saldo_real(
     uasg: str,
@@ -2787,13 +3246,15 @@ def buscar_itens_com_saldo_real(
     vig_max: Optional[str] = None,
     atas_conhecidas: Optional[List[str]] = None,
     ata_links_map: Optional[Dict[str, str]] = None,
-    ata_pncp_map: Optional[Dict[str, str]] = None
+    ata_pncp_map: Optional[Dict[str, str]] = None,
+    modalidade_compra: str = "5",
+    link_compra_pncp: Optional[str] = None
 ) -> List[Dict]:
     """
-    Passos 2 e 3: Busca em paralelo os itens registrados (2_consultarARPItem e 2.1_consultarARPItem_Id),
-    empenhos e saldos (4_consultarEmpenhosSaldoItem), unidades/limites de adesão
-    (3_consultarUnidadesItem) e solicitações de adesão aprovadas (5_consultarAdesoesItem),
-    cruzando tudo por (numeroAtaRegistroPreco, numeroItem).
+    Fluxo Híbrido (SIASGnet -> API Dados Abertos Compras.gov.br + PNCP):
+    1) Puxa do SIASGnet 100% dos itens do pregão (incluindo fornecedor, valores, quantidades e identificação de itens desertos/fracassados).
+    2) Consulta em paralelo a API Dados Abertos Compras.gov.br (2_consultarARPItem, 2.1_consultarARPItem_Id, 4_consultarEmpenhosSaldoItem,
+       3_consultarUnidadesItem, 5_consultarAdesoesItem) + PNCP para obter Atas oficiais, empenhos SIAFI e saldos remanescentes reais.
     """
     uasg_clean = re.sub(r"\D", "", str(uasg or "").strip()) or str(uasg or "").strip()
     num_compra_clean = str(num_compra or "").strip()
@@ -2897,77 +3358,109 @@ def buscar_itens_com_saldo_real(
         return rows
 
     try:
-        _atualizar_ui(0.05, f"Consultando itens e saldos do pregão {num_compra_clean}/{ano_compra_clean} na API Compras.gov.br...")
+        _atualizar_ui(0.05, f"Listando itens no SIASGnet e consultando API Compras.gov.br ({num_compra_clean}/{ano_compra_clean})...")
 
-        atas_iniciais = sorted({str(a).strip() for a in (atas_conhecidas or []) if str(a).strip()})
-        empenhos_por_ata: Dict[str, List[Dict]] = {}
-        itens_api: List[Dict] = []
-        erro_ep2: Optional[str] = None
+        # 1) Em paralelo: lista rápida de todos os itens no SIASGnet + PNCP Atas + Endpoint 2 (ARP)
+        atas_set_ini = {str(a).strip() for a in (atas_conhecidas or []) if str(a).strip()}
 
-        # Wave 1A (em paralelo): Endpoint 2 (2_consultarARPItem) + Endpoint 4 (4_consultarEmpenhosSaldoItem das atas conhecidas)
-        total_tasks_w1 = 1 + len(atas_iniciais)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(2, min(5, total_tasks_w1))) as executor:
-            fut_ep2 = executor.submit(_fetch_endpoint2, True)
-            futs_ep4 = {executor.submit(_fetch_endpoint4_ata, ata): ata for ata in atas_iniciais}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pre_ex:
+            fut_siasg_lista = pre_ex.submit(
+                _buscar_lista_itens_siasgnet,
+                uasg_clean,
+                num_compra_clean,
+                ano_compra_clean,
+                modalidade_compra,
+            )
+            fut_pncp = pre_ex.submit(_descobrir_atas_pncp, _get_thread_session(), link_compra_pncp or "") if link_compra_pncp else None
+            fut_ep2 = pre_ex.submit(_fetch_endpoint2, True)
 
-            rows_ep2, erro_ep2 = fut_ep2.result()
-            if rows_ep2:
-                itens_api.extend(rows_ep2)
-
-            for fut in concurrent.futures.as_completed(futs_ep4):
+            if fut_pncp is not None:
                 try:
-                    ata_res, rows_ep4 = fut.result()
-                    empenhos_por_ata[ata_res] = rows_ep4
+                    ext_links, ext_pncp = fut_pncp.result()
+                    for k_a, v_l in ext_links.items():
+                        links_map.setdefault(k_a, v_l)
+                        atas_set_ini.add(k_a)
+                    for k_a, v_p in ext_pncp.items():
+                        pncp_map.setdefault(k_a, v_p)
+                        atas_set_ini.add(k_a)
                 except Exception:
                     pass
 
-        # Wave 1B: para atas que vieram vazias no 2_consultarARPItem (ex.: numeroCompra nulo na API como 90017/2025),
-        # consulta diretamente via 2.1_consultarARPItem_Id usando o numeroControlePncpAta da etapa 1
-        atas_com_itens = {
-            str(it.get("numeroAtaRegistroPreco") or "").strip()
-            for it in itens_api
-            if it.get("itemExcluido") is not True
-        }
-        atas_sem_itens = [a for a in atas_iniciais if a not in atas_com_itens]
-        pncp_faltantes = sorted({str(pncp_map.get(a) or "").strip() for a in atas_sem_itens if str(pncp_map.get(a) or "").strip()})
-        if pncp_faltantes:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(pncp_faltantes))) as executor:
-                futs_ep2_1 = [executor.submit(_fetch_endpoint2_1_pncp, pid) for pid in pncp_faltantes]
-                for fut21 in concurrent.futures.as_completed(futs_ep2_1):
-                    try:
-                        rows21, err21 = fut21.result()
-                        if rows21:
-                            itens_api.extend(rows21)
-                        elif err21 and not erro_ep2:
-                            erro_ep2 = err21
-                    except Exception:
-                        pass
+            rows_ep2, erro_ep2 = fut_ep2.result()
+            itens_siasg_lista = fut_siasg_lista.result()
 
-        # Wave 1C (fallback final): atas conhecidas ainda sem itens e sem PNCP ID -> 2_consultarARPItem sem filtro numeroCompra
-        atas_com_itens = {
-            str(it.get("numeroAtaRegistroPreco") or "").strip()
-            for it in itens_api
-            if it.get("itemExcluido") is not True
-        }
-        atas_sem_itens_rest = [a for a in atas_iniciais if a not in atas_com_itens]
-        if atas_sem_itens_rest:
-            rows_fallback, err_fb = _fetch_endpoint2(incluir_num_compra=False)
-            if rows_fallback:
-                atas_alvo_set = set(atas_sem_itens_rest)
-                for it_fb in rows_fallback:
-                    if str(it_fb.get("numeroAtaRegistroPreco") or "").strip() in atas_alvo_set:
-                        itens_api.append(it_fb)
-            elif err_fb and not erro_ep2:
-                erro_ep2 = err_fb
+        atas_iniciais = sorted(atas_set_ini)
+        empenhos_por_ata: Dict[str, List[Dict]] = {}
+        itens_api: List[Dict] = []
+        if rows_ep2:
+            itens_api.extend(rows_ep2)
 
-        if erro_ep2 and not itens_api:
+        _atualizar_ui(0.25, "Detalhando itens no SIASGnet e cruzando empenhos reais no Compras.gov.br...")
+
+        # Dispara detalhamento completo no SIASGnet (fornecedor/deserto/adesões, ~5-9s sem 429)
+        # EM PARALELO com EP4 (por Ata), EP2.1 (PNCP) e fallback EP2!
+        mapa_det_siasg: Dict[str, Dict] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as par_ex:
+            fut_det_all = par_ex.submit(_detalhar_itens_siasgnet, itens_siasg_lista, uasg_clean) if itens_siasg_lista else None
+
+            # Wave 1A-extra: consultar Endpoint 4 (4_consultarEmpenhosSaldoItem) das atas conhecidas (1 req por Ata)
+            if atas_iniciais:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(atas_iniciais))) as executor:
+                    for ata_res, rows_ep4 in executor.map(_fetch_endpoint4_ata, atas_iniciais):
+                        empenhos_por_ata[ata_res] = rows_ep4
+
+            # Wave 1B: atas descobertas via PNCP ou sem itens no EP2 -> 2.1_consultarARPItem_Id
+            atas_com_itens = {
+                str(it.get("numeroAtaRegistroPreco") or "").strip()
+                for it in itens_api
+                if it.get("itemExcluido") is not True
+            }
+            atas_sem_itens = [a for a in atas_iniciais if a not in atas_com_itens]
+            pncp_faltantes = sorted({str(pncp_map.get(a) or "").strip() for a in atas_sem_itens if str(pncp_map.get(a) or "").strip()})
+            if pncp_faltantes:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(pncp_faltantes))) as executor:
+                    futs_ep2_1 = [executor.submit(_fetch_endpoint2_1_pncp, pid) for pid in pncp_faltantes]
+                    for fut21 in concurrent.futures.as_completed(futs_ep2_1):
+                        try:
+                            rows21, err21 = fut21.result()
+                            if rows21:
+                                itens_api.extend(rows21)
+                            elif err21 and not erro_ep2:
+                                erro_ep2 = err21
+                        except Exception:
+                            pass
+
+            # Wave 1C (fallback): atas originais ainda sem itens e sem PNCP ID -> 2_consultarARPItem sem filtro numeroCompra
+            atas_com_itens = {
+                str(it.get("numeroAtaRegistroPreco") or "").strip()
+                for it in itens_api
+                if it.get("itemExcluido") is not True
+            }
+            atas_originais_sem_itens = [
+                a for a in (atas_conhecidas or [])
+                if str(a).strip() and str(a).strip() not in atas_com_itens
+            ]
+            if atas_originais_sem_itens:
+                rows_fallback, err_fb = _fetch_endpoint2(incluir_num_compra=False)
+                if rows_fallback:
+                    atas_alvo_set = {str(a).strip() for a in atas_originais_sem_itens}
+                    for it_fb in rows_fallback:
+                        if str(it_fb.get("numeroAtaRegistroPreco") or "").strip() in atas_alvo_set:
+                            itens_api.append(it_fb)
+                elif err_fb and not erro_ep2:
+                    erro_ep2 = err_fb
+
+            if fut_det_all is not None:
+                mapa_det_siasg = fut_det_all.result() or {}
+
+        if erro_ep2 and not itens_api and not itens_siasg_lista:
             _limpar_ui()
             if em_streamlit:
                 st.error(f"Erro ao consultar itens na API Compras.gov.br: {erro_ep2}")
             return []
 
-        # Filtrar itens válidos do pregão/ano alvo e deduplicar por (numeroAtaRegistroPreco, numeroItem_norm)
-        itens_filtrados: List[Dict] = []
+        # Filtrar e deduplicar itens válidos da API ARP por (numeroAtaRegistroPreco, numeroItem_norm)
+        itens_api_filtrados: List[Dict] = []
         chaves_vistas = set()
         atas_iniciais_set = set(atas_iniciais)
         for it in itens_api:
@@ -2977,26 +3470,23 @@ def buscar_itens_com_saldo_real(
             it_ano = str(it.get("anoCompra") or "").strip()
             if ano_compra_clean and it_ano and it_ano != ano_compra_clean and ata_it not in atas_iniciais_set:
                 continue
-
-            item_raw = str(it.get("numeroItem") or "").strip()
-            item_norm = _norm_item_num(item_raw)
+            item_norm = _norm_item_num(it.get("numeroItem"))
             if not item_norm:
                 continue
-
             chave_cruzamento = (ata_it, item_norm)
             if chave_cruzamento in chaves_vistas:
                 continue
             chaves_vistas.add(chave_cruzamento)
-            itens_filtrados.append(it)
+            itens_api_filtrados.append(it)
 
-        if not itens_filtrados:
+        if not itens_siasg_lista and not itens_api_filtrados:
             _limpar_ui()
             return []
 
-        # Se Endpoint 2 trouxe alguma Ata que ainda não foi consultada no Endpoint 4, busca em paralelo agora
+        # Buscar Endpoint 4 para eventuais atas novas descobertas no EP2/2.1
         atas_descobertas = sorted({
             str(it.get("numeroAtaRegistroPreco") or "").strip()
-            for it in itens_filtrados
+            for it in itens_api_filtrados
             if str(it.get("numeroAtaRegistroPreco") or "").strip()
         })
         atas_faltantes = [a for a in atas_descobertas if a not in empenhos_por_ata]
@@ -3005,8 +3495,9 @@ def buscar_itens_com_saldo_real(
                 for ata_res, rows_ep4 in executor.map(_fetch_endpoint4_ata, atas_faltantes):
                     empenhos_por_ata[ata_res] = rows_ep4
 
-        # Indexar Endpoint 4 por (numeroAta, numeroItem_norm) priorizando a UASG pesquisada / GERENCIADORA
+        # Indexar Endpoint 4 por (numeroAta, numeroItem_norm) e também fallback por numeroItem_norm
         mapa_empenhos: Dict[Tuple[str, str], Dict] = {}
+        mapa_empenhos_por_item: Dict[str, List[Tuple[str, Dict]]] = {}
         for ata_k, rows_ep4 in empenhos_por_ata.items():
             candidatos_por_item: Dict[str, List[Dict]] = {}
             for r4 in rows_ep4:
@@ -3031,55 +3522,58 @@ def buscar_itens_com_saldo_real(
                     escolhido = cand_list[0]
                 if escolhido is not None:
                     mapa_empenhos[(ata_k, n_norm)] = escolhido
+                    mapa_empenhos_por_item.setdefault(n_norm, []).append((ata_k, escolhido))
 
-        # Ordenar itens pelo número do item e ata
-        itens_filtrados.sort(key=lambda x: (
-            int(_norm_item_num(x.get("numeroItem"))) if _norm_item_num(x.get("numeroItem")).isdigit() else 999999,
-            str(x.get("numeroAtaRegistroPreco") or "")
-        ))
+        # Indexar itens ARP por numeroItem_norm para cruzamento direto com SIASGnet
+        mapa_arp_por_item: Dict[str, List[Dict]] = {}
+        for it_a in itens_api_filtrados:
+            n_norm = _norm_item_num(it_a.get("numeroItem"))
+            if n_norm:
+                mapa_arp_por_item.setdefault(n_norm, []).append(it_a)
 
-        total_it = len(itens_filtrados)
-        _atualizar_ui(0.25, f"Apurando saldos e limites de adesão de {total_it} itens via API Compras.gov.br...")
-
-        def _processar_item_api(it: Dict) -> Dict:
+        def _construir_item_arp(it: Dict, siasg_ref: Optional[Dict] = None, consultar_ep3: bool = False) -> Dict:
             ata_it = str(it.get("numeroAtaRegistroPreco") or "").strip()
             item_raw = str(it.get("numeroItem") or "").strip()
             item_norm = _norm_item_num(item_raw)
             chave = (ata_it, item_norm)
 
-            # 1) Consultar Endpoint 3 (saldos da unidade e limites de adesão - resposta rápida ~1s)
-            rows_u: List[Dict] = []
-            if ata_it and item_raw:
+            row_u_alvo: Optional[Dict] = None
+            if consultar_ep3 and ata_it and item_raw:
                 try:
                     rows_u = _fetch_endpoint3_item(ata_it, item_raw)
                 except Exception:
                     rows_u = []
-
-            row_u_alvo: Optional[Dict] = None
-            for ru in rows_u:
-                if str(ru.get("codigoUnidade") or "").strip() == uasg_clean:
-                    row_u_alvo = ru
-                    break
-            if row_u_alvo is None:
                 for ru in rows_u:
-                    if str(ru.get("tipoUnidade") or "").strip().upper() == "GERENCIADORA":
+                    if str(ru.get("codigoUnidade") or "").strip() == uasg_clean:
                         row_u_alvo = ru
                         break
-            if row_u_alvo is None and rows_u:
-                row_u_alvo = rows_u[0]
+                if row_u_alvo is None:
+                    for ru in rows_u:
+                        if str(ru.get("tipoUnidade") or "").strip().upper() == "GERENCIADORA":
+                            row_u_alvo = ru
+                            break
+                if row_u_alvo is None and rows_u:
+                    row_u_alvo = rows_u[0]
 
-            # 2) Quantidade Registrada, Empenhada e Saldo p/ Empenho (Endpoint 4 -> Endpoint 3 -> Endpoint 2)
             row_ep4 = mapa_empenhos.get(chave)
+            if row_ep4 is None:
+                cands_ep4 = mapa_empenhos_por_item.get(item_norm, [])
+                if cands_ep4:
+                    row_ep4 = cands_ep4[0][1]
 
             qtd_reg = 0.0
             if row_ep4 and row_ep4.get("quantidadeRegistrada") is not None:
                 qtd_reg = float(row_ep4.get("quantidadeRegistrada") or 0.0)
             elif row_u_alvo and row_u_alvo.get("quantidadeRegistrada") is not None:
                 qtd_reg = float(row_u_alvo.get("quantidadeRegistrada") or 0.0)
+            elif siasg_ref and float(siasg_ref.get("qtd_reg") or 0.0) > 0:
+                qtd_reg = float(siasg_ref.get("qtd_reg") or 0.0)
             else:
                 v_venc = it.get("quantidadeHomologadaVencedor")
                 v_item = it.get("quantidadeHomologadaItem")
                 qtd_reg = float(v_venc if v_venc is not None else (v_item or 0.0))
+                if qtd_reg <= 0 and siasg_ref:
+                    qtd_reg = float(converter_para_float(siasg_ref.get("Qtd SIASG", "0")) or 0.0)
             qtd_reg = max(0.0, qtd_reg)
 
             empenhos_lista: List[str] = []
@@ -3087,7 +3581,6 @@ def buscar_itens_com_saldo_real(
                 qtd_emp = max(0.0, float(row_ep4.get("quantidadeEmpenhada") or 0.0))
                 sal_ep4 = row_ep4.get("saldoEmpenho")
                 if sal_ep4 is not None:
-                    # Garantia: API pode retornar saldo negativo (ex.: -28.0); clamp em 0 para não virar positivo
                     saldo_emp = max(0.0, float(sal_ep4))
                 else:
                     saldo_emp = max(0.0, qtd_reg - qtd_emp)
@@ -3100,11 +3593,14 @@ def buscar_itens_com_saldo_real(
             elif row_u_alvo and row_u_alvo.get("saldoRemanejamentoEmpenho") is not None:
                 saldo_emp = max(0.0, float(row_u_alvo.get("saldoRemanejamentoEmpenho") or 0.0))
                 qtd_emp = max(0.0, qtd_reg - saldo_emp)
+            elif siasg_ref and siasg_ref.get("detalhe_ok"):
+                qtd_emp = max(0.0, float(siasg_ref.get("qtd_emp") or 0.0))
+                saldo_emp = max(0.0, qtd_reg - qtd_emp)
             else:
                 qtd_emp = max(0.0, float(it.get("quantidadeEmpenhada") or 0.0))
                 saldo_emp = max(0.0, qtd_reg - qtd_emp)
 
-            # 3) Adesões (Caronas): Limite, Saldo e Solicitações Aprovadas (Endpoint 3 + Endpoint 5 quando necessário)
+            # Adesões (Carona): prioriza EP3 se consultado; caso contrário usa SIASGnet (que tem saldoDisponivelAdesao real) + maximoAdesao da API
             if row_u_alvo:
                 limite_adesao = max(0.0, float(
                     row_u_alvo.get("qtdLimiteAdesao")
@@ -3116,17 +3612,27 @@ def buscar_itens_com_saldo_real(
                     if row_u_alvo.get("saldoAdesoes") is not None
                     else limite_adesao
                 ))
+                aprovado_adesao = max(0.0, limite_adesao - saldo_adesao)
                 aceita_flag = row_u_alvo.get("aceitaAdesao")
+            elif siasg_ref and siasg_ref.get("detalhe_ok"):
+                lim_s = max(0.0, float(siasg_ref.get("limite_adesao") or 0.0))
+                lim_api = max(0.0, float(it.get("maximoAdesao") or 0.0))
+                limite_adesao = lim_s if lim_s > 0 else lim_api
+                aprovado_adesao = max(0.0, float(siasg_ref.get("aprovado_adesao") or 0.0))
+                sal_s = float(siasg_ref.get("saldo_adesao") or 0.0)
+                saldo_adesao = max(0.0, sal_s) if (lim_s > 0 or sal_s > 0) else max(0.0, limite_adesao - aprovado_adesao)
+                if aprovado_adesao <= 0 and limite_adesao > saldo_adesao:
+                    aprovado_adesao = max(0.0, limite_adesao - saldo_adesao)
+                aceita_flag = (limite_adesao > 0 or saldo_adesao > 0)
             else:
                 limite_adesao = max(0.0, float(it.get("maximoAdesao") or 0.0))
                 saldo_adesao = limite_adesao
+                aprovado_adesao = 0.0
                 aceita_flag = limite_adesao > 0
 
-            aprovado_adesao = max(0.0, limite_adesao - saldo_adesao) if row_u_alvo else 0.0
             adesoes_lista: List[Dict] = []
-
-            # Só aciona Endpoint 5 quando há indício de adesões aprovadas (limite > saldo) ou se Endpoint 3 não respondeu
-            precisa_ep5 = bool(ata_it and item_raw and ((row_u_alvo is not None and limite_adesao > saldo_adesao) or (row_u_alvo is None and limite_adesao > 0)))
+            # Consulta Endpoint 5 SOMENTE nos itens que efetivamente possuem adesões aprovadas/consumidas (evita dezenas de chamadas)
+            precisa_ep5 = bool(ata_it and item_raw and (aprovado_adesao > 0 or limite_adesao > saldo_adesao))
             if precisa_ep5:
                 try:
                     rows_ep5 = _fetch_endpoint5_item(ata_it, item_raw)
@@ -3145,19 +3651,21 @@ def buscar_itens_com_saldo_real(
                         })
                 if soma_ep5 > 0:
                     aprovado_adesao = soma_ep5
-                    if row_u_alvo is None or row_u_alvo.get("saldoAdesoes") is None:
+                    if row_u_alvo is None and not (siasg_ref and siasg_ref.get("detalhe_ok")):
                         saldo_adesao = max(0.0, limite_adesao - aprovado_adesao)
 
             aceita_adesao_str = "Sim" if (aceita_flag is True or limite_adesao > 0 or saldo_adesao > 0) else "Não"
 
-            # 4) Descrição, Fornecedor, CNPJ, Valor Unitário e PDF/Link da Ata
             desc_bruta = str(it.get("descricaoItem") or "").strip()
+            if not desc_bruta and siasg_ref:
+                desc_bruta = str(siasg_ref.get("desc_det") or siasg_ref.get("Descrição") or "").strip()
             desc_limpa = limpar_descricao_ata(desc_bruta) or desc_bruta
+            desc_curta = limpar_descricao_ata(str(siasg_ref.get("Descrição") or "")) if siasg_ref else desc_limpa
 
             cnpj_raw = str(it.get("niFornecedor") or "").strip()
             cnpj_dig = re.sub(r"\D", "", cnpj_raw)
-            cnpj_puro = formatar_cnpj(cnpj_dig) if cnpj_dig else ""
-            forn_puro = str(it.get("nomeRazaoSocialFornecedor") or "").strip()
+            cnpj_puro = formatar_cnpj(cnpj_dig) if cnpj_dig else (siasg_ref.get("cnpj_puro", "") if siasg_ref else "")
+            forn_puro = str(it.get("nomeRazaoSocialFornecedor") or "").strip() or (siasg_ref.get("forn_puro", "") if siasg_ref else "")
 
             if forn_puro and cnpj_puro and forn_puro != cnpj_puro:
                 fornecedor_display = f"{forn_puro} ({cnpj_puro})"
@@ -3172,21 +3680,21 @@ def buscar_itens_com_saldo_real(
                 vlr_unit = float(it.get("valorUnitario") or 0.0)
             except Exception:
                 vlr_unit = 0.0
+            if vlr_unit <= 0 and siasg_ref:
+                vlr_unit = float(siasg_ref.get("vlr_unit") or 0.0)
 
-            tipo_item = str(it.get("tipoItem") or "Material").strip()
-            unid_forn = str(
-                it.get("unidadeFornecimento")
-                or it.get("unidadeMedida")
-                or ("SV" if tipo_item.lower().startswith("serv") else "UN")
-            ).strip()
-
+            tipo_item = str(it.get("tipoItem") or (siasg_ref.get("Tipo") if siasg_ref else "") or "Material").strip()
+            unid_forn = _normalizar_unidade_siasg(
+                it.get("unidadeFornecimento") or it.get("unidadeMedida") or (siasg_ref.get("unidade") if siasg_ref else ""),
+                tipo_item
+            )
             pdf_ata = links_map.get(ata_it, "") or ""
 
             return {
                 "Item": item_norm,
                 "Tipo": tipo_item,
                 "Descrição": desc_limpa,
-                "Descrição Curta SIASG": desc_limpa,
+                "Descrição Curta SIASG": desc_curta or desc_limpa,
                 "Unidade": unid_forn,
                 "Qtd Registrada": _fmt_qtd_api(qtd_reg),
                 "Qtd Empenhada": _fmt_qtd_api(qtd_emp),
@@ -3207,35 +3715,166 @@ def buscar_itens_com_saldo_real(
                 "empenhos_lista": empenhos_lista,
             }
 
-        max_workers = min(5, max(1, total_it))
-        resultados_map: Dict[Tuple[str, str], Dict] = {}
-        concluidos = 0
+        def _construir_item_siasg_only(s_it: Dict) -> Dict:
+            item_norm = s_it["Item"]
+            tipo_item = str(s_it.get("Tipo") or "Material").strip()
+            desc_bruta = str(s_it.get("desc_det") or s_it.get("Descrição") or "").strip()
+            desc_limpa = limpar_descricao_ata(desc_bruta) or desc_bruta
+            desc_curta = limpar_descricao_ata(str(s_it.get("Descrição") or "")) or desc_limpa
+            unid_forn = _normalizar_unidade_siasg(s_it.get("unidade") or s_it.get("Unidade") or "", tipo_item)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_key = {
-                executor.submit(_processar_item_api, it): (
-                    str(it.get("numeroAtaRegistroPreco") or "").strip(),
-                    _norm_item_num(it.get("numeroItem"))
-                )
-                for it in itens_filtrados
+            if s_it.get("deserto"):
+                return {
+                    "Item": item_norm,
+                    "Tipo": tipo_item,
+                    "Descrição": desc_limpa,
+                    "Descrição Curta SIASG": desc_curta,
+                    "Unidade": unid_forn,
+                    "Qtd Registrada": "0",
+                    "Qtd Empenhada": "0",
+                    "Saldo p/ Empenho": "0",
+                    "Qtd para Adesão": "0",
+                    "Saldo para Adesão": "0",
+                    "Adesões Aprovadas": "0",
+                    "Aceita Adesão": "Não",
+                    "adesoes_solicitacoes": [],
+                    "Ata Vinculada": "-",
+                    "Fornecedor": "Deserto / Fracassado",
+                    "Fornecedor Puro": "",
+                    "CNPJ Puro": "",
+                    "Valor Unitário": 0.0,
+                    "Valor Unitario Sugerido": 0.0,
+                    "PDF da Ata": "",
+                    "Empenhos": "Nenhum",
+                    "empenhos_lista": [],
+                }
+
+            # Item não deserto com fornecedor no SIASGnet (mas cuja Ata ainda não foi sincronizada na API ARP)
+            qtd_reg = max(0.0, float(s_it.get("qtd_reg") or 0.0))
+            qtd_emp = max(0.0, float(s_it.get("qtd_emp") or 0.0))
+            saldo_emp = max(0.0, qtd_reg - qtd_emp)
+            empenhos_lista: List[str] = []
+            ata_vinculada = "Via SIASGnet (ARP pendente na API)"
+
+            # Se por acaso Endpoint 4 trouxe empenho para esse item mesmo sem EP2:
+            ep4_cands = mapa_empenhos_por_item.get(item_norm, [])
+            if ep4_cands:
+                ata_k4, r4 = ep4_cands[0]
+                ata_vinculada = ata_k4 or ata_vinculada
+                if r4.get("quantidadeRegistrada") is not None:
+                    qtd_reg = max(0.0, float(r4.get("quantidadeRegistrada") or qtd_reg))
+                qtd_emp = max(0.0, float(r4.get("quantidadeEmpenhada") or qtd_emp))
+                sal4 = r4.get("saldoEmpenho")
+                saldo_emp = max(0.0, float(sal4)) if sal4 is not None else max(0.0, qtd_reg - qtd_emp)
+                if qtd_emp > 0:
+                    unid_lbl = str(r4.get("unidade") or f"UASG {uasg_clean}").strip()
+                    empenhos_lista.append(f"{unid_lbl}: Qtd Emp {_fmt_qtd_api(qtd_emp)} | Saldo {_fmt_qtd_api(saldo_emp)}")
+
+            lim_ad = max(0.0, float(s_it.get("limite_adesao") or 0.0))
+            sal_ad = max(0.0, float(s_it.get("saldo_adesao") or 0.0))
+            aprov_ad = max(0.0, float(s_it.get("aprovado_adesao") or max(0.0, lim_ad - sal_ad)))
+            aceita_ad = "Sim" if (lim_ad > 0 or sal_ad > 0) else "Não"
+
+            forn_puro = str(s_it.get("forn_puro") or "").strip()
+            cnpj_puro = str(s_it.get("cnpj_puro") or "").strip()
+            if forn_puro and cnpj_puro and forn_puro != cnpj_puro:
+                forn_disp = f"{forn_puro} ({cnpj_puro})"
+            elif forn_puro:
+                forn_disp = forn_puro
+            elif cnpj_puro:
+                forn_disp = cnpj_puro
+            else:
+                forn_disp = "Em apuração" if not s_it.get("detalhe_ok") else "Deserto / Fracassado"
+
+            vlr_u = float(s_it.get("vlr_unit") or 0.0)
+            pdf_ata = links_map.get(ata_vinculada, "") or ""
+
+            return {
+                "Item": item_norm,
+                "Tipo": tipo_item,
+                "Descrição": desc_limpa,
+                "Descrição Curta SIASG": desc_curta,
+                "Unidade": unid_forn,
+                "Qtd Registrada": _fmt_qtd_api(qtd_reg),
+                "Qtd Empenhada": _fmt_qtd_api(qtd_emp),
+                "Saldo p/ Empenho": _fmt_qtd_api(saldo_emp),
+                "Qtd para Adesão": _fmt_qtd_api(lim_ad),
+                "Saldo para Adesão": _fmt_qtd_api(sal_ad),
+                "Adesões Aprovadas": _fmt_qtd_api(aprov_ad),
+                "Aceita Adesão": aceita_ad,
+                "adesoes_solicitacoes": [],
+                "Ata Vinculada": ata_vinculada,
+                "Fornecedor": forn_disp,
+                "Fornecedor Puro": forn_puro,
+                "CNPJ Puro": cnpj_puro,
+                "Valor Unitário": vlr_u,
+                "Valor Unitario Sugerido": vlr_u,
+                "PDF da Ata": pdf_ata,
+                "Empenhos": " | ".join(empenhos_lista) if empenhos_lista else "Nenhum",
+                "empenhos_lista": empenhos_lista,
             }
-            for future in concurrent.futures.as_completed(future_to_key):
-                k = future_to_key[future]
-                try:
-                    res_item = future.result()
-                    if res_item:
-                        resultados_map[k] = res_item
-                except Exception:
-                    pass
-                concluidos += 1
-                progresso = 0.25 + 0.75 * (concluidos / max(1, total_it))
-                _atualizar_ui(progresso, f"API Compras.gov.br: {concluidos} de {total_it} itens apurados...")
 
-        dados_finais = []
-        for it in itens_filtrados:
-            k = (str(it.get("numeroAtaRegistroPreco") or "").strip(), _norm_item_num(it.get("numeroItem")))
-            if k in resultados_map:
-                dados_finais.append(resultados_map[k])
+        # Consolidação final: une SIASGnet (100% dos itens + fornecedores/desertos + adesões) com ARP API (Atas/PNCP + EP4 SIAFI)
+        _atualizar_ui(0.82, "Consolidando itens, saldos SIAFI e desertos...")
+
+        tarefas_arp: List[Tuple[int, Dict, Optional[Dict]]] = []
+        resultados_finais: List[Optional[Dict]] = []
+        itens_cobertos_arp = set()
+
+        if itens_siasg_lista:
+            for s_base in itens_siasg_lista:
+                n_norm = s_base["Item"]
+                s_det = mapa_det_siasg.get(n_norm, s_base)
+                cands_arp = mapa_arp_por_item.get(n_norm, [])
+                if cands_arp:
+                    for c_arp in cands_arp:
+                        idx_pos = len(resultados_finais)
+                        resultados_finais.append(None)
+                        tarefas_arp.append((idx_pos, c_arp, s_det))
+                    itens_cobertos_arp.add(n_norm)
+                else:
+                    resultados_finais.append(_construir_item_siasg_only(s_det))
+
+            for it_a in sorted(itens_api_filtrados, key=lambda x: int(_norm_item_num(x.get("numeroItem"))) if _norm_item_num(x.get("numeroItem")).isdigit() else 999999):
+                n_norm = _norm_item_num(it_a.get("numeroItem"))
+                if n_norm and n_norm not in itens_cobertos_arp:
+                    idx_pos = len(resultados_finais)
+                    resultados_finais.append(None)
+                    tarefas_arp.append((idx_pos, it_a, None))
+                    itens_cobertos_arp.add(n_norm)
+        else:
+            itens_api_filtrados.sort(key=lambda x: (
+                int(_norm_item_num(x.get("numeroItem"))) if _norm_item_num(x.get("numeroItem")).isdigit() else 999999,
+                str(x.get("numeroAtaRegistroPreco") or "")
+            ))
+            for it_a in itens_api_filtrados:
+                idx_pos = len(resultados_finais)
+                resultados_finais.append(None)
+                tarefas_arp.append((idx_pos, it_a, None))
+
+        if tarefas_arp:
+            # Só consulta EP3 item a item quando NÃO temos detalhe do SIASGnet e o pregão é pequeno (<= 15 itens), evitando rajadas 429
+            usar_ep3_fallback = (len(tarefas_arp) <= 15) and not any(
+                (s_ref is not None and s_ref.get("detalhe_ok")) for _, _, s_ref in tarefas_arp
+            )
+            max_w_cons = min(4, len(tarefas_arp))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w_cons) as executor:
+                fut_to_pos = {
+                    executor.submit(_construir_item_arp, arp_obj, s_ref, usar_ep3_fallback): (pos, s_ref)
+                    for pos, arp_obj, s_ref in tarefas_arp
+                }
+                for fut in concurrent.futures.as_completed(fut_to_pos):
+                    pos, s_ref = fut_to_pos[fut]
+                    try:
+                        res_item = fut.result()
+                        if res_item:
+                            resultados_finais[pos] = res_item
+                    except Exception:
+                        if s_ref is not None:
+                            resultados_finais[pos] = _construir_item_siasg_only(s_ref)
+
+        dados_finais = [r for r in resultados_finais if r is not None]
+        dados_finais.sort(key=lambda x: int(x["Item"]) if str(x.get("Item", "")).isdigit() else 999999)
 
         _limpar_ui()
         return dados_finais
@@ -5674,7 +6313,7 @@ with tab_consulta_pregoes:
                         st.markdown(f"[📋 Acessar Compra no PNCP]({link_pncp})")
 
                 if btn_itens_p:
-                    with st.spinner("Consultando itens, empenhos e adesões em paralelo na API Compras.gov.br..."):
+                    with st.spinner("Consultando SIASGnet e API Compras.gov.br em paralelo (itens, desertos, empenhos e adesões)..."):
                         itens_det = buscar_itens_com_saldo_real(
                             st.session_state.get('uasg_pesquisada', uasg_busca),
                             row_p['Nº Compra'],
@@ -5683,13 +6322,15 @@ with tab_consulta_pregoes:
                             vig_max=row_p.get('Vigencia Max'),
                             atas_conhecidas=row_p.get('Atas List'),
                             ata_links_map=row_p.get('Ata Links Map'),
-                            ata_pncp_map=row_p.get('Ata Pncp Map')
+                            ata_pncp_map=row_p.get('Ata Pncp Map'),
+                            modalidade_compra=str(row_p.get('Modalidade Código') or '5'),
+                            link_compra_pncp=str(row_p.get('Link Contratos') or '')
                         )
                         if itens_det:
                             st.session_state['itens_carregados_pregoes'][chave_p] = itens_det
                             st.rerun()
                         else:
-                            st.warning("Nenhum item localizado para este pregão na API Dados Abertos Compras.gov.br.")
+                            st.warning("Nenhum item localizado para este pregão no SIASGnet / API Dados Abertos Compras.gov.br.")
 
                 if chave_p in st.session_state['itens_carregados_pregoes']:
                     itens_pr = st.session_state['itens_carregados_pregoes'][chave_p]
@@ -5699,19 +6340,24 @@ with tab_consulta_pregoes:
                         
                         # Métricas resumidas do Pregão
                         tot_it = len(itens_pr)
+                        tot_desertos = sum(1 for it in itens_pr if "deserto" in str(it.get("Fornecedor", "")).lower())
+                        tot_homol = tot_it - tot_desertos
                         tot_aceita_ad = sum(1 for it in itens_pr if str(it.get("Aceita Adesão", "")).strip().lower() == "sim")
                         tot_saldo_ad = sum(converter_para_float(it.get("Saldo para Adesão", "0")) for it in itens_pr)
                         tot_saldo_uasg = sum(converter_para_float(it.get("Saldo p/ Empenho", "0")) for it in itens_pr)
 
                         c_met1, c_met2, c_met3, c_met4 = st.columns(4)
                         with c_met1:
-                            st.metric("Total de Itens", f"{tot_it}", help="Total de itens apurados no pregão")
+                            st.metric("Total de Itens", f"{tot_it}", help=f"{tot_homol} com fornecedor registrado e {tot_desertos} deserto(s)/fracassado(s)")
                         with c_met2:
                             st.metric("🏛️ Saldo p/ Empenho UASG", f"{tot_saldo_uasg:,.0f} unid.", help="Total de saldo disponível para a UASG")
                         with c_met3:
                             st.metric("🤝 Saldo Remanescente Adesão", f"{tot_saldo_ad:,.0f} unid.", help="Total remanescente para novas adesões de carona")
                         with c_met4:
-                            st.metric("Aceitam Adesão", f"{tot_aceita_ad} de {tot_it}", help="Itens que aceitam adesão (carona)")
+                            st.metric("Aceitam Adesão", f"{tot_aceita_ad} de {tot_homol or tot_it}", help="Itens que aceitam adesão (carona)")
+
+                        if tot_desertos > 0:
+                            st.caption(f"ℹ️ **{tot_homol}** item(ns) com fornecedor homologado no SIASGnet e **{tot_desertos}** item(ns) marcado(s) como **Deserto / Fracassado** (sem fornecedor).")
 
                         # Garantir que Valor Unitário esteja presente mesmo para itens já em cache
                         for it in itens_pr:
